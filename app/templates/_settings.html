@@ -356,11 +356,13 @@
           <div class="field" data-find="recorded by default recorder couchelephant plex">
             <label for="recdef">New recordings are made by</label>
             <select id="recdef" name="recorder_default">
-              <option value="plex" {{ 'selected' if settings.recorder_default != 'couchelephant' }}>Plex</option>
+              <option value="auto" {{ 'selected' if settings.recorder_default not in ('plex', 'couchelephant') }}>CouchElephant, where its recorder is on</option>
               <option value="couchelephant" {{ 'selected' if settings.recorder_default == 'couchelephant' }}>CouchElephant</option>
+              <option value="plex" {{ 'selected' if settings.recorder_default == 'plex' }}>Plex</option>
             </select>
             <span class="help">What a new recording or pass starts with. Each one can
-              still choose the other, and nothing already booked changes.</span>
+              still choose the other, and nothing already booked changes. Right now a
+              new one is made by <b>{{ 'CouchElephant' if recorder_info.default == 'couchelephant' else 'Plex' }}</b>.</span>
           </div>
           <div class="field" data-find="tuner hdhomerun address">
             <label for="rectuner">Tuner address</label>

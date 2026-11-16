@@ -379,3 +379,105 @@ def test_a_series_leads_with_its_name_and_sport_with_the_game(client, tuner):
             for c in client.get("/api/tv/guide").json()["channels"]}
     assert (rows["5.1"]["title"], rows["5.1"]["subtitle"]) == ("Chiefs at Broncos", "NFL Football")
     assert (rows["9.1"]["title"], rows["9.1"]["subtitle"]) == ("Just Shoot Me", "Eve of Destruction")
+
+
+# ---------- which recorder a new recording starts with ----------
+
+def test_the_recorder_is_the_default_wherever_it_is_on(client, synced, tuner, monkeypatch):
+    db.set_setting("recorder_default", "auto")
+    aid = _live_airing()
+    assert client.get("/api/record/options",
+                      params={"airing_id": aid}).json()["recorder"]["default"] == "couchelephant"
+    monkeypatch.setattr(recorder, "REC_DIR", "/nonexistent-ce-test")
+    assert client.get("/api/record/options",
+                      params={"airing_id": aid}).json()["recorder"]["default"] == "plex"
+
+
+def test_an_install_seeded_with_plex_moves_to_auto_once_and_a_choice_sticks(clean_db):
+    with db.tx() as c:
+        c.execute("DELETE FROM settings WHERE key = 'recorder_default_auto'")
+    db.set_setting("recorder_default", "plex")        # as 1.5.5 seeded it
+    db.init()
+    assert db.get_setting("recorder_default") == "auto"
+    db.set_setting("recorder_default", "plex")        # now somebody chose it
+    db.init()
+    assert db.get_setting("recorder_default") == "plex"
+
+
+# ---------- passes, from a television ----------
+
+def _chiefs_pass(client):
+    now = int(time.time())
+    _airing("a1", "g1", "5.1", now + 600)
+    with db.tx() as c:
+        c.execute("INSERT INTO teams (id, name) VALUES (236, 'Chiefs')")
+    client.post("/api/tv/record", data={"airing_id": "a1", "scope": "team", "team_id": "236"})
+    return db.one("SELECT id FROM passes")["id"]
+
+
+def test_the_passes_are_listed_by_the_tab_they_belong_in(client, tuner, plex):
+    _chiefs_pass(client)
+    client.post("/api/tv/record", data={"airing_id": "a1", "scope": "series"})
+    got = client.get("/api/tv/recordings").json()
+    tabs = {p["title"]: (p["tab"], p["recorder"], p["editable"]) for p in got["passes"]}
+    assert tabs == {"Chiefs": ("sports", "couchelephant", True),
+                    "NFL Football": ("season", "couchelephant", True)}
+    assert got["recorder_available"] is True
+
+
+def test_a_television_changes_one_thing_on_a_pass_and_nothing_else(client, tuner, plex):
+    pid = _chiefs_pass(client)
+    with db.tx() as c:
+        c.execute("UPDATE passes SET networks = ?", ('["CBS"]',))
+    r = client.post(f"/api/tv/passes/{pid}", data={"end_minutes": "30"}).json()
+    assert r["ok"] is True
+    p = db.one("SELECT * FROM passes")
+    assert (p["recorder"], p["networks"], p["enabled"]) == ("couchelephant", '["CBS"]', 1)
+    assert db.unjs(p["prefs"])["endOffsetMinutes"] == "30"
+    client.post(f"/api/tv/passes/{pid}", data={"recorder": "plex", "enabled": "0"})
+    p = db.one("SELECT * FROM passes")
+    assert (p["recorder"], p["enabled"], p["networks"]) == ("plex", 0, '["CBS"]')
+    listed = client.get("/api/tv/recordings").json()["passes"][0]
+    assert (listed["end_minutes"], listed["enabled"], listed["networks"]) == (30, False, ["CBS"])
+
+
+def test_padding_a_television_did_not_offer_is_not_stored(client, tuner, plex):
+    pid = _chiefs_pass(client)
+    client.post(f"/api/tv/passes/{pid}", data={"end_minutes": "7"})
+    assert "endOffsetMinutes" not in (db.unjs(db.one("SELECT prefs FROM passes")["prefs"]) or {})
+
+
+def test_removing_a_pass_leaves_what_it_booked(client, tuner, plex):
+    pid = _chiefs_pass(client)
+    assert db.one("SELECT COUNT(*) c FROM recordings")["c"] == 1
+    assert client.post(f"/api/tv/passes/{pid}/delete").json()["ok"] is True
+    assert db.one("SELECT COUNT(*) c FROM passes")["c"] == 0
+    assert db.one("SELECT COUNT(*) c FROM recordings")["c"] == 1
+
+
+def test_one_recording_moves_from_plex_to_couchelephant_and_back(client, synced, tuner):
+    aid = _live_airing()
+    assert client.post("/api/record", data={"airing_id": aid, "settings": "{}"}).json()["ok"]
+    up = client.get("/api/tv/recordings").json()["upcoming"]
+    assert [(u["recorder"], u["movable"]) for u in up] == [("plex", True)]
+
+    r = client.post("/api/tv/record/move", data={"airing_id": aid, "recorder": "couchelephant"})
+    assert r.json()["ok"] is True, r.json()
+    assert db.one("SELECT 1 FROM recordings WHERE airing_id = ?", (aid,))
+    assert db.one("SELECT 1 FROM our_grabs WHERE airing_id = ?", (aid,)) is None
+    assert fake_plex.STATE.subscriptions == {}
+
+    r = client.post("/api/tv/record/move", data={"airing_id": aid, "recorder": "plex"})
+    assert r.json()["ok"] is True, r.json()
+    assert db.one("SELECT 1 FROM recordings WHERE airing_id = ?", (aid,)) is None
+    assert len(fake_plex.STATE.subscriptions) == 1
+
+
+def test_a_recording_already_running_stays_with_couchelephant(client, tuner, plex):
+    now = int(time.time())
+    rec_id = recorder.book(_airing("a1", "g1", "5.1", now - 60))
+    recorder.tick()
+    _until(lambda: (recorder.tick() or recorder.get(rec_id)["state"] == "recording"))
+    r = client.post("/api/tv/record/move", data={"airing_id": "a1", "recorder": "plex"})
+    assert r.status_code == 409 and "already recording" in r.json()["error"]
+    assert recorder.get(rec_id)["state"] == "recording"

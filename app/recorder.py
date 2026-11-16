@@ -59,6 +59,18 @@ def available() -> bool:
     return why_unavailable() is None
 
 
+def default_choice() -> str:
+    """Who makes a new recording when nobody says: 'plex' or 'couchelephant'.
+
+    Our recorder is the default wherever it can run, unless the setting says
+    Plex. It is never the answer on an install where it cannot run.
+    """
+    want = (db.get_setting("recorder_default") or "auto").strip().lower()
+    if want == "plex" or not available():
+        return "plex"
+    return "couchelephant"
+
+
 # ---------- where things live ----------
 
 def rec_dir(uid: str) -> str:

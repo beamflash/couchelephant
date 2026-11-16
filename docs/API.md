@@ -58,7 +58,10 @@ What the Apple TV app and the **Live TV** page read.
 | `GET /api/tv/program?airing_id=` | One broadcast: summary, whether it is on now, whether it records, and what "every one of these" can mean for it (its series, or its teams) |
 | `POST /api/tv/record` | Record from a television, always with CouchElephant's recorder. `airing_id`, and `scope`: `one`, `series`, or `team` with `team_id` |
 | `POST /api/tv/record/cancel` | Cancel one booking, with either recorder. `airing_id` |
-| `GET /api/tv/recordings` | `upcoming`: what is set to record, each with `booked_by` and `recorder`. `recorded`: everything recorded, each with `group` and `category` (`sports`, `tv`, `movies`) |
+| `GET /api/tv/recordings` | `upcoming`: what is set to record, each with `booked_by` and `recorder`. `recorded`: everything recorded, each with `group` and `category` (`sports`, `tv`, `movies`). `passes`: every pass and Plex rule, each with `tab` (`sports` or `season`) |
+| `POST /api/tv/passes/{id}` | Change a pass from a television. Any of `recorder`, `enabled`, `networks` (JSON), `start_minutes`, `end_minutes`. Only what is sent is changed |
+| `POST /api/tv/passes/{id}/delete` | Stop following. `who`: `ce` for a pass, `plex` for a Plex rule. What is already booked stays |
+| `POST /api/tv/record/move` | Hand one booked broadcast to the other recorder. `airing_id`, `recorder` |
 | `POST /api/tv/recordings/{id}/delete` | Delete for good, from Plex too. `403` unless this television's Allow delete is on |
 | `POST /api/tv/devices/{id}/settings` | Administrators. `allow_delete` for one television |
 | `GET /hls/{uid}/index.m3u8` | The viewing copy, as an HLS playlist. `?start=0` marks it to open at its first second, which is how a player starts a recording that is still growing from the beginning |

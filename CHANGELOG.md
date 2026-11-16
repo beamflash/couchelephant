@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.5.7 - 2026-11-15
+
+### Changed
+
+- **CouchElephant is the default recorder wherever its recorder is on.** A new
+  recording or pass is made by CouchElephant on an install with a
+  `/recordings` folder, and by Plex on one without. Settings, Recording, Own
+  recorder still lets you pick Plex, and that choice is kept. An install that
+  1.5.5 seeded with Plex moves to the new default once. Nothing already booked
+  changes, and each recording and pass can still choose the other.
+
+### Added
+
+- **The Apple TV app lists your passes.** "Set to record" on the Recordings tab
+  has three lists: Scheduled, Sports pass and Season pass. Plex's own rules are
+  listed with them, marked as Plex rules.
+- **A pass can be edited from the television.** Who records it, padding before
+  and after, the networks it may record from, and pause. Each setting is one
+  button that steps to the next value, and nothing is sent until Save. A pass
+  can be removed, which leaves what it already booked.
+- **One scheduled recording can be handed to the other recorder**, from its
+  long-press menu: "Record with CouchElephant instead" or "Record with Plex
+  instead". One a pass booked follows its pass.
+
 ## 1.5.6 - 2026-11-15
 
 ### Added

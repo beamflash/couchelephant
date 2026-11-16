@@ -70,7 +70,7 @@ def settings_save(plex_url: str = Form(""), plex_token: str = Form(""),
 
 
 @router.post("/settings/recorder")
-def settings_recorder(tuner_url: str = Form(""), recorder_default: str = Form("plex"),
+def settings_recorder(tuner_url: str = Form(""), recorder_default: str = Form("auto"),
                       recorder_encoder: str = Form("auto"),
                       recorder_lead_minutes: str = Form("1"),
                       recorder_trail_minutes: str = Form("3"),
@@ -86,8 +86,8 @@ def settings_recorder(tuner_url: str = Form(""), recorder_default: str = Form("p
         except ValueError:
             return default
     db.set_setting("tuner_url", tuner_url.strip().rstrip("/"))
-    db.set_setting("recorder_default",
-                   "couchelephant" if recorder_default == "couchelephant" else "plex")
+    db.set_setting("recorder_default", recorder_default
+                   if recorder_default in ("auto", "plex", "couchelephant") else "auto")
     db.set_setting("recorder_encoder", recorder_encoder
                    if recorder_encoder in ("auto", "software", "vaapi") else "auto")
     db.set_setting("recorder_lead_minutes", minutes(recorder_lead_minutes, "1"))

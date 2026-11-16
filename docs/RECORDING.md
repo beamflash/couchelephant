@@ -213,6 +213,7 @@ carries one choice:
 The choice only appears where the recorder can run, which means a `/recordings`
 folder is mounted. See [Install](INSTALL.md#recording-with-couchelephant-itself).
 **Settings, Recording, Own recorder** picks what a new recording starts with.
+Left alone, that is CouchElephant wherever its recorder is on.
 A pass that names CouchElephant is always CouchElephant's rule, because Plex
 cannot hold it. Changing the choice on a pass applies to what it books from
 then on; a broadcast already booked stays with the recorder that has it.

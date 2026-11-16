@@ -178,10 +178,10 @@ def _who_records(asked: str = "") -> str:
 
     Our recorder is only ever the answer on an install where it can run.
     """
-    want = (asked or db.get_setting("recorder_default") or "plex").strip().lower()
-    if want == "couchelephant" and (asked or recorder.available()):
-        return "couchelephant"
-    return "plex"
+    want = (asked or "").strip().lower()
+    if want in ("plex", "couchelephant"):
+        return want
+    return recorder.default_choice()
 
 
 def recorder_off():

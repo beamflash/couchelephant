@@ -4,7 +4,9 @@ second.
 
 Everything here is JSON under /api/tv, and the viewing copies under /hls.
 """
+import asyncio
 import hashlib
+import json
 import os
 import re
 import secrets
@@ -13,10 +15,10 @@ import time
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 
-from .. import auth, db, handover, passes, recorder, tuner
+from .. import auth, db, handover, passes, recorder, sync, tuner
 from . import passes as pass_routes
 from . import record
-from ._shared import VERSION, current_user, page
+from ._shared import VERSION, _plex, current_user, page
 
 router = APIRouter()
 
@@ -542,6 +544,12 @@ def tv_recordings(request: Request):
             "recording_now": r["status"] == "inprogress",
             "booked_by": why[:1].upper() + why[1:], "booked_kind": kind,
             "recorder": "couchelephant" if ours else "plex",
+            "pass_id": str(r.get("pass_id") or ""),
+            # One broadcast booked here can be handed to the other recorder.
+            # One a pass booked follows its pass, and one Plex booked by its
+            # own rule is Plex's. A recording already running stays put.
+            "movable": (kind == "one" and r["who"] == "ce" and bool(r["airing_id"])
+                        and r["status"] == "scheduled"),
         })
     upcoming.sort(key=lambda u: u["begins_at"] or 0)
     recorded = [recording_json(request, r) for r in db.query(
@@ -549,7 +557,166 @@ def tv_recordings(request: Request):
         "AND state IN ('recording', 'finished', 'moving', 'in_plex')")]
     recorded.sort(key=lambda r: (r["group"].lower(), r["begins_at"] or 0))
     return {"ok": True, "now": now, "can_delete": _may_delete(request),
-            "upcoming": upcoming, "recorded": recorded}
+            "upcoming": upcoming, "recorded": recorded,
+            "passes": _passes(),
+            "networks": [r["network"] for r in db.query(
+                "SELECT DISTINCT network FROM channels WHERE network IS NOT NULL "
+                "AND network != '' ORDER BY network COLLATE NOCASE")],
+            "recorder_available": recorder.available()}
+
+
+# Padding a television offers. The same steps as the web panel.
+PAD_START = [0, 1, 2, 5, 10, 15, 30]
+PAD_END = [0, 5, 15, 30, 45, 60, 90, 120, 180]
+
+
+def _whole(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _passes() -> list[dict]:
+    """Every pass and every Plex rule, shaped for a television.
+
+    Built from the web app's own list, so the two cannot disagree about what
+    exists. `tab` is which of the television's lists it belongs in: a team
+    pass is a sports pass, and everything else that keeps recording is a
+    season pass.
+    """
+    rules = json.loads(pass_routes.api_rules().body)["rules"]
+    out = []
+    for r in rules:
+        ours = r["who"] == "ce"
+        prefs = r.get("prefs") or {}
+        out.append({
+            "id": str(r["id"]), "who": r["who"], "kind": r["kind"],
+            "tab": "sports" if r["kind"] == "team" or r.get("icon") == "sports" else "season",
+            "title": r["title"] or "", "detail": r.get("detail") or "",
+            "recorder": r.get("recorder") or "plex",
+            "enabled": bool(r.get("enabled", True)),
+            "networks": r.get("networks") or [], "channels": r.get("channels") or [],
+            "start_minutes": _whole(prefs.get("startOffsetMinutes")),
+            "end_minutes": _whole(prefs.get("endOffsetMinutes")),
+            "booked": r.get("booked") or 0,
+            # A Plex rule is Plex's own. It can be removed here and nothing else.
+            "editable": ours,
+        })
+    out.sort(key=lambda p: p["title"].lower())
+    return out
+
+
+@router.post("/api/tv/passes/{pass_id}")
+async def tv_pass_edit(pass_id: int, recorder_choice: str = Form("", alias="recorder"),
+                       enabled: str = Form(""), networks: str = Form(""),
+                       start_minutes: str = Form(""), end_minutes: str = Form("")):
+    """Change a pass from a television. Only what is sent is changed.
+
+    The web app's own edit clears whatever it is not sent, which is right for
+    a form that always sends everything and wrong for a remote that changes
+    one thing at a time.
+    """
+    p = db.one("SELECT * FROM passes WHERE id = ?", (pass_id,))
+    if not p:
+        return JSONResponse({"ok": False, "error": "That pass is gone."}, status_code=404)
+    if recorder_choice == "couchelephant" and record.recorder_off():
+        return record.recorder_off()
+    who = recorder_choice if recorder_choice in ("plex", "couchelephant") else p["recorder"]
+    on = p["enabled"] if enabled == "" else (0 if enabled in ("0", "false") else 1)
+    nets = db.unjs(networks, None) if networks else None
+    prefs = dict(db.unjs(p["prefs"], {}) or {})
+    for key, sent, allowed in (("startOffsetMinutes", start_minutes, PAD_START),
+                               ("endOffsetMinutes", end_minutes, PAD_END)):
+        if sent != "":
+            try:
+                value = int(sent)
+            except ValueError:
+                continue
+            if value in allowed:
+                prefs[key] = str(value)
+    with db.tx() as c:
+        c.execute("UPDATE passes SET recorder = ?, enabled = ?, prefs = ?, "
+                  "networks = COALESCE(?, networks) WHERE id = ?",
+                  (who, on, db.js(prefs), db.js(nets) if nets is not None else None,
+                   pass_id))
+    done = await asyncio.to_thread(passes.run_passes)
+    made = len([d for d in done if d["action"] == "scheduled"])
+    try:
+        # The recordings Plex already holds for this pass take the new padding
+        # now, and not at the next sync.
+        with _plex() as plex:
+            await asyncio.to_thread(sync.sync_recordings, plex)
+            await asyncio.to_thread(sync.check_bookings, plex)
+    except Exception:
+        # The pass is saved. Plex not answering for a moment must not fail it,
+        # and the next sync carries the change.
+        pass
+    return {"ok": True, "message": "Saved." + (f" {made} more set to record." if made else "")}
+
+
+@router.post("/api/tv/passes/{pass_id}/delete")
+def tv_pass_delete(pass_id: str, who: str = Form("ce")):
+    """Stop following. What is already booked or recorded is left alone."""
+    if who == "plex":
+        return pass_routes.api_plexrule_delete(pass_id)
+    with db.tx() as c:
+        c.execute("DELETE FROM passes WHERE id = ?", (pass_id,))
+    return {"ok": True, "message": "No longer following. What is already set to "
+                                   "record stays, and can be cancelled on its own."}
+
+
+@router.post("/api/tv/record/move")
+async def tv_record_move(airing_id: str = Form(...),
+                         recorder_choice: str = Form(..., alias="recorder")):
+    """Hand one booked broadcast to the other recorder.
+
+    Booked with the new one first is not possible: each recorder refuses a
+    broadcast the other already has. So it is cancelled, then booked, and if
+    the booking fails the reply says the recording is now not set at all.
+    """
+    row = record._airing_row(airing_id)
+    if not row:
+        return JSONResponse({"ok": False, "error":
+                             "That broadcast is no longer in the guide."}, status_code=404)
+    to_ours = recorder_choice == "couchelephant"
+    mine = recorder.booked(row)
+    if to_ours:
+        if mine:
+            return {"ok": True, "message": "CouchElephant already records this."}
+        if record.recorder_off():
+            return record.recorder_off()
+        if not db.one("SELECT 1 FROM our_grabs WHERE airing_id = ?", (airing_id,)):
+            return JSONResponse({"ok": False, "error":
+                                 "Plex booked this by its own rule, so it is Plex's to "
+                                 "record."}, status_code=409)
+        gone = await record.api_record_cancel(airing_id=airing_id)
+        if gone.status_code >= 400:
+            return gone
+        made = await asyncio.to_thread(record._record_ourselves, row, {})
+        if made.status_code >= 400:
+            said = json.loads(made.body).get("error", "")
+            return JSONResponse({"ok": False, "error":
+                                 "Plex's booking was cancelled, and CouchElephant could "
+                                 f"not book it: {said} It is not set to record now."},
+                                status_code=409)
+        return {"ok": True, "message": "CouchElephant records this now."}
+    if not mine:
+        return {"ok": True, "message": "CouchElephant does not have this one."}
+    if mine["state"] != "scheduled":
+        return JSONResponse({"ok": False, "error":
+                             "It is already recording. It stays with CouchElephant."},
+                            status_code=409)
+    await asyncio.to_thread(recorder.cancel, mine["id"])
+    try:
+        with _plex() as plex:
+            await asyncio.to_thread(passes._schedule, plex, row, None, "manual")
+            await asyncio.to_thread(sync.sync_recordings, plex)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error":
+                             "CouchElephant's booking was cancelled, and Plex could not "
+                             f"book it: {e} It is not set to record now."}, status_code=409)
+    return {"ok": True, "message": "Plex records this now."}
 
 
 @router.post("/api/tv/recordings/{rec_id}/delete")

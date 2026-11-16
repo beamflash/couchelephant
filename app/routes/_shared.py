@@ -12,7 +12,7 @@ from ..plex import Plex
 
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 templates = Jinja2Templates(directory=os.path.join(BASE, "templates"))
-VERSION = "1.5.6"
+VERSION = "1.5.7"
 
 # What the browser should call this build of the scripts and the stylesheet.
 # The version alone is not enough: it does not change between deploys, so a
@@ -178,8 +178,7 @@ def page(request, name, **ctx):
     # with. Every page that offers the "Recorded by" choice reads this.
     ctx.setdefault("recorder_info", {
         "available": recorder.available(),
-        "default": ("couchelephant" if recorder.available()
-                    and db.get_setting("recorder_default") == "couchelephant" else "plex"),
+        "default": recorder.default_choice(),
     })
     ctx.setdefault("version", VERSION)
     ctx.setdefault("asset_v", ASSET_V)

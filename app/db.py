@@ -431,7 +431,10 @@ DEFAULTS = {
     # and Plex stays the recorder for anything that does not say otherwise.
     "tuner_url": "",
     "tuner_detected": "",
-    "recorder_default": "plex",
+    # Who makes a new recording: 'auto', 'plex' or 'couchelephant'. Auto is
+    # CouchElephant on an install where its recorder can run, and Plex on one
+    # where it cannot, so turning the recorder on is what makes it the default.
+    "recorder_default": "auto",
     "recorder_encoder": "auto",
     "recorder_lead_minutes": "1",
     "recorder_trail_minutes": "3",
@@ -598,6 +601,7 @@ def init() -> None:
         conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
     _backfill_uids(conn)
     _strip_recurring_only_prefs(conn)
+    _recorder_default_to_auto(conn)
     _reslot_airing_ids(conn)
     # After the migration and the backfill, not inside SCHEMA: on an existing
     # install the column does not exist until _migrate has run.
@@ -660,6 +664,22 @@ def _reslot_airing_ids(conn):
 RECURRING_ONLY_PREFS = ("onlyNewAirings",
                         "autoDeletionItemPolicyUnwatchedLibrary",
                         "autoDeletionItemPolicyWatchedLibrary")
+
+
+def _recorder_default_to_auto(conn):
+    """Once: an install seeded with 'plex' as the default moves to 'auto'.
+
+    1.5.5 wrote 'plex' into every install as the seed value, so a stored
+    'plex' there is not a choice anybody made. From here on the default is
+    CouchElephant wherever its recorder is on. Done once and marked, so a
+    person who then picks Plex keeps Plex.
+    """
+    if conn.execute("SELECT 1 FROM settings WHERE key = 'recorder_default_auto'").fetchone():
+        return
+    conn.execute("UPDATE settings SET value = 'auto' "
+                 "WHERE key = 'recorder_default' AND value = 'plex'")
+    conn.execute("INSERT OR IGNORE INTO settings (key, value) "
+                 "VALUES ('recorder_default_auto', '1')")
 
 
 def _strip_recurring_only_prefs(conn):

@@ -78,6 +78,13 @@ def clean_db(plex_url):
     # a day away from the data. Both are pinned to UTC for the suite; the
     # browser side is pinned in tests/ui/conftest.py.
     db.set_setting("timezone", "UTC")
+    # The suite's scratch install has the recorder on, which now makes it the
+    # default. Every test written before that books with Plex and says so by
+    # saying nothing, so Plex is pinned here and the tests about the default
+    # set it themselves.
+    db.set_setting("recorder_default", "plex")
+    # And marked as chosen, or the app's own start-up would move it to auto.
+    db.set_setting("recorder_default_auto", "1")
     fake_plex.STATE.reset()
     yield
 
