@@ -1240,14 +1240,15 @@ def full_sync() -> tuple[int, str]:
     """One pass over everything. Returns a short human-readable summary."""
     started = _now()
     deadline = started + STARTUP_GRACE
-    waited = False
     while True:
         ok, detail, starting = _attempt_sync()
         if ok or not starting or _now() >= deadline:
             break
-        waited = True
         time.sleep(STARTUP_POLL)
-    if not ok and waited:
+    # Said whenever Plex answered "starting", not only when a retry happened:
+    # on a whole-second clock the deadline can pass during the first try, and
+    # the alert then read as a server that answered nothing.
+    if not ok and starting:
         # The alert has to say what was waited for, or it reads as a server
         # that answered nothing when it was answering all along.
         detail = (f"Plex was still starting {STARTUP_GRACE // 60} minutes after "
