@@ -285,6 +285,8 @@ CREATE TABLE IF NOT EXISTS recordings (
     season        INTEGER,
     episode       INTEGER,
     year          INTEGER,
+    -- The guide's section for it, which is how a list tells sport from the rest.
+    section       TEXT,
     channel_vcn   TEXT,
     channel_title TEXT,
     begins_at     INTEGER,
@@ -325,7 +327,9 @@ CREATE TABLE IF NOT EXISTS tv_devices (
     key_hash    TEXT,
     approved_at INTEGER,
     created_at  INTEGER,
-    last_seen   INTEGER
+    last_seen   INTEGER,
+    -- What this one television may do, set per television in Settings.
+    allow_delete INTEGER DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS notices (
@@ -483,6 +487,8 @@ def tx():
 # Columns added after the first release. CREATE TABLE IF NOT EXISTS will not
 # add them to a database that already exists, so they are applied by hand.
 MIGRATIONS = [
+    ("tv_devices", "allow_delete", "INTEGER DEFAULT 0"),
+    ("recordings", "section", "TEXT"),
     # The season and episode number, which the guide sends and nothing kept.
     # Our own recorder names a file with them, the way Plex names its own.
     ("programs", "season", "INTEGER"),

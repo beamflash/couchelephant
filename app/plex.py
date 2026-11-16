@@ -364,6 +364,13 @@ class Plex:
                         return m
         return None
 
+    def delete_item(self, rating_key: str) -> None:
+        """Remove a library item, and its file where Plex is allowed to."""
+        r = self._client().delete(f"{self.base}/library/metadata/{rating_key}")
+        if r.status_code >= 400 and r.status_code != 404:
+            raise PlexError(f"delete of item {rating_key} -> HTTP {r.status_code}",
+                            r.status_code)
+
     def set_position(self, rating_key: str, seconds: float) -> None:
         """Where to resume, for the account whose token this is."""
         r = self._client().get(self.base + "/:/progress", params={

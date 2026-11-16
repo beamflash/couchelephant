@@ -15,6 +15,8 @@ import threading
 import time
 import zoneinfo
 
+import httpx
+
 from . import db, recorder
 from .plex import Plex, PlexError
 
@@ -285,3 +287,35 @@ def tidy(now: int | None = None) -> None:
             shutil.rmtree(recorder.rec_dir(rec["uid"]), ignore_errors=True)
             with db.tx() as c:
                 c.execute("DELETE FROM recordings WHERE id = ?", (rec["id"],))
+
+
+def delete(rec) -> None:
+    """Remove a recording for good: here, and from Plex if Plex has it.
+
+    Asked for by a person, from a client allowed to. Plex is asked to delete
+    its own item first, which also removes the file where Plex is set to allow
+    that. The file is ours, we put it there, so if it is still on disk after
+    Plex has answered it is removed here and Plex is told to look again.
+    Raises HandoverError with the reason when Plex cannot be reached, and
+    nothing is removed in that case.
+    """
+    if rec["state"] == "moving":
+        raise HandoverError("This recording is being moved to Plex. Try again in a minute.")
+    if rec["state"] == "in_plex":
+        k = _kind(rec)
+        section = (db.get_setting(f"recorder_{k}_section") or "").strip()
+        try:
+            with Plex(db.get_setting("plex_url"), db.get_setting("plex_token")) as plex:
+                if rec["plex_rating_key"]:
+                    plex.delete_item(rec["plex_rating_key"])
+                path = rec["plex_path"]
+                if path and os.path.exists(path):
+                    os.remove(path)
+                    if section:
+                        plex.scan(section)
+        except (PlexError, httpx.HTTPError) as e:
+            # Not answering at all is an httpx error and never a PlexError.
+            raise HandoverError(f"Plex did not answer, so nothing was deleted: {e}") from e
+        except OSError as e:
+            raise HandoverError(f"Could not remove the file from the Plex library: {e}") from e
+    recorder.cancel(rec["id"])

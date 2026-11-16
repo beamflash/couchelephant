@@ -410,21 +410,22 @@ def book(airing, source: str = "manual", pass_id: int | None = None,
         return existing["id"]
     trail = pad_seconds("trail") if trail_minutes is None else trail_minutes * 60
     lead = pad_seconds("lead") if lead_minutes is None else lead_minutes * 60
-    prog = db.one("SELECT type, season, episode, year FROM programs WHERE guid = ?",
+    prog = db.one("SELECT type, season, episode, year, section FROM programs WHERE guid = ?",
                   (airing["program_guid"],))
     with db.tx() as c:
         cur = c.execute(
             """INSERT INTO recordings
                (uid, kind, state, airing_id, program_guid, title, show_title,
-                ptype, season, episode, year,
+                ptype, season, episode, year, section,
                 channel_vcn, channel_title, begins_at, ends_at, starts_at,
                 stops_at, source, pass_id, pass_uid, created_at, updated_at)
-               VALUES (?, 'recording', 'scheduled', ?, ?, ?, ?, ?, ?, ?, ?,
+               VALUES (?, 'recording', 'scheduled', ?, ?, ?, ?, ?, ?, ?, ?, ?,
                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (uuid.uuid4().hex, airing["id"], airing["program_guid"],
              airing["title"], show,
              prog["type"] if prog else None, prog["season"] if prog else None,
              prog["episode"] if prog else None, prog["year"] if prog else None,
+             prog["section"] if prog else None,
              airing["channel_vcn"],
              airing["channel_title"], airing["begins_at"], airing["ends_at"],
              airing["begins_at"] - lead,

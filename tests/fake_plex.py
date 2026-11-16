@@ -290,6 +290,7 @@ class State:
         self.library = {}       # file name -> ratingKey, as of the last scan
         self.scan_blind = False
         self.positions = {}     # ratingKey -> milliseconds
+        self.library_deleted = []   # ratingKeys a client asked to delete
         # What the guide has since done to its own listings. A refresh re-times
         # a broadcast and renumbers it, and it drops programmes off the end of
         # the window. Both are ordinary, both move the identity the app books
@@ -778,6 +779,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_DELETE(self):
         key = urllib.parse.urlsplit(self.path).path.rsplit("/", 1)[-1]
+        if self.path.startswith("/library/metadata/"):
+            # The library entry goes. The file stays, as it does on a server
+            # that is not set to allow media deletion.
+            STATE.library_deleted.append(key)
+            STATE.library = {n: k for n, k in STATE.library.items() if k != key}
+            return self._send({})
         if key in STATE.subscriptions:
             del STATE.subscriptions[key]
             STATE.deleted.append(key)

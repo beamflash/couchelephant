@@ -54,6 +54,13 @@ What the Apple TV app and the **Live TV** page read.
 | `POST /api/tv/recordings/{id}/position` | `seconds`. Where the player is. This is also the "somebody is watching" signal that holds back the move to Plex |
 | `POST /api/tv/live/{vcn}` | Watch a channel now. Joins a recording of that channel if there is one, so no second tuner is used |
 | `POST /api/tv/live/{id}/keepalive` | Still watching. Live viewing nobody keeps alive is closed after a minute and its tuner given back |
+| `GET /api/tv/guide` | The grid for a television: every channel and its programmes from now for `hours` (24). Each programme says whether it is set to record and by whom |
+| `GET /api/tv/program?airing_id=` | One broadcast: summary, whether it is on now, whether it records, and what "every one of these" can mean for it (its series, or its teams) |
+| `POST /api/tv/record` | Record from a television, always with CouchElephant's recorder. `airing_id`, and `scope`: `one`, `series`, or `team` with `team_id` |
+| `POST /api/tv/record/cancel` | Cancel one booking, with either recorder. `airing_id` |
+| `GET /api/tv/recordings` | `upcoming`: what is set to record, each with `booked_by` and `recorder`. `recorded`: everything recorded, each with `group` and `category` (`sports`, `tv`, `movies`) |
+| `POST /api/tv/recordings/{id}/delete` | Delete for good, from Plex too. `403` unless this television's Allow delete is on |
+| `POST /api/tv/devices/{id}/settings` | Administrators. `allow_delete` for one television |
 | `GET /hls/{uid}/index.m3u8` | The viewing copy, as an HLS playlist. `?start=0` marks it to open at its first second, which is how a player starts a recording that is still growing from the beginning |
 | `GET /hls/{uid}/seg00000.ts` ... | Its segments |
 | `GET /api/recorder/status` | What the Own recorder settings show: can it run, the tuner, the library folders and Plex libraries to choose from |

@@ -1,5 +1,37 @@
 # Changelog
 
+## 1.5.6 - 2026-11-15
+
+### Added
+
+- **The Apple TV app has three tabs: Home, Guide and Recordings.**
+  - **Guide** is a grid of every channel for the next day. The channel is the
+    first thing in each row, to the left of what is on now. Press a programme
+    for its details, and a channel to watch it.
+  - **Recordings** lists what is set to record, each with what booked it (one
+    recording, or the pass by name) and who records it. Below that is
+    everything recorded, by programme from A to Z, with All, Sports, TV and
+    Movies to narrow it.
+  - **A long press opens a menu for the thing under it, everywhere.** A
+    programme: watch live, record, cancel, details. A channel: watch live,
+    details. A recording: start from the beginning, resume, join live, delete.
+- **Recording from the television.** One broadcast, every episode of a series,
+  or every game a team plays. It is always recorded by CouchElephant, because
+  that is the only kind of recording the television can play.
+- **Each television has its own settings**, under Settings, Recording,
+  Televisions. The first is **Allow delete**, off until you turn it on. A
+  television with it can delete a recording for good. One that has moved to
+  Plex is deleted from Plex too, file and library entry, after a prompt. If
+  Plex cannot be reached nothing is deleted.
+
+### Changed
+
+- Every television now gets a key of its own, with sign-in on or off, because
+  its settings hang off it. With sign-in off the key is handed over without a
+  code. A television set up before this asks once and carries on.
+- A series is listed by its own name with the episode under it. Sport still
+  leads with the game.
+
 ## 1.5.5 - 2026-11-15
 
 ### Added

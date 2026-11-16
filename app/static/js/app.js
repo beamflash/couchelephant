@@ -832,19 +832,44 @@ window.wireSettings = function (root) {
                  ? (r.last_seen ? 'last seen ' + CE.fmtDay(r.last_seen) + ' ' +
                     CE.fmtTime(r.last_seen) : 'let in, not connected yet')
                  : 'waiting, showing code ' + CE.esc(r.code || '')) + '</td>' +
-               '<td style="text-align:right"><button type="button" class="tiny danger" ' +
+               '<td style="text-align:right;white-space:nowrap">' +
+               (r.approved_at ? '<button type="button" class="tiny" data-tvset="' + r.id +
+                                '">Settings</button> ' : '') +
+               '<button type="button" class="tiny danger" ' +
                'data-tvdel="' + r.id + '">Remove</button></td></tr>';
+          // What this one television may do. Closed until its button is pressed.
+          if (r.approved_at) {
+            h += '<tr class="tvsetrow" data-tvsetfor="' + r.id + '" hidden><td colspan="3">' +
+                 '<label class="row"><input type="checkbox" data-tvallow="' + r.id + '"' +
+                 (r.allow_delete ? ' checked' : '') + '>' +
+                 '<span>Allow delete. This television can then delete a recording ' +
+                 'for good, from CouchElephant and from Plex.</span></label></td></tr>';
+          }
         });
         tvlist.innerHTML = h + '</table>';
       });
     };
     tvlist.addEventListener('click', function (e) {
+      var s = e.target.closest('[data-tvset]');
+      if (s) {
+        var row = tvlist.querySelector('[data-tvsetfor="' + s.dataset.tvset + '"]');
+        if (row) row.hidden = !row.hidden;
+        return;
+      }
       var b = e.target.closest('[data-tvdel]');
       if (!b) return;
       fetch('/api/tv/devices/' + b.dataset.tvdel + '/delete', {method: 'POST'})
         .then(drawTvs);
     });
-    root.querySelector('#tvapprove').addEventListener('click', function () {
+    tvlist.addEventListener('change', function (e) {
+      var box = e.target.closest('[data-tvallow]');
+      if (!box) return;
+      fetch('/api/tv/devices/' + box.dataset.tvallow + '/settings',
+            {method: 'POST', body: new URLSearchParams({allow_delete: box.checked ? '1' : '0'})})
+        .then(CE.readJson).then(function (j) { if (!j.ok) box.checked = !box.checked; });
+    });
+    var approve = root.querySelector('#tvapprove');
+    if (approve) approve.addEventListener('click', function () {
       var code = root.querySelector('#tvcode');
       fetch('/api/tv/devices/approve',
             {method: 'POST', body: new URLSearchParams({code: code.value})})

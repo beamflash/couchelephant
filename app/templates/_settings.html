@@ -437,7 +437,8 @@
         <h2>Televisions</h2>
         <p class="dim">The CouchElephant app on an Apple TV plays what CouchElephant
           records.{% if auth_mode == 'none' %} Sign-in is off, so any television on your
-          network can connect and there is nothing to approve.{% else %} With sign-in on,
+          network can connect and there is nothing to approve. Each one is listed
+          below once it has connected.{% else %} With sign-in on,
           the app shows a six-letter code the first time. Type it here to let that
           television in.{% endif %}</p>
         {% if auth_mode != 'none' %}
@@ -450,8 +451,9 @@
             <span class="note" id="tvmsg"></span>
           </label>
         </div>
-        <div id="tvlist" data-find="television devices remove"></div>
         {% endif %}
+        {# Listed with sign-in on or off: each television has its own settings. #}
+        <div id="tvlist" data-find="television devices remove settings allow delete permissions"></div>
       </section>
 
       {# ---------------- Accounts ---------------- #}

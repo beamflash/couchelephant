@@ -236,6 +236,13 @@ watching goes with it as Plex's resume point. CouchElephant removes its own
 copy only after Plex lists the file. The recording plays the whole way
 through the move.
 
+**Deleting.** CouchElephant deletes a recording only when a person asks it
+to, from a television whose own **Allow delete** setting is on (Settings,
+Recording, Televisions), or from the web app as an administrator. Before the
+move to Plex that removes CouchElephant's files. After it, Plex is asked to
+delete its library entry and the file is removed from the library folder. If
+Plex does not answer, nothing is deleted.
+
 What it does not do:
 
 - It never takes a tuner Plex is using. If every tuner is busy when a

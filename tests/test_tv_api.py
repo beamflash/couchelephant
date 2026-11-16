@@ -1,5 +1,6 @@
 """The choice of recorder in the web app's own API, and what a television
 client reads: the lists, the video, and how it is let in."""
+import os
 import time
 
 from app import auth, db, recorder
@@ -162,7 +163,7 @@ def test_live_viewing_of_a_channel_we_cannot_decode_is_refused(client, tuner):
 
 def test_with_sign_in_off_a_television_needs_no_pairing(client, tuner):
     hello = client.get("/api/tv/hello").json()
-    assert hello["pairing_required"] is False and hello["paired"] is True
+    assert hello["pairing_required"] is False
     assert client.get("/api/tv/home").status_code == 200
 
 
@@ -225,3 +226,156 @@ def test_a_removed_television_is_locked_out(client, tuner):
     client.post(f"/api/tv/devices/{dev}/delete")
     client.cookies.clear()
     assert client.get("/api/tv/home", headers=tv).status_code == 401
+
+
+# ---------- the guide, recording and deleting from a television ----------
+
+def _pair(client, allow_delete=False):
+    """A television let in, the way the app does it. Answers its headers."""
+    asked = client.post("/api/tv/pair", data={"name": "Den"}).json()
+    key = client.post("/api/tv/pair/poll", data={"secret": asked["secret"]}).json()["key"]
+    if allow_delete:
+        dev = db.one("SELECT id FROM tv_devices ORDER BY id DESC")["id"]
+        client.post(f"/api/tv/devices/{dev}/settings", data={"allow_delete": "1"})
+    return {"Authorization": f"Bearer {key}"}
+
+
+def test_with_sign_in_off_a_television_still_gets_a_key_of_its_own(client, tuner):
+    """Its settings hang off it, so it registers even when nothing guards the door."""
+    assert client.get("/api/tv/hello").json()["paired"] is False
+    tv = _pair(client)
+    hello = client.get("/api/tv/hello", headers=tv).json()
+    assert hello["paired"] is True and hello["can_delete"] is False
+    assert [d["name"] for d in client.get("/api/tv/devices").json()["devices"]] == ["Den"]
+
+
+def test_the_guide_lists_channels_with_what_is_on_from_now(client, tuner):
+    now = int(time.time())
+    _airing("a-now", "g-now", "5.1", now - 600, title="On Now")
+    _airing("a-next", "g-next", "5.1", now + 3000, title="On Next")
+    _airing("a-old", "g-old", "5.1", now - 9000, title="Long Over")
+    recorder.book(_airing("a-next", "g-next", "5.1", now + 3000, title="On Next"))
+    g = client.get("/api/tv/guide").json()
+    row = [c for c in g["channels"] if c["channel"]["number"] == "5.1"][0]
+    assert [p["title"] for p in row["programs"]] == ["On Now", "On Next"]
+    assert [p["recording"] for p in row["programs"]] == [None, "couchelephant"]
+    assert row["watchable"] is True
+
+
+def test_a_programme_says_what_recording_every_one_would_mean(client, tuner):
+    now = int(time.time())
+    _airing("a1", "g1", "5.1", now + 600)
+    with db.tx() as c:
+        c.execute("INSERT INTO teams (id, name) VALUES (236, 'Chiefs')")
+    p = client.get("/api/tv/program", params={"airing_id": "a1"}).json()["program"]
+    assert p["teams"] == [{"id": 236, "name": "Chiefs", "followed": False}]
+    assert p["series"] == "", "a game is followed by its team, not by 'NFL Football'"
+    assert p["recordable"] is True and p["recording"] is None
+
+
+def test_a_television_records_one_broadcast_and_cancels_it(client, tuner, plex):
+    now = int(time.time())
+    _airing("a1", "g1", "5.1", now + 600)
+    tv = _pair(client)
+    r = client.post("/api/tv/record", data={"airing_id": "a1"}, headers=tv).json()
+    assert r["ok"] is True and r["recorder"] == "couchelephant"
+    up = client.get("/api/tv/recordings", headers=tv).json()["upcoming"]
+    assert [(u["title"], u["booked_by"], u["recorder"]) for u in up] == \
+        [("Chiefs at Broncos", "One recording", "couchelephant")]
+    assert client.post("/api/tv/record/cancel", data={"airing_id": "a1"},
+                       headers=tv).json()["ok"] is True
+    assert client.get("/api/tv/recordings", headers=tv).json()["upcoming"] == []
+
+
+def test_a_television_follows_a_team_and_the_list_names_the_pass(client, tuner, plex):
+    now = int(time.time())
+    _airing("a1", "g1", "5.1", now + 600)
+    with db.tx() as c:
+        c.execute("INSERT INTO teams (id, name) VALUES (236, 'Chiefs')")
+    r = client.post("/api/tv/record", data={"airing_id": "a1", "scope": "team",
+                                            "team_id": "236"}).json()
+    assert r["ok"] is True, r
+    up = client.get("/api/tv/recordings").json()["upcoming"]
+    assert [(u["booked_by"], u["booked_kind"], u["recorder"]) for u in up] == \
+        [("Chiefs pass", "pass", "couchelephant")]
+    assert fake_plex.STATE.created == []
+
+
+def test_following_from_a_television_keeps_an_existing_pass_and_its_limits(client, tuner, plex):
+    with db.tx() as c:
+        c.execute("INSERT INTO teams (id, name) VALUES (236, 'Chiefs')")
+        c.execute("INSERT INTO passes (kind, team_id, team_name, uid, networks, enabled, "
+                  "created_at) VALUES ('team', 236, 'Chiefs', 'u1', ?, 1, 0)", ('["CBS"]',))
+    now = int(time.time())
+    _airing("a1", "g1", "5.1", now + 600)
+    client.post("/api/tv/record", data={"airing_id": "a1", "scope": "team", "team_id": "236"})
+    p = db.one("SELECT * FROM passes")
+    assert (p["recorder"], p["networks"]) == ("couchelephant", '["CBS"]')
+    assert db.one("SELECT COUNT(*) c FROM passes")["c"] == 1
+
+
+def test_recorded_is_sorted_by_programme_and_says_what_kind_each_is(client, tuner):
+    _record("5.1", title="Zebra Hour", show="Zebra Hour")
+    with db.tx() as c:
+        c.execute("UPDATE programs SET section = 'sports' WHERE guid = 'g-9.1'")
+    b = _record("9.1", title="Apples at Pears", show="Autumn Football")
+    recs = client.get("/api/tv/recordings").json()["recorded"]
+    assert [r["group"] for r in recs] == ["Autumn Football", "Zebra Hour"]
+    assert recs[0]["id"] == b["id"]
+
+
+def test_a_television_cannot_delete_until_its_own_setting_allows_it(client, tuner):
+    rec = _record()
+    tv = _pair(client)
+    r = client.post(f"/api/tv/recordings/{rec['id']}/delete", headers=tv)
+    assert r.status_code == 403 and "not allowed to delete" in r.json()["error"]
+    assert recorder.get(rec["id"]) is not None
+    dev = db.one("SELECT id FROM tv_devices")["id"]
+    client.post(f"/api/tv/devices/{dev}/settings", data={"allow_delete": "1"})
+    assert client.get("/api/tv/home", headers=tv).json()["can_delete"] is True
+    assert client.post(f"/api/tv/recordings/{rec['id']}/delete", headers=tv).json()["ok"]
+    assert recorder.get(rec["id"]) is None
+    assert not os.path.exists(recorder.rec_dir(rec["uid"]))
+
+
+def test_deleting_a_recording_plex_has_removes_it_from_plex_too(client, tuner, plex):
+    from app import handover
+    for k, v in (("recorder_shows_folder", "tv"), ("recorder_shows_section", "2")):
+        db.set_setting(k, v)
+    os.makedirs(os.path.join(handover.LIB_DIR, "tv"))
+    rec = _record()
+    handover.tick(wait=True)
+    done = recorder.get(rec["id"])
+    assert done["state"] == "in_plex" and os.path.exists(done["plex_path"])
+    tv = _pair(client, allow_delete=True)
+    assert client.post(f"/api/tv/recordings/{rec['id']}/delete", headers=tv).json()["ok"]
+    assert fake_plex.STATE.library_deleted == [done["plex_rating_key"]]
+    assert not os.path.exists(done["plex_path"]), "the file goes, not only the entry"
+    assert recorder.get(rec["id"]) is None
+
+
+def test_nothing_is_deleted_when_plex_cannot_be_reached(client, tuner, plex):
+    from app import handover
+    for k, v in (("recorder_shows_folder", "tv"), ("recorder_shows_section", "2")):
+        db.set_setting(k, v)
+    os.makedirs(os.path.join(handover.LIB_DIR, "tv"))
+    rec = _record()
+    handover.tick(wait=True)
+    done = recorder.get(rec["id"])
+    db.set_setting("plex_url", "http://127.0.0.1:1")
+    r = client.post(f"/api/tv/recordings/{rec['id']}/delete")
+    assert r.status_code == 409 and "nothing was deleted" in r.json()["error"]
+    assert os.path.exists(done["plex_path"]) and recorder.get(rec["id"]) is not None
+
+
+def test_a_series_leads_with_its_name_and_sport_with_the_game(client, tuner):
+    now = int(time.time())
+    _airing("a-game", "g-game", "5.1", now - 600)             # sport, as _airing makes it
+    _airing("a-ep", "g-ep", "9.1", now - 600, title="Eve of Destruction",
+            show="Just Shoot Me")
+    with db.tx() as c:
+        c.execute("UPDATE programs SET section = 'tv' WHERE guid = 'g-ep'")
+    rows = {c["channel"]["number"]: c["programs"][0]
+            for c in client.get("/api/tv/guide").json()["channels"]}
+    assert (rows["5.1"]["title"], rows["5.1"]["subtitle"]) == ("Chiefs at Broncos", "NFL Football")
+    assert (rows["9.1"]["title"], rows["9.1"]["subtitle"]) == ("Just Shoot Me", "Eve of Destruction")
