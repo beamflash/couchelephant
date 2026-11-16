@@ -12,6 +12,7 @@ lets a player start at the beginning of a recording that is still being made.
 It is disposable: if ffmpeg dies, the broadcast file is whole and the copy is
 made again from the first byte.
 """
+import logging
 import os
 import shutil
 import subprocess
@@ -22,6 +23,8 @@ import uuid
 import httpx
 
 from . import db, tuner
+
+log = logging.getLogger("couchelephant.recorder")
 
 REC_DIR = os.environ.get("COUCHELEPHANT_RECORDINGS", "/recordings")
 FFMPEG = os.environ.get("COUCHELEPHANT_FFMPEG", "ffmpeg")
@@ -97,6 +100,14 @@ def view_info(uid: str) -> dict:
 
 _vaapi = None
 
+# What the hardware encoder is asked for. Constant quality, not a bitrate: the
+# free Intel driver that Debian ships offers no other mode, and answers
+# "Invalid argument" to a bitrate target. Found on a live install, where the
+# probe below passed and every real conversion failed, because the probe did
+# not ask for what the conversion asked for. Both now use these same lines.
+VAAPI_FILTER = "format=nv12,hwupload,deinterlace_vaapi=rate=field:auto=1"
+VAAPI_ENCODE = ["-c:v", "h264_vaapi", "-rc_mode", "CQP", "-qp", "24"]
+
 
 def _vaapi_works() -> bool:
     """One second of test picture through the hardware encoder. Asked once."""
@@ -109,8 +120,7 @@ def _vaapi_works() -> bool:
                     [FFMPEG, "-hide_banner", "-loglevel", "error",
                      "-vaapi_device", VAAPI_DEVICE,
                      "-f", "lavfi", "-i", "testsrc=size=1280x720:rate=30:duration=1",
-                     "-vf", "format=nv12,hwupload", "-c:v", "h264_vaapi",
-                     "-f", "null", "-"],
+                     "-vf", VAAPI_FILTER, *VAAPI_ENCODE, "-f", "null", "-"],
                     capture_output=True, timeout=30)
                 _vaapi = r.returncode == 0
             except (OSError, subprocess.SubprocessError):
@@ -141,9 +151,7 @@ def convert_args(enc: str, out_dir: str) -> list[str]:
     if enc == "vaapi":
         # Decoded on the CPU, which MPEG-2 barely notices, and encoded on the
         # GPU. Field rate, so 1080i sport keeps all 60 pictures a second.
-        args += ["-vf", "format=nv12,hwupload,deinterlace_vaapi=rate=field:auto=1",
-                 "-c:v", "h264_vaapi", "-b:v", "6M", "-maxrate", "8M",
-                 "-bufsize", "16M"]
+        args += ["-vf", VAAPI_FILTER, *VAAPI_ENCODE]
     else:
         # Frame rate, not field rate: 1080p60 in software is more than a small
         # machine can make as fast as it arrives.
@@ -278,6 +286,15 @@ class Converter:
     def failed(self) -> bool:
         return not self.alive() and self.returncode not in (0, None)
 
+    def last_words(self) -> str:
+        """The end of ffmpeg's log, for whoever has to work out why it died."""
+        try:
+            with open(os.path.join(self.out_dir, "ffmpeg.log"), encoding="utf-8",
+                      errors="replace") as f:
+                return " | ".join(f.read().strip().splitlines()[-3:])
+        except OSError:
+            return "no log"
+
     def stop(self):
         self._stop = True
         if self.proc and self.proc.poll() is None:
@@ -300,6 +317,16 @@ class Job:
         self.capture.start()
 
     def start_converter(self, src: str | None = None):
+        global _vaapi
+        was = self.converter
+        if was and was.failed() and was.enc == "vaapi":
+            # The graphics chip passed its test and then failed on a real
+            # broadcast. Said in the log, with ffmpeg's own words, and the
+            # processor does the work from here on: for this recording and for
+            # every one after it, until the container restarts.
+            log.warning("hardware encoding failed for recording %s, using software "
+                        "from now on: %s", self.id, was.last_words())
+            _vaapi = False
         self.convert_starts += 1
         self.converter = Converter(src or broadcast_path(self.uid),
                                    view_dir(self.uid), lambda: self.capturing)

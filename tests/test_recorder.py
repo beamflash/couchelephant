@@ -420,3 +420,33 @@ def test_a_show_plex_already_has_keeps_its_folder(tmp_path):
     (tmp_path / "The Show (2019)").mkdir()
     got = handover.relative_path(_named(season=1, episode=1), str(tmp_path))
     assert got == "The Show (2019)/Season 01/The Show (2019) - S01E01 - Pilot.ts"
+
+
+# ---------- the encoder ----------
+
+def test_the_hardware_probe_asks_for_exactly_what_a_conversion_asks_for():
+    """A probe that passes on easier settings than the real job is a lie. On a
+    live install it passed, and every recording then failed to convert."""
+    args = recorder.convert_args("vaapi", "/x")
+    assert recorder.VAAPI_FILTER in args
+    for word in recorder.VAAPI_ENCODE:
+        assert word in args
+    # Constant quality. The free Intel driver refuses a bitrate target.
+    assert "-b:v" not in args and "-maxrate" not in args
+
+
+def test_hardware_that_fails_mid_recording_gives_way_to_software(tuner, monkeypatch, caplog):
+    monkeypatch.setattr(recorder, "_vaapi", True)
+    db.set_setting("recorder_encoder", "auto")
+    monkeypatch.setenv("FAKE_FFMPEG_FAIL", "1")
+    now = int(time.time())
+    rec_id = recorder.book(_airing("a1", "g1", "5.1", now - 60))
+    recorder.tick()
+    job = _until(lambda: recorder._jobs.get(rec_id))
+    assert job.converter.enc == "vaapi"
+    _until(lambda: job.converter.failed())
+    monkeypatch.delenv("FAKE_FFMPEG_FAIL")
+    recorder.tick()                                # notices, and starts it again
+    assert job.converter.enc == "software"
+    assert "hardware encoding failed" in caplog.text
+    _until(lambda: recorder.view_info(recorder.get(rec_id)["uid"])["segments"] > 0)

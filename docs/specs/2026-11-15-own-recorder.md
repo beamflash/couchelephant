@@ -153,8 +153,9 @@ One ffmpeg process for each recording, fed the broadcast file as it grows.
 one-second test at start, and falls back to software. Hardware needs
 `--device /dev/dri` on the container, which `docs/INSTALL.md` will say.
 
-Video is deinterlaced, H.264, at most 8 Mb/s, with a keyframe every four
-seconds so a segment is four seconds. Audio is AAC stereo. **Builder's call:**
+Video is deinterlaced, H.264, with a keyframe every four seconds so a
+segment is four seconds. Software encoding is capped at 8 Mb/s; hardware
+encoding is constant quality, about 5 Mb/s for 1080 sport. Audio is AAC stereo. **Builder's call:**
 stereo first because it plays everywhere; surround in the viewing copy is a
 later change, and the broadcast file Plex receives always keeps the original
 5.1.
@@ -269,6 +270,13 @@ is less to go wrong than a search that finds nothing.
   for the show, with or without a year, is reused; a new show gets the plain
   name.
 - The season and episode numbers were added to the guide sync as planned.
+- **The hardware encoder is asked for constant quality, not a bitrate.** The
+  free Intel driver Debian ships has no other mode. The first live deploy
+  passed the one-second probe and failed every real conversion, because the
+  probe asked for less than the conversion did. Both now run the same
+  settings, and a hardware failure mid-recording is logged and handed to the
+  software encoder. Measured on an i5-1135G7: 1080i in, 1080p60 out at about
+  5 Mb/s, in real time, on less than one core.
 
 ## Build order
 
