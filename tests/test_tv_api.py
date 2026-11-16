@@ -208,9 +208,12 @@ def test_live_viewing_starts_a_session_and_keepalive_holds_it(client, tuner):
     rec_id = r["recording"]["id"]
     _until(lambda: tuner.live == ["9.1"])
     assert client.post(f"/api/tv/live/{rec_id}/keepalive").json()["ok"] is True
+    assert r["recording"]["pause_limit"] == 30 * 60, "the players are told the limit"
     # A live session is not a recording, and is not listed as one.
     home = client.get("/api/tv/home").json()
     assert home["live_now"] == [] and home["recent"] == []
+    assert client.post(f"/api/tv/live/{rec_id}/stop").json()["ok"] is True
+    assert recorder.get(rec_id) is None
 
 
 def test_live_viewing_of_a_channel_we_cannot_decode_is_refused(client, tuner):

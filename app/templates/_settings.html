@@ -386,6 +386,17 @@
             <span class="help">Used when a recording does not carry its own padding.
               A pass keeps the padding it was given.</span>
           </div>
+          <div class="field" data-find="pause live tv buffer timeshift minutes">
+            <label for="recpause">Live TV pause limit</label>
+            <label class="row">
+              <input id="recpause" name="live_pause_minutes" type="number" min="5" max="240"
+                     value="{{ settings.live_pause_minutes or 30 }}" style="width:76px">
+              <span>minutes</span>
+            </label>
+            <span class="help">How long a live channel stays paused before it carries on
+              playing. The tuner is held that long for a paused television, so you come
+              back to where you stopped. A recording that needs the tuner still takes it.</span>
+          </div>
           <div class="field" data-find="encoder hardware vaapi quicksync software ffmpeg">
             <label for="recenc">Making the copy you watch</label>
             <select id="recenc" name="recorder_encoder">

@@ -30,8 +30,10 @@ REC_DIR = os.environ.get("COUCHELEPHANT_RECORDINGS", "/recordings")
 FFMPEG = os.environ.get("COUCHELEPHANT_FFMPEG", "ffmpeg")
 VAAPI_DEVICE = "/dev/dri/renderD128"
 SEGMENT_SECONDS = 4
-# A live session nobody has kept alive for this long is closed, and its tuner
-# given back.
+# The shortest a live session nobody keeps alive is held, before its tuner is
+# given back. The real hold is the pause limit, so a paused television whose
+# app the system put to sleep comes back to its channel. A player that is
+# closed says so and ends the session at once.
 LIVE_IDLE_SECONDS = 60
 # The longest a live session may hold a tuner without a recording behind it.
 LIVE_MAX_SECONDS = 12 * 3600
@@ -118,6 +120,10 @@ _vaapi = None
 # probe below passed and every real conversion failed, because the probe did
 # not ask for what the conversion asked for. Both now use these same lines.
 VAAPI_FILTER = "format=nv12,hwupload,deinterlace_vaapi=rate=field:auto=1"
+# A progressive channel (720p) skips the deinterlacer. At field rate it made
+# two pictures from every progressive one too, despite auto=1: 720p60 came out
+# at 120 a second, with every caption twice (found on a live 720p channel).
+VAAPI_UPLOAD = "format=nv12,hwupload"
 VAAPI_ENCODE = ["-c:v", "h264_vaapi", "-rc_mode", "CQP", "-qp", "24"]
 # Field rate makes two pictures from every interlaced one, and both carry that
 # picture's captions, so every letter came out twice ("GOGOINING"). The second
@@ -205,7 +211,7 @@ def convert_args(enc: str, out_dir: str, interlaced: bool = False) -> list[str]:
                  "-map", "[v]", "-map", "0:a:0", "-fps_mode:v", "passthrough",
                  *VAAPI_ENCODE]
     elif enc == "vaapi":
-        args += ["-map", "0:v:0", "-map", "0:a:0", "-vf", VAAPI_FILTER, *VAAPI_ENCODE]
+        args += ["-map", "0:v:0", "-map", "0:a:0", "-vf", VAAPI_UPLOAD, *VAAPI_ENCODE]
     else:
         args += ["-map", "0:v:0", "-map", "0:a:0"]
         # Frame rate, not field rate: 1080p60 in software is more than a small
@@ -684,9 +690,27 @@ def _stop_due(now):
                         else "The tuner sent nothing for the whole broadcast."))
 
 
+def pause_limit() -> int:
+    """How long live TV may stay paused, in seconds: the setting, 5 to 240 minutes."""
+    try:
+        minutes = int(db.get_setting("live_pause_minutes") or 30)
+    except ValueError:
+        minutes = 30
+    return max(5, min(240, minutes)) * 60
+
+
 def _close_idle_live(now):
+    idle = max(LIVE_IDLE_SECONDS, pause_limit())
     for rec in db.query("SELECT * FROM recordings WHERE kind = 'live'"):
-        if (rec["watched_at"] or 0) < now - LIVE_IDLE_SECONDS:
+        if (rec["watched_at"] or 0) < now - idle:
+            _end_live(rec)
+
+
+def stop_live(rec_id: int) -> None:
+    """A player closed. The session ends now, and its tuner is free."""
+    with _lock:
+        rec = get(rec_id)
+        if rec and rec["kind"] == "live":
             _end_live(rec)
 
 

@@ -26,6 +26,22 @@ EXTRA=""
 TAG="couchelephant:local"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Recreating the container ends every live channel and recording in flight: a
+# paused television lost its place this way (2026-11-16). So nothing is
+# deployed while anything records or plays, unless that is really wanted.
+if [ -z "${COUCHELEPHANT_DEPLOY_ANYWAY:-}" ]; then
+  busy="$(ssh -o ConnectTimeout=30 "$HOST" "docker exec couchelephant python -c \"
+from app import db
+rows = db.query(\\\"SELECT kind, channel_vcn, title FROM recordings WHERE state = 'recording'\\\")
+print('; '.join(f'{r[0]} {r[1]} {r[2] or \\\"\\\"}'.strip() for r in rows))
+\" 2>/dev/null" || true)"
+  if [ -n "$busy" ]; then
+    echo "Not deploying: CouchElephant is recording or playing right now ($busy)." >&2
+    echo "Wait for it to finish, or set COUCHELEPHANT_DEPLOY_ANYWAY=1." >&2
+    exit 3
+  fi
+fi
+
 echo "==> packaging"
 tar czf /tmp/couchelephant.tgz -C "$HERE" Dockerfile requirements.txt app/
 scp -q /tmp/couchelephant.tgz "$HOST:/tmp/couchelephant.tgz"

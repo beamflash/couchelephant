@@ -234,12 +234,31 @@ def test_a_tuner_plex_holds_is_never_taken(tuner):
     assert recorder.get(rec_id)["state"] == "scheduled"
 
 
-def test_live_viewing_nobody_keeps_alive_is_closed(tuner):
+def test_live_viewing_nobody_keeps_alive_is_closed_after_the_pause_limit(tuner):
+    """A paused television whose app went to sleep sends nothing. Its channel
+    is held for the pause limit, so it comes back to where it stopped."""
+    db.set_setting("live_pause_minutes", "10")
     live = recorder.start_live("9.1", "News")
     _until(lambda: tuner.live == ["9.1"])
-    recorder.tick(now=int(time.time()) + recorder.LIVE_IDLE_SECONDS + 5)
+    recorder.tick(now=int(time.time()) + 5 * 60)
+    assert recorder.get(live) is not None, "closed before the pause limit"
+    recorder.tick(now=int(time.time()) + 10 * 60 + 5)
     assert recorder.get(live) is None
     _until(lambda: not tuner.live)
+
+
+def test_a_closed_player_gives_the_tuner_back_at_once(tuner):
+    live = recorder.start_live("9.1", "News")
+    _until(lambda: tuner.live == ["9.1"])
+    recorder.stop_live(live)
+    assert recorder.get(live) is None
+    _until(lambda: not tuner.live)
+
+
+def test_the_pause_limit_stays_between_5_and_240_minutes():
+    for said, seconds in (("1", 300), ("45", 2700), ("9999", 14400), ("nonsense", 1800)):
+        db.set_setting("live_pause_minutes", said)
+        assert recorder.pause_limit() == seconds
 
 
 # ---------- a pass that names our recorder ----------
@@ -434,7 +453,11 @@ def test_the_hardware_probe_asks_for_exactly_what_a_conversion_asks_for():
             assert word in args
         # Constant quality. The free Intel driver refuses a bitrate target.
         assert "-b:v" not in args and "-maxrate" not in args
-    assert recorder.VAAPI_FILTER in recorder.convert_args("vaapi", "/x", False)
+    # A progressive channel is not deinterlaced at all: at field rate it came
+    # out at twice its frame rate with every caption doubled.
+    progressive = recorder.convert_args("vaapi", "/x", False)
+    assert recorder.VAAPI_UPLOAD in progressive
+    assert not any("deinterlace" in a for a in progressive)
     # The probe runs the harder of the two, the graph that keeps captions single.
     assert recorder.VAAPI_FILTER in recorder.VAAPI_CAPTIONS_ONCE
 

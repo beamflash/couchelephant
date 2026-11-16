@@ -437,6 +437,9 @@ DEFAULTS = {
     "recorder_default": "auto",
     "recorder_encoder": "auto",
     "recorder_lead_minutes": "1",
+    # How long live TV may stay paused. The tuner is held that long for a player
+    # that has gone quiet, and a player paused that long carries on playing.
+    "live_pause_minutes": "30",
     "recorder_trail_minutes": "3",
     # The handover. The folder names are inside the /library mount, and the
     # section is the Plex library that folder belongs to. Empty means the

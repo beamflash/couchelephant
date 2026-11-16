@@ -232,6 +232,8 @@ def recording_json(request: Request, rec) -> dict:
         "category": _category(rec),
         "season": rec["season"], "episode": rec["episode"],
         "airing_id": rec["airing_id"],
+        # How long a player may stay paused on live TV before it carries on.
+        "pause_limit": recorder.pause_limit() if rec["kind"] == "live" else None,
     }
 
 
@@ -841,6 +843,13 @@ def live_start(request: Request, vcn: str):
              if on else f"Channel {vcn}")
     rec_id = recorder.start_live(vcn, title, on["channel_title"] if on else None)
     return {"ok": True, "recording": recording_json(request, recorder.get(rec_id))}
+
+
+@router.post("/api/tv/live/{rec_id}/stop")
+def live_stop(rec_id: int):
+    """The player closed. Gives the tuner back without waiting out the pause limit."""
+    recorder.stop_live(rec_id)
+    return {"ok": True}
 
 
 @router.post("/api/tv/live/{rec_id}/keepalive")

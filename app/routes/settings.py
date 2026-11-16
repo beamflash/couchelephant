@@ -78,7 +78,8 @@ def settings_recorder(tuner_url: str = Form(""), recorder_default: str = Form("a
                       recorder_shows_section: str = Form(""),
                       recorder_movies_folder: str = Form(""),
                       recorder_movies_section: str = Form(""),
-                      recorder_keep_days: str = Form("2")):
+                      recorder_keep_days: str = Form("2"),
+                      live_pause_minutes: str = Form("30")):
     """CouchElephant's own recorder: the tuner, the default, the handover."""
     def minutes(v, default):
         try:
@@ -93,6 +94,10 @@ def settings_recorder(tuner_url: str = Form(""), recorder_default: str = Form("a
     db.set_setting("recorder_lead_minutes", minutes(recorder_lead_minutes, "1"))
     db.set_setting("recorder_trail_minutes", minutes(recorder_trail_minutes, "3"))
     db.set_setting("recorder_keep_days", minutes(recorder_keep_days, "2"))
+    try:
+        db.set_setting("live_pause_minutes", str(max(5, min(240, int(live_pause_minutes)))))
+    except ValueError:
+        pass
     for key, value in (("recorder_shows_folder", recorder_shows_folder),
                        ("recorder_movies_folder", recorder_movies_folder)):
         # A folder inside the library mount, and nothing that climbs out of it.

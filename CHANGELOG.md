@@ -24,8 +24,26 @@
   Top Shelf extension share the server address and key through a keychain
   group. A live channel's card shows the picture of what is on it now.
 
+- **Live TV pause limit** (Settings, Recording, default 30 minutes). A paused
+  live channel is held that long, even when the Apple TV puts the app to
+  sleep, and a pause that reaches the limit plays on from where it stopped. A
+  player that closes gives its tuner back at once. A recording that needs the
+  tuner still takes it.
+
+### Changed
+
+- The Apple TV and iPhone players have one captions button, the player's own
+  subtitle menu. Its choice is still kept for the next video.
+- `deploy.sh` refuses while anything records or plays
+  (`COUCHELEPHANT_DEPLOY_ANYWAY=1` to override): recreating the container ends
+  them.
+
 ### Fixed
 
+- **Captions on 720p channels were nonsense, and the picture ran at 120 a
+  second.** The hardware deinterlacer made two pictures from every
+  progressive one, captions included. Progressive channels are no longer
+  deinterlaced.
 - **Apple TV: the tab bar could not be reached again from Home.** With
   nothing in "Live now", scrolling down left nothing above "Recent
   recordings" to move up to. An empty shelf's sentence can now hold focus.

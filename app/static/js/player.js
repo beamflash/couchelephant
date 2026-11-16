@@ -6,7 +6,7 @@
    channel, all through the three calls at the bottom. */
 (function () {
   var el = null, video = null, msg = null, hls = null, now = null, beat = null;
-  var onNow = null, beat_n = 0;
+  var onNow = null, beat_n = 0, pausedAt = null;
   var CC_KEY = 'ce.captions';
 
   // Captions on or off is kept in this browser, so the next video starts the
@@ -87,7 +87,13 @@
     document.addEventListener('keydown', function (e) {
       if (e.key === 'Escape' && !el.hidden) close();
     });
-    window.addEventListener('pagehide', report);
+    window.addEventListener('pagehide', function () {
+      // Leaving the page closes the player: live TV gives its tuner back now.
+      if (now && now.kind === 'live') navigator.sendBeacon('/api/tv/live/' + now.id + '/stop');
+      else report();
+    });
+    video.addEventListener('pause', function () { pausedAt = Date.now(); });
+    video.addEventListener('play', function () { pausedAt = null; });
   }
 
   function say(text) { msg.hidden = !text; msg.textContent = text || ''; }
@@ -184,12 +190,23 @@
     whatIsOn();
     beat = setInterval(function () {
       report();
+      // Live TV paused longer than the limit set on the server plays on from
+      // where it stopped. The channel is held only that long.
+      if (now && now.kind === 'live' && pausedAt && now.pause_limit &&
+          Date.now() - pausedAt >= now.pause_limit * 1000) {
+        pausedAt = null;
+        video.play().catch(function () {});
+      }
       if (!(beat_n = (beat_n + 1) % 6)) whatIsOn();   // once a minute
     }, 10000);
   }
 
   function close() {
-    report();
+    if (now && now.kind === 'live') {
+      fetch('/api/tv/live/' + now.id + '/stop', {method: 'POST'});
+    } else {
+      report();
+    }
     clearInterval(beat); beat = null;
     if (hls) { hls.destroy(); hls = null; }
     video.pause(); video.removeAttribute('src'); video.load();
