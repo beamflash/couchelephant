@@ -71,4 +71,10 @@ sh /tmp/grab_captioned_clip.sh <tuner ip> <a 1080i channel>
 PYTHONPATH=/app python /tmp/format_matrix.py vaapi
 PYTHONPATH=/app python /tmp/format_matrix.py software
 PYTHONPATH=/app python /tmp/channel_sweep.py vaapi
+PYTHONPATH=/app python /tmp/compare_captions.py <a captured .ts> vaapi
 ```
+
+`compare_captions.py` prints the broadcast's captions and the copy's side by
+side. A station's own caption encoder can send junk (a Spanish channel here
+sends "HDHDHD" between lines); the side by side shows whether it came from
+the station or from CouchElephant.

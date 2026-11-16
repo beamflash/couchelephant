@@ -67,8 +67,15 @@ def one(vcn):
     os.makedirs(W)
     src, out_dir = f"{W}/src.ts", f"{W}/view"
     os.makedirs(out_dir)
-    got = run(["timeout", "45", "ffmpeg", "-v", "quiet", "-y", "-t", "25", "-i",
-               tuner.stream_url(vcn), "-map", "0", "-c", "copy", "-f", "mpegts", src], timeout=60)
+    # ffmpeg itself, not under `timeout`: killing a `timeout` wrapper left
+    # ffmpeg running and holding a tuner (three of four, for half an hour, on
+    # very low-rate channels). The read timeout ends a channel that stalls.
+    try:
+        got = run(["ffmpeg", "-v", "quiet", "-y", "-rw_timeout", "15000000", "-t", "25",
+                   "-i", tuner.stream_url(vcn), "-map", "0", "-c", "copy", "-f", "mpegts",
+                   src], timeout=60)
+    except subprocess.TimeoutExpired:
+        return {"vcn": vcn, "result": "no stream", "detail": "nothing for 60 seconds"}
     if not os.path.exists(src) or os.path.getsize(src) < 500_000:
         return {"vcn": vcn, "result": "no stream", "detail": got.stderr[-200:]}
     s_in, a_in = probe(src)
