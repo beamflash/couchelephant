@@ -17,6 +17,13 @@
   "i". A recording keeps its description from the moment it was booked, since
   the guide forgets a programme once it has aired.
 
+- **Apple TV Top Shelf.** With CouchElephant in the top row of the Apple TV
+  home screen, the area above it shows **Recording now** and **Recent
+  recordings**, with artwork and how far each was watched. A click opens the
+  app and asks where to start; the Play button plays at once. The app and its
+  Top Shelf extension share the server address and key through a keychain
+  group. A live channel's card shows the picture of what is on it now.
+
 ### Fixed
 
 - **Apple TV: the tab bar could not be reached again from Home.** With

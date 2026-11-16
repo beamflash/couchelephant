@@ -166,6 +166,16 @@ def _art(program_guid):
     return (p["art"] or p["thumb"] or "") if p else ""
 
 
+def _art_on_now(vcn):
+    """A live channel has no programme of its own: the picture of what the
+    guide says is on it now, so a card for it is not blank."""
+    now = int(time.time())
+    p = db.one("""SELECT p.art, p.thumb FROM airings a JOIN programs p ON p.guid = a.program_guid
+                  WHERE a.channel_vcn = ? AND a.begins_at <= ? AND a.ends_at > ?
+                  ORDER BY a.begins_at DESC LIMIT 1""", (vcn, now, now))
+    return (p["art"] or p["thumb"] or "") if p else ""
+
+
 def _channel(request, vcn, title):
     has_logo = db.one("SELECT 1 FROM channels WHERE vcn = ? AND logo_path IS NOT NULL "
                       "AND logo_path != ''", (vcn,))
@@ -204,7 +214,8 @@ def recording_json(request: Request, rec) -> dict:
         "recorded_by": "couchelephant",
         "title": big, "subtitle": small,
         "channel": _channel(request, rec["channel_vcn"], rec["channel_title"]),
-        "art": _art(rec["program_guid"]),
+        "art": _art(rec["program_guid"])
+               or (_art_on_now(rec["channel_vcn"]) if rec["kind"] == "live" else ""),
         "begins_at": rec["begins_at"], "ends_at": rec["ends_at"],
         "started_at": rec["started_at"], "ended_at": rec["ended_at"],
         # How much there is to watch right now, which for a recording still

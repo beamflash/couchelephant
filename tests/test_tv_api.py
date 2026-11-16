@@ -165,6 +165,18 @@ def test_what_is_on_now_follows_a_live_channel_into_the_next_programme(client, t
     assert later["program"]["title"] == "Second Show"
 
 
+def test_a_live_channel_card_shows_the_picture_of_what_is_on(client, tuner):
+    from app.routes import tv
+    now = int(time.time())
+    with db.tx() as c:
+        c.execute("INSERT INTO programs (guid, title, art, type) VALUES "
+                  "('pa', 'Show', 'https://example.test/art.jpg', 'episode')")
+        c.execute("INSERT INTO airings (id, program_guid, channel_vcn, begins_at, ends_at) "
+                  "VALUES ('air-pa', 'pa', '8.1', ?, ?)", (now - 60, now + 600))
+    assert tv._art_on_now("8.1") == "https://example.test/art.jpg"
+    assert tv._art_on_now("99.1") == ""
+
+
 def test_a_recording_the_guide_forgot_keeps_its_own_description(client, tuner):
     now = int(time.time())
     with db.tx() as c:
