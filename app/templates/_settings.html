@@ -344,6 +344,116 @@
         </form>
       </section>
 
+      <section data-sec="recording" data-tab="recorder" data-tab-label="Own recorder" hidden>
+        <h2>CouchElephant's own recorder</h2>
+        <p class="dim">Plex cannot play a recording from its start while it is still
+          being made. A recording CouchElephant makes itself can be. Plex stays the
+          recorder for everything that does not say otherwise.</p>
+        <div class="verdict" id="recverdict" hidden>
+          <span class="vmark"></span><span class="vtext"></span></div>
+        <form method="post" action="/settings/recorder" class="setform" id="recform"
+              style="margin-top:14px">
+          <div class="field" data-find="recorded by default recorder couchelephant plex">
+            <label for="recdef">New recordings are made by</label>
+            <select id="recdef" name="recorder_default">
+              <option value="plex" {{ 'selected' if settings.recorder_default != 'couchelephant' }}>Plex</option>
+              <option value="couchelephant" {{ 'selected' if settings.recorder_default == 'couchelephant' }}>CouchElephant</option>
+            </select>
+            <span class="help">What a new recording or pass starts with. Each one can
+              still choose the other, and nothing already booked changes.</span>
+          </div>
+          <div class="field" data-find="tuner hdhomerun address">
+            <label for="rectuner">Tuner address</label>
+            <input id="rectuner" name="tuner_url" value="{{ settings.tuner_url or '' }}"
+                   placeholder="{{ settings.tuner_detected or 'found from Plex' }}"
+                   autocomplete="off">
+            <span class="help">An HDHomeRun. Leave it empty to use the one Plex records
+              from. <span id="rectunersay"></span></span>
+          </div>
+          <div class="field" data-find="padding early late lead trail minutes">
+            <label>Padding</label>
+            <label class="row">
+              <span>Start</span>
+              <input name="recorder_lead_minutes" type="number" min="0" max="240"
+                     value="{{ settings.recorder_lead_minutes }}" style="width:76px">
+              <span>minutes early, stop</span>
+              <input name="recorder_trail_minutes" type="number" min="0" max="240"
+                     value="{{ settings.recorder_trail_minutes }}" style="width:76px">
+              <span>minutes late</span>
+            </label>
+            <span class="help">Used when a recording does not carry its own padding.
+              A pass keeps the padding it was given.</span>
+          </div>
+          <div class="field" data-find="encoder hardware vaapi quicksync software ffmpeg">
+            <label for="recenc">Making the copy you watch</label>
+            <select id="recenc" name="recorder_encoder">
+              <option value="auto" {{ 'selected' if settings.recorder_encoder == 'auto' }}>Automatic</option>
+              <option value="vaapi" {{ 'selected' if settings.recorder_encoder == 'vaapi' }}>Graphics chip (VAAPI)</option>
+              <option value="software" {{ 'selected' if settings.recorder_encoder == 'software' }}>Software</option>
+            </select>
+            <span class="help">A television cannot play the picture a station sends, so a
+              second copy is made for watching. The recording Plex receives is never
+              changed. <span id="recencsay"></span></span>
+          </div>
+
+          <h3>Moving a finished recording into Plex</h3>
+          <p class="dim" id="rechandsay">When a recording has ended and nobody is watching
+            it, it is copied into your Plex library and Plex is asked to scan it.</p>
+          <div class="field" data-find="plex library folder shows handover move">
+            <label for="recsf">Shows and sport</label>
+            <label class="row">
+              <select id="recsf" name="recorder_shows_folder"
+                      data-value="{{ settings.recorder_shows_folder }}"></select>
+              <span>in the Plex library</span>
+              <select id="recss" name="recorder_shows_section"
+                      data-value="{{ settings.recorder_shows_section }}"></select>
+            </label>
+          </div>
+          <div class="field" data-find="plex library folder films movies handover move">
+            <label for="recmf">Films</label>
+            <label class="row">
+              <select id="recmf" name="recorder_movies_folder"
+                      data-value="{{ settings.recorder_movies_folder }}"></select>
+              <span>in the Plex library</span>
+              <select id="recms" name="recorder_movies_section"
+                      data-value="{{ settings.recorder_movies_section }}"></select>
+            </label>
+          </div>
+          <div class="field" data-find="keep days viewing copy disk space">
+            <label for="reckeep">Keep the copy you watch</label>
+            <label class="row">
+              <input id="reckeep" name="recorder_keep_days" type="number" min="0" max="240"
+                     value="{{ settings.recorder_keep_days }}" style="width:76px">
+              <span>days after Plex has the recording</span>
+            </label>
+            <span class="help">After that it is made again the first time somebody
+              plays the recording here.</span>
+          </div>
+          <div class="row"><button class="primary">Save</button><span class="saved"></span></div>
+        </form>
+      </section>
+
+      <section data-sec="recording" data-tab="televisions" data-tab-label="Televisions" hidden>
+        <h2>Televisions</h2>
+        <p class="dim">The CouchElephant app on an Apple TV plays what CouchElephant
+          records.{% if auth_mode == 'none' %} Sign-in is off, so any television on your
+          network can connect and there is nothing to approve.{% else %} With sign-in on,
+          the app shows a six-letter code the first time. Type it here to let that
+          television in.{% endif %}</p>
+        {% if auth_mode != 'none' %}
+        <div class="field" data-find="pair television apple tv code approve">
+          <label for="tvcode">Code on the television</label>
+          <label class="row">
+            <input id="tvcode" maxlength="6" autocomplete="off" autocapitalize="characters"
+                   style="width:130px;letter-spacing:3px;text-transform:uppercase">
+            <button type="button" class="primary" id="tvapprove">Let it in</button>
+            <span class="note" id="tvmsg"></span>
+          </label>
+        </div>
+        <div id="tvlist" data-find="television devices remove"></div>
+        {% endif %}
+      </section>
+
       {# ---------------- Accounts ---------------- #}
       <section data-sec="accounts" data-tab="signin" data-tab-label="Sign-in" hidden>
         <h2>Sign-in</h2>

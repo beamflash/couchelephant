@@ -32,6 +32,7 @@
 {# Versioned, or a deploy never reaches the browser. The scripts carry the
    whole UI, so a cached copy means shipping a fix nobody can see. That is
    exactly what happened to the setting tooltips. #}
+<script>window.CE_RECORDER = {{ recorder_info|default({'available': false, 'default': 'plex'})|tojson }};</script>
 <script src="/static/js/ce.js?v={{ asset_v }}"></script>
 <script src="/static/js/sources.js?v={{ asset_v }}"></script>
 <script src="/static/js/smartfilter.js?v={{ asset_v }}"></script>
@@ -199,6 +200,11 @@ Click to sync the guide now." aria-label="Sync the guide now">
      and bookmarks keep working. #}
   <a class="pt-tab {{ 'active' if nav=='recordings' }}" data-t="recordings"
      href="/recordings">Schedule</a>
+  {# Only where CouchElephant's own recorder can run. An install that has not
+     opted in has nothing to watch here, and does not get an empty page. #}
+  {% if recorder_info is defined and recorder_info.available %}
+  <a class="pt-tab {{ 'active' if nav=='live' }}" data-t="live" href="/live">Live TV</a>
+  {% endif %}
 </nav>
 </div>
 

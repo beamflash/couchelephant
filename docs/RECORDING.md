@@ -194,6 +194,67 @@ books each airing itself.
 A bar across the top of the record panel says which is about to happen, and it
 updates as you change the options.
 
+## Who makes the recording
+
+Separate from who holds the rule is who records. By default Plex does, and
+nothing below applies to you.
+
+Plex has one fault no client can work around: a recording cannot be played
+from its start while it is still being made. Come home an hour into a game
+Plex is recording and it offers the live channel and nothing else. So
+CouchElephant can make a recording itself, and every recording and every pass
+carries one choice:
+
+| Recorded by | What happens |
+| --- | --- |
+| Plex (default) | Plex records it, pinned by CouchElephant, exactly as before |
+| CouchElephant | CouchElephant records it from the tuner. It plays from its first second while it is still recording, on the **Live TV** page and in the Apple TV app |
+
+The choice only appears where the recorder can run, which means a `/recordings`
+folder is mounted. See [Install](INSTALL.md#recording-with-couchelephant-itself).
+**Settings, Recording, Own recorder** picks what a new recording starts with.
+A pass that names CouchElephant is always CouchElephant's rule, because Plex
+cannot hold it. Changing the choice on a pass applies to what it books from
+then on; a broadcast already booked stays with the recorder that has it.
+
+A recording CouchElephant makes goes through these states:
+
+| State | What is true |
+| --- | --- |
+| scheduled | Booked. Nothing is running |
+| recording | The tuner is open. It can be watched from the start |
+| finished | The broadcast ended. Still held by CouchElephant |
+| moving to Plex | Being copied into your Plex library |
+| in Plex | Plex has it. CouchElephant still lists it and still plays it |
+| missed | It did not record, with the reason |
+
+**It is given to Plex when it has ended and nobody is watching it.** Nobody
+watching means no player has reported in for three minutes; a paused player
+still reports. The file Plex receives is the broadcast exactly as the tuner
+sent it, under the name Plex would have used, and the place you stopped
+watching goes with it as Plex's resume point. CouchElephant removes its own
+copy only after Plex lists the file. The recording plays the whole way
+through the move.
+
+What it does not do:
+
+- It never takes a tuner Plex is using. If every tuner is busy when a
+  recording is due, it closes live viewing that CouchElephant itself started,
+  and otherwise keeps trying for the length of the broadcast. A late start is
+  a short recording, not none.
+- It does not record ATSC 3.0 channels or encrypted ones, and says so when you
+  book. Record the same station on its ordinary channel number.
+- It does not record one broadcast twice. A broadcast Plex already has is
+  refused until that booking is cancelled.
+- A recording Plex is making is listed on the Live TV page for information
+  only, as "Cannot play while Plex is recording". Plex writes it into a hidden
+  folder and moves it when it ends, and CouchElephant will not read a file
+  Plex is still writing.
+
+Padding comes from Plex's own start and end settings when the recording or
+pass carries them, and from the two padding settings under **Own recorder**
+when it does not.
+
 ## Plex's own options
 
 The options in the panel are read from Plex's recording template for that
@@ -221,6 +282,9 @@ wrong padding on a game you are recording beats no recording of it.
 Anything CouchElephant booked can be cancelled from the same panel. It deletes
 the subscription in Plex and forgets the airing. If the recording had already
 started, it says so, because Plex keeps the part it captured.
+
+Cancelling a recording CouchElephant is making itself stops the tuner and
+removes what was recorded so far. It is not kept as a part.
 
 ## What "already handled" means
 

@@ -7,7 +7,7 @@ import urllib.parse
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from .. import auth, cf_access, db, health, notify, passes, sync
+from .. import auth, cf_access, db, handover, health, notify, passes, recorder, sync, tuner
 from ..plex import Plex, PlexError
 from ._shared import ZONES, current_user, page
 
@@ -67,6 +67,87 @@ def settings_save(plex_url: str = Form(""), plex_token: str = Form(""),
     db.set_setting("sync_minutes", sync_minutes)
     db.set_setting("dry_run", "1" if dry_run == "1" else "0")
     return RedirectResponse("/settings", status_code=303)
+
+
+@router.post("/settings/recorder")
+def settings_recorder(tuner_url: str = Form(""), recorder_default: str = Form("plex"),
+                      recorder_encoder: str = Form("auto"),
+                      recorder_lead_minutes: str = Form("1"),
+                      recorder_trail_minutes: str = Form("3"),
+                      recorder_shows_folder: str = Form(""),
+                      recorder_shows_section: str = Form(""),
+                      recorder_movies_folder: str = Form(""),
+                      recorder_movies_section: str = Form(""),
+                      recorder_keep_days: str = Form("2")):
+    """CouchElephant's own recorder: the tuner, the default, the handover."""
+    def minutes(v, default):
+        try:
+            return str(max(0, min(240, int(v))))
+        except ValueError:
+            return default
+    db.set_setting("tuner_url", tuner_url.strip().rstrip("/"))
+    db.set_setting("recorder_default",
+                   "couchelephant" if recorder_default == "couchelephant" else "plex")
+    db.set_setting("recorder_encoder", recorder_encoder
+                   if recorder_encoder in ("auto", "software", "vaapi") else "auto")
+    db.set_setting("recorder_lead_minutes", minutes(recorder_lead_minutes, "1"))
+    db.set_setting("recorder_trail_minutes", minutes(recorder_trail_minutes, "3"))
+    db.set_setting("recorder_keep_days", minutes(recorder_keep_days, "2"))
+    for key, value in (("recorder_shows_folder", recorder_shows_folder),
+                       ("recorder_movies_folder", recorder_movies_folder)):
+        # A folder inside the library mount, and nothing that climbs out of it.
+        clean = "/".join(p for p in value.strip().strip("/").split("/")
+                         if p and p not in (".", ".."))
+        db.set_setting(key, clean)
+    db.set_setting("recorder_shows_section", recorder_shows_section.strip())
+    db.set_setting("recorder_movies_section", recorder_movies_section.strip())
+    return RedirectResponse("/settings", status_code=303)
+
+
+@router.get("/api/recorder/status")
+def recorder_status():
+    """Everything the Recorder settings show: whether it can run and why not,
+    what the tuner says, and the choices for the handover."""
+    out = {"ok": True, "available": recorder.available(),
+           "why": recorder.why_unavailable(),
+           "tuner": {"url": tuner.base() or "",
+                     "typed": bool((db.get_setting("tuner_url") or "").strip())},
+           "library": {"mounted": os.path.isdir(handover.LIB_DIR),
+                       "path": handover.LIB_DIR, "folders": [], "sections": []},
+           "handover_why": handover.why_unavailable() if recorder.available() else None}
+    if not out["tuner"]["url"] and db.get_setting("plex_url") and db.get_setting("plex_token"):
+        try:
+            with Plex(db.get_setting("plex_url"), db.get_setting("plex_token")) as plex:
+                out["tuner"]["url"] = tuner.detect(plex) or ""
+        except Exception as e:
+            out["tuner"]["error"] = f"Could not ask Plex for its tuner: {e}"
+    if out["tuner"]["url"]:
+        try:
+            rows = tuner.tuners()
+            out["tuner"]["total"] = len(rows)
+            out["tuner"]["free"] = tuner.free()
+        except tuner.TunerError as e:
+            out["tuner"]["error"] = str(e)
+    if out["available"]:
+        out["encoder"] = recorder.encoder()
+    if out["library"]["mounted"]:
+        try:
+            out["library"]["folders"] = sorted(
+                n for n in os.listdir(handover.LIB_DIR)
+                if os.path.isdir(os.path.join(handover.LIB_DIR, n))
+                and not n.startswith("."))
+        except OSError as e:
+            out["library"]["error"] = f"Cannot read {handover.LIB_DIR}: {e}"
+    try:
+        with Plex(db.get_setting("plex_url"), db.get_setting("plex_token")) as plex:
+            out["library"]["sections"] = [
+                {"key": str(d.get("key")), "title": d.get("title") or "",
+                 "type": d.get("type") or "",
+                 "paths": [p.get("path") for p in d.get("Location") or []]}
+                for d in plex.library_sections() if d.get("type") in ("show", "movie")]
+    except Exception as e:
+        out["library"]["plex_error"] = f"Could not ask Plex for its libraries: {e}"
+    return JSONResponse(out)
 
 
 @router.post("/settings/sources")

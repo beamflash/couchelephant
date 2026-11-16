@@ -15,6 +15,16 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     COUCHELEPHANT_DB=/data/couchelephant.db
 
+# ffmpeg makes the viewing copy of a recording CouchElephant makes itself. The
+# two VA drivers let it use an Intel or AMD GPU when /dev/dri is passed in, and
+# do nothing when it is not. An install that never records never runs any of it.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ffmpeg mesa-va-drivers \
+ # The Intel driver exists for amd64 only. Asking for it on arm64 fails the build.
+ && if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
+      apt-get install -y --no-install-recommends intel-media-va-driver; fi \
+ && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
@@ -22,6 +32,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app ./app
 
 VOLUME ["/data"]
+# /recordings and /library are optional. Mount them to turn the recorder on.
 EXPOSE 8710
 
 # Python asks, rather than curl: the slim image ships neither curl nor wget,

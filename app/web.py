@@ -1,5 +1,6 @@
 """FastAPI app: middleware, lifecycle, and the route modules in `routes/`."""
 import asyncio
+import logging
 import os
 import time
 import urllib.parse
@@ -8,17 +9,23 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, backingstore, backups, db, passes, sync
-from .routes import account, data, guide, notices, record, settings
+from . import auth, backingstore, backups, db, handover, passes, recorder, sync, tuner
+from .plex import Plex
+from .routes import account, data, guide, notices, record, settings, tv
 from .routes import passes as pass_routes
 from .routes._shared import ASSET_V, BASE, VERSION, current_user  # noqa: F401
 from .routes.account import _configured
 
+log = logging.getLogger("couchelephant")
+
 app = FastAPI(title="CouchElephant", docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=os.path.join(BASE, "static")), name="static")
 
+# The three /api/tv ones are how a television finds out it has to pair, and
+# pairs. They hand out nothing until an administrator approves the code.
 _OPEN_EXACT = frozenset(("/login", "/setup", "/logout", "/healthz", "/welcome",
-                         "/favicon.ico"))
+                         "/favicon.ico", "/api/tv/hello", "/api/tv/pair",
+                         "/api/tv/pair/poll"))
 _OPEN_PREFIX = ("/static/",)
 
 
@@ -26,7 +33,17 @@ _OPEN_PREFIX = ("/static/",)
 # accounts, artwork, and anything that copies or replaces the database. They
 # keep the guide, the schedule and the passes, which is what the app is for.
 _ADMIN_PREFIX = ("/settings", "/api/backups", "/api/backingstore", "/api/import",
-                 "/api/export")
+                 "/api/export", "/api/tv/devices")
+
+
+def _device_may(path):
+    """What a paired television may reach with its key: the lists and the
+    video. Never the device list itself, or it could approve its friends."""
+    if path.startswith("/api/tv/devices"):
+        return False
+    # The channel logos too: a card with no picture draws the channel instead.
+    return (path.startswith("/api/tv/") or path.startswith("/hls/")
+            or path.startswith("/logo/"))
 
 
 def _admin_only(path, method):
@@ -92,6 +109,8 @@ async def _auth_gate(request: Request, call_next):
     path = request.url.path
     if auth.mode() == "none" or _is_open(path):
         return await call_next(request)
+    if _device_may(path) and tv.device_for(request):
+        return await call_next(request)
     user = current_user(request)
     if user:
         if _admin_only(path, request.method) and user.get("role") != "admin":
@@ -123,6 +142,40 @@ async def startup():
     asyncio.create_task(sync_loop())
     asyncio.create_task(backup_loop())
     asyncio.create_task(backingstore_loop())
+    asyncio.create_task(recorder_loop())
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    recorder.shutdown()
+
+
+def _find_tuner():
+    if db.get_setting("plex_url") and db.get_setting("plex_token"):
+        with Plex(db.get_setting("plex_url"), db.get_setting("plex_token")) as plex:
+            tuner.detect(plex)
+
+
+async def recorder_loop():
+    """Start and stop our own recordings. Every few seconds, because a
+    recording that starts a minute late has missed the kickoff."""
+    await asyncio.sleep(2)
+    looked = 0.0
+    while True:
+        try:
+            if (recorder.available() and not tuner.base()
+                    and time.time() - looked > 600):
+                looked = time.time()
+                await asyncio.to_thread(_find_tuner)
+            await asyncio.to_thread(recorder.tick)
+            if recorder.available():
+                await asyncio.to_thread(handover.tick)
+                await asyncio.to_thread(handover.tidy)
+        except Exception as e:
+            # One bad pass must not be the end of every recording after it,
+            # and it must not pass unseen either.
+            log.exception("recorder loop: %s", e)
+        await asyncio.sleep(5)
 
 
 async def sync_loop():
@@ -195,5 +248,5 @@ def healthz():
     })
 
 
-for r in (account, data, guide, notices, record, pass_routes, settings):
+for r in (account, data, guide, notices, record, pass_routes, settings, tv):
     app.include_router(r.router)

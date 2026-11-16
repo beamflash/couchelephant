@@ -63,8 +63,9 @@ def _upsert_program(c, m, section, now):
     c.execute(
         """INSERT INTO programs (guid, rating_key, title, grandparent_title, summary, type,
                                  section, genres, teams, thumb, art, originally_available,
-                                 year, content_rating, duration, updated_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                                 year, content_rating, duration, season, episode,
+                                 updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
            ON CONFLICT(guid) DO UPDATE SET
              rating_key=excluded.rating_key, title=excluded.title,
              grandparent_title=excluded.grandparent_title, summary=excluded.summary,
@@ -85,12 +86,15 @@ def _upsert_program(c, m, section, now):
                                  THEN programs.content_rating
                                  ELSE excluded.content_rating END,
              duration=COALESCE(excluded.duration, programs.duration),
+             season=COALESCE(excluded.season, programs.season),
+             episode=COALESCE(excluded.episode, programs.episode),
              updated_at=excluded.updated_at""",
         (m.get("guid"), m.get("ratingKey"), m.get("title"), m.get("grandparentTitle"),
          m.get("summary"), m.get("type"), section, db.js(genres), db.js(teams),
          m.get("thumb") or m.get("grandparentThumb"), m.get("art"),
          m.get("originallyAvailableAt"), m.get("year"), m.get("contentRating"),
-         _int_or_none(m.get("duration")), now),
+         _int_or_none(m.get("duration")), _int_or_none(m.get("parentIndex")),
+         _int_or_none(m.get("index")), now),
     )
 
 

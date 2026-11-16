@@ -1,0 +1,269 @@
+{% extends "base.html" %}{% set nav='live' %}
+{% block title %}Live TV - CouchElephant{% endblock %}
+
+{% block body %}
+<div class="pagehead">
+  <div>
+    <h1>Live TV</h1>
+    <div class="sub" style="margin:0">Everything being recorded right now, and what
+      CouchElephant has recorded. A recording CouchElephant makes plays from its
+      start while it is still being made.</div>
+  </div>
+</div>
+
+<div id="livenote" class="banner bad" hidden></div>
+
+<h2 class="tvhead">Live now</h2>
+<div class="tvrow" id="tvlive"><div class="empty tiny">Loading...</div></div>
+
+<h2 class="tvhead">Recent recordings</h2>
+<div class="tvrow" id="tvrecent"></div>
+
+<h2 class="tvhead">On now</h2>
+<div class="tvrow small" id="tvon"></div>
+
+{# The player. One video element for the whole page, so leaving it always
+   stops the stream and gives the tuner back. #}
+<div class="tvplayer" id="tvplayer" hidden>
+  <div class="tvpbar">
+    <div class="tvptitle"><b id="tvpt"></b><span class="dim" id="tvps"></span></div>
+    <button type="button" id="tvpstart">From the start</button>
+    <button type="button" id="tvplive" class="tvlivebtn">Live</button>
+    <button type="button" id="tvpclose" aria-label="Close the player">Close</button>
+  </div>
+  <video id="tvvideo" controls playsinline></video>
+  <div class="tvpmsg" id="tvpmsg" hidden></div>
+</div>
+
+<script src="/static/js/vendor/hls.light.min.js?v={{ asset_v }}"></script>
+<script>
+(function () {
+  var esc = CE.esc, fmtTime = CE.fmtTime, fmtDay = CE.fmtDay;
+  var elLive = document.getElementById('tvlive'),
+      elRecent = document.getElementById('tvrecent'),
+      elOn = document.getElementById('tvon'),
+      note = document.getElementById('livenote');
+  var cards = {};          // id -> the row a card was drawn from
+
+  function clock(s) {
+    s = Math.max(0, Math.round(s));
+    var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+    return h ? h + ' h ' + (m < 10 ? '0' : '') + m + ' min' : m + ' min';
+  }
+
+  function art(r) {
+    // The guide's own picture when it has one. A channel plate otherwise, so
+    // a card is never an empty box.
+    if (r.art) return '<div class="tvart" style="background-image:url(\'' +
+                      encodeURI(r.art).replace(/'/g, '%27') + '\')"></div>';
+    return '<div class="tvart none">' + (r.channel && r.channel.logo
+      ? '<img src="' + esc(r.channel.logo) + '" alt="">'
+      : '<span>' + esc(r.channel ? r.channel.number : '') + '</span>') + '</div>';
+  }
+
+  function badge(r) {
+    if (r.recorded_by === 'plex') return '<span class="pill plexsrc">Plex is recording</span>';
+    if (r.state === 'recording') return '<span class="pill ce">Recording</span>';
+    if (r.state === 'moving') return '<span class="pill warn">Moving to Plex</span>';
+    if (r.state === 'in_plex') return '<span class="pill plexsrc">In Plex</span>';
+    if (r.state === 'failed') return '<span class="pill bad">Did not record</span>';
+    return '';
+  }
+
+  function card(r) {
+    cards[r.id] = r;
+    var live = r.state === 'recording' && r.recorded_by !== 'plex';
+    var h = '<div class="tvcard' + (r.recorded_by === 'plex' ? ' locked' : '') + '">';
+    h += art(r) + '<div class="tvbody">';
+    h += '<div class="tvbadges">' + badge(r) + '</div>';
+    h += '<b class="tvtitle">' + esc(r.title) + '</b>';
+    if (r.subtitle) h += '<span class="dim tiny">' + esc(r.subtitle) + '</span>';
+    h += '<span class="dim tiny">' + esc(r.channel.number) + ' ' + esc(r.channel.name) +
+         (r.begins_at ? ', ' + (live ? '' : fmtDay(r.begins_at) + ' ') +
+                        fmtTime(r.begins_at) : '') + '</span>';
+    if (r.recorded_by === 'plex') {
+      h += '<div class="tvlock">' + esc(r.note) + '</div>';
+    } else if (r.state === 'failed') {
+      h += '<div class="tvlock">' + esc(r.error || 'It did not record.') + '</div>';
+    } else {
+      if (live) h += '<span class="dim tiny">' + clock(r.seconds) + ' recorded so far</span>';
+      // How far in somebody stopped, as a bar, when it is far enough to matter.
+      if (!live && r.position > 60 && r.seconds > 0) {
+        h += '<div class="tvbar"><i style="width:' +
+             Math.min(100, Math.round(100 * r.position / r.seconds)) + '%"></i></div>';
+      }
+      h += '<div class="tvbtns">';
+      if (live) {
+        h += '<button type="button" class="primary" data-play="' + r.id +
+             '" data-at="start">Start from beginning</button>' +
+             '<button type="button" data-play="' + r.id + '" data-at="live">Join live</button>';
+      } else if (r.position > 60) {
+        h += '<button type="button" class="primary" data-play="' + r.id +
+             '" data-at="resume">Resume</button>' +
+             '<button type="button" data-play="' + r.id + '" data-at="start">From the start</button>';
+      } else {
+        h += '<button type="button" class="primary" data-play="' + r.id +
+             '" data-at="start">Play</button>';
+      }
+      h += '</div>';
+    }
+    return h + '</div></div>';
+  }
+
+  function channelCard(c) {
+    return '<button type="button" class="tvchan" data-watch="' + esc(c.channel.number) + '">' +
+      (c.channel.logo ? '<img src="' + esc(c.channel.logo) + '" alt="">'
+                      : '<span class="tvnum">' + esc(c.channel.number) + '</span>') +
+      '<span class="tvchbody"><b>' + esc(c.title) + '</b>' +
+      '<span class="dim tiny">' + esc(c.channel.number) + ' ' + esc(c.channel.name) +
+      ', until ' + fmtTime(c.ends_at) + '</span></span></button>';
+  }
+
+  function draw(d) {
+    note.hidden = !d.recorder_note;
+    if (d.recorder_note) note.textContent = d.recorder_note;
+    elLive.innerHTML = d.live_now.length ? d.live_now.map(card).join('')
+      : '<div class="empty tiny">Nothing is being recorded right now.</div>';
+    elRecent.innerHTML = d.recent.length ? d.recent.map(card).join('')
+      : '<div class="empty tiny">Nothing recorded by CouchElephant yet. Choose ' +
+        '<b>Recorded by: CouchElephant</b> when you record something in the guide.</div>';
+    elOn.innerHTML = d.on_now.length ? d.on_now.map(channelCard).join('')
+      : '<div class="empty tiny">The guide has nothing for this moment.</div>';
+  }
+
+  function load() {
+    // Not while somebody is watching: redrawing the page under the player
+    // costs nothing, but the lists behind it are not being read either.
+    return fetch('/api/tv/home').then(CE.readJson).then(function (d) {
+      if (d.ok) draw(d);
+    });
+  }
+  load();
+  setInterval(function () { if (player.hidden) load(); }, 15000);
+
+  // ---- the player ----
+  var player = document.getElementById('tvplayer'), video = document.getElementById('tvvideo'),
+      pmsg = document.getElementById('tvpmsg');
+  var hls = null, now = null, beat = null;
+
+  function say(text) { pmsg.hidden = !text; pmsg.textContent = text || ''; }
+
+  function liveEdge() {
+    if (hls && hls.liveSyncPosition) return hls.liveSyncPosition;
+    if (video.seekable.length) return Math.max(0, video.seekable.end(video.seekable.length - 1) - 8);
+    return 0;
+  }
+
+  function report() {
+    if (!now) return;
+    // A live session is kept alive; a recording is told where the player is,
+    // which is also what holds it back from being moved while it is watched.
+    if (now.kind === 'live') {
+      fetch('/api/tv/live/' + now.id + '/keepalive', {method: 'POST'});
+    } else {
+      fetch('/api/tv/recordings/' + now.id + '/position',
+            {method: 'POST', body: new URLSearchParams({seconds: video.currentTime || 0})});
+    }
+  }
+
+  function open(r, at) {
+    now = r;
+    document.getElementById('tvpt').textContent = r.title;
+    document.getElementById('tvps').textContent = r.subtitle ? ' ' + r.subtitle : '';
+    var growing = !r.complete;
+    document.getElementById('tvplive').hidden = !growing;
+    document.getElementById('tvpstart').hidden = r.kind === 'live';
+    player.hidden = false;
+    say('');
+    var from = at === 'resume' ? r.position : at === 'live' ? -1 : 0;
+    if (window.Hls && Hls.isSupported()) {
+      hls = new Hls({startPosition: from, liveDurationInfinity: false});
+      hls.on(Hls.Events.ERROR, function (e, data) {
+        if (data.fatal) say('The video stopped: ' + data.details + '.');
+      });
+      hls.loadSource(r.playlist);     // hls.js is told where to start above
+      hls.attachMedia(video);
+    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      // Safari plays it itself, and like the Apple TV it opens a growing
+      // playlist at its live end unless the playlist says otherwise.
+      video.src = r.playlist + (from === 0 ? '?start=0' : '');
+      if (from > 0) {
+        video.addEventListener('loadedmetadata', function once() {
+          video.removeEventListener('loadedmetadata', once);
+          video.currentTime = from;
+        });
+      }
+    } else {
+      say('This browser cannot play the video. Use Safari, Chrome, Edge or Firefox.');
+      return;
+    }
+    video.play().catch(function () {});
+    report();
+    beat = setInterval(report, 10000);
+  }
+
+  function close() {
+    report();
+    clearInterval(beat); beat = null;
+    if (hls) { hls.destroy(); hls = null; }
+    video.pause(); video.removeAttribute('src'); video.load();
+    player.hidden = true;
+    now = null;
+    load();
+  }
+
+  document.getElementById('tvpclose').addEventListener('click', close);
+  document.getElementById('tvpstart').addEventListener('click', function () {
+    video.currentTime = 0; video.play().catch(function () {});
+  });
+  document.getElementById('tvplive').addEventListener('click', function () {
+    video.currentTime = liveEdge(); video.play().catch(function () {});
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && !player.hidden) close();
+  });
+  window.addEventListener('pagehide', report);
+
+  // A recording whose copy was tidied away is made again when it is asked
+  // for, and a channel takes a few seconds to tune. Both are waited for here.
+  function whenPlayable(id, at, tries) {
+    fetch('/api/tv/recordings/' + id).then(CE.readJson).then(function (d) {
+      if (!d.ok) { say(d.error); return; }
+      if (d.recording.playable && d.recording.seconds > 0) { open(d.recording, at); return; }
+      if (tries <= 0) { say('The video did not start. Try again in a moment.'); return; }
+      setTimeout(function () { whenPlayable(id, at, tries - 1); }, 1500);
+    });
+  }
+
+  function wait(title, text) {
+    document.getElementById('tvpt').textContent = title;
+    document.getElementById('tvps').textContent = '';
+    document.getElementById('tvplive').hidden = true;
+    document.getElementById('tvpstart').hidden = true;
+    player.hidden = false;
+    say(text);
+  }
+
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest('[data-play]');
+    if (b) {
+      var r = cards[b.dataset.play];
+      if (r.seconds > 0) { open(r, b.dataset.at); return; }
+      wait(r.title, 'Getting the video ready...');
+      whenPlayable(r.id, b.dataset.at, 40);
+      return;
+    }
+    var w = e.target.closest('[data-watch]');
+    if (w) {
+      wait('Channel ' + w.dataset.watch, 'Tuning...');
+      fetch('/api/tv/live/' + encodeURIComponent(w.dataset.watch), {method: 'POST'})
+        .then(CE.readJson).then(function (d) {
+          if (!d.ok) { say(d.error); return; }
+          now = d.recording;       // so Close gives the tuner back even now
+          whenPlayable(d.recording.id, 'live', 40);
+        });
+    }
+  });
+})();
+</script>
+{% endblock %}

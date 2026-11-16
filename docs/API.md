@@ -26,11 +26,46 @@ export/import. See [AUTH.md](AUTH.md).
 | | |
 | --- | --- |
 | `GET /api/record/options?airing_id=` | What Plex offers for this programme, read from its own template, plus the networks and channels a rule could be limited to |
-| `POST /api/record` | Schedule a broadcast. `airing_id`, `template`, `settings` (JSON), `networks` (JSON), `channels` (JSON) |
-| `POST /api/record/cancel` | Cancel something we booked. `airing_id` |
+| `POST /api/record` | Schedule a broadcast. `airing_id`, `template`, `settings` (JSON), `networks` (JSON), `channels` (JSON), and `recorder`: `plex` or `couchelephant`. Left out, `recorder` is the default setting |
+| `POST /api/record/cancel` | Cancel something we booked, with either recorder. `airing_id` |
 | `POST /api/pass` | Follow a team straight from the programme panel. `team_id`. Runs the passes at once, so the next game is booked now rather than at the next sync |
 
 `POST /api/record` refuses while preview mode is on, and says so.
+
+`GET /api/record/options` also answers `recorder`: whether CouchElephant's own
+recorder can run here, and which recorder a new booking starts with.
+`POST /api/rules` and `POST /api/rules/{id}` take the same `recorder` field,
+and each pass in `GET /api/rules` carries it.
+
+## Television clients and live viewing
+
+What the Apple TV app and the **Live TV** page read.
+
+| | |
+| --- | --- |
+| `GET /api/tv/hello` | Open. Who this server is, and whether a client must pair first |
+| `POST /api/tv/pair` | Open. A client asks to be let in. `name`. Answers a six-letter `code` to show and a `secret` to poll with |
+| `POST /api/tv/pair/poll` | Open. `secret`. Answers `approved`, and the client's `key` exactly once |
+| `GET /api/tv/devices` | Administrators. Paired televisions, and codes waiting |
+| `POST /api/tv/devices/approve` | Administrators. `code`. Lets that television in |
+| `POST /api/tv/devices/{id}/delete` | Administrators. Locks that television out |
+| `GET /api/tv/home` | Three lists: `live_now` (recording now, by either recorder), `recent`, `on_now` |
+| `GET /api/tv/recordings/{id}` | One recording. Asking also has its viewing copy made again if it was tidied away |
+| `POST /api/tv/recordings/{id}/position` | `seconds`. Where the player is. This is also the "somebody is watching" signal that holds back the move to Plex |
+| `POST /api/tv/live/{vcn}` | Watch a channel now. Joins a recording of that channel if there is one, so no second tuner is used |
+| `POST /api/tv/live/{id}/keepalive` | Still watching. Live viewing nobody keeps alive is closed after a minute and its tuner given back |
+| `GET /hls/{uid}/index.m3u8` | The viewing copy, as an HLS playlist. `?start=0` marks it to open at its first second, which is how a player starts a recording that is still growing from the beginning |
+| `GET /hls/{uid}/seg00000.ts` ... | Its segments |
+| `GET /api/recorder/status` | What the Own recorder settings show: can it run, the tuner, the library folders and Plex libraries to choose from |
+| `POST /settings/recorder` | Save the Own recorder settings |
+
+With sign-in on, a paired client sends `Authorization: Bearer <key>`. The key
+opens `/api/tv/` (not the device list), `/hls/` and `/logo/`, and nothing
+else. It is stored hashed.
+
+A recording in these lists has `recorded_by`. One Plex is making has
+`"recorded_by": "plex"`, `"playable": false` and a `note`, and an id that is
+not a number.
 
 ## Rules and passes
 

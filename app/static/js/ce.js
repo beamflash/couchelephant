@@ -91,6 +91,29 @@
       '</span>' + control + '</label>';
   }
 
+  /* Who makes the recording. One row, shared by the guide's record panel and
+     the pass editor, and drawn only where CouchElephant's own recorder can
+     run: an install that has not opted in is not asked about it. */
+  function recorderField(current) {
+    var info = window.CE_RECORDER || {};
+    if (!info.available) return '';
+    var who = current || info['default'] || 'plex';
+    var c = '<select id="recby">' +
+      '<option value="plex"' + (who === 'plex' ? ' selected' : '') + '>Plex</option>' +
+      '<option value="couchelephant"' + (who === 'couchelephant' ? ' selected' : '') +
+      '>CouchElephant</option></select>';
+    return optRow('ce', 'recby', 'Recorded by', c,
+      'Plex records it as it always has. CouchElephant records it itself, so ' +
+      'you can watch from the start while it is still recording, and gives ' +
+      'it to Plex when it has ended.');
+  }
+
+  /* What the row above is set to, or '' where it is not drawn. */
+  function recorderChoice() {
+    var el = document.getElementById('recby');
+    return el ? el.value : '';
+  }
+
   function settingField(st) {
     var id = 'set_' + st.id, c = '';
     if (st.options && st.options.length) {
@@ -251,5 +274,6 @@
           dayNames: dayNames,
           fmtDay: fmtDay, readJson: readJson, KIND_ICON: KIND_ICON,
           optRow: optRow, settingField: settingField,
+          recorderField: recorderField, recorderChoice: recorderChoice,
           showTip: showTip, hideTip: hideTip};
 })(window);

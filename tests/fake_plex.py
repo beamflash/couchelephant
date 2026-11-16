@@ -282,6 +282,14 @@ class State:
         self.serve_butler = True
         self.maintenance_calls = 0
         self.maintenance_served = 0
+        # The library side, for a recording handed over. A scan lists whatever
+        # .ts files are in the scratch library folder, the way the real one
+        # lists what is on its disk. `scan_blind` is a Plex that is asked to
+        # scan and finds nothing.
+        self.scans = []         # (section, path) of every scan asked for
+        self.library = {}       # file name -> ratingKey, as of the last scan
+        self.scan_blind = False
+        self.positions = {}     # ratingKey -> milliseconds
         # What the guide has since done to its own listings. A refresh re-times
         # a broadcast and renumbers it, and it drops programmes off the end of
         # the window. Both are ordinary, both move the identity the app books
@@ -619,6 +627,33 @@ class Handler(BaseHTTPRequestHandler):
             if not sub:
                 return self._send({"error": "gone"}, 404)
             return self._container(MediaSubscription=[sub])
+
+        if p == "/library/sections":
+            return self._container(Directory=[
+                {"key": "1", "type": "movie", "title": "Films",
+                 "Location": [{"id": 1, "path": "/media/video/films"}]},
+                {"key": "2", "type": "show", "title": "TV Shows",
+                 "Location": [{"id": 2, "path": "/media/video/tv"}]},
+            ])
+
+        if p.startswith("/library/sections/") and p.endswith("/refresh"):
+            STATE.scans.append((p.split("/")[3], (q.get("path") or [None])[0]))
+            if not STATE.scan_blind:
+                for _dir, _sub, files in os.walk(os.environ["COUCHELEPHANT_LIBRARY"]):
+                    for f in files:
+                        if f.endswith(".ts"):
+                            STATE.library.setdefault(f, str(5000 + len(STATE.library)))
+            return self._send({})
+
+        if p.startswith("/library/sections/") and p.endswith("/all"):
+            return self._container(Metadata=[
+                {"ratingKey": key, "title": name,
+                 "Media": [{"Part": [{"file": "/media/video/tv/x/" + name}]}]}
+                for name, key in STATE.library.items()])
+
+        if p == "/:/progress":
+            STATE.positions[q["key"][0]] = int(q["time"][0])
+            return self._send({})
 
         return self._send({"error": "not found"}, 404)
 

@@ -55,3 +55,10 @@ SOFTWARE.
 schedules, scores, logos or identifiers belonging to anyone else, and the
 running application never calls out to build it. Team names are facts about the
 world rather than creative work.
+
+## hls.js
+
+`app/static/js/vendor/hls.light.min.js` is hls.js 1.5.17, the light build,
+unmodified. It plays the viewing copy of a recording in browsers that do not
+play HLS on their own. Copyright (c) 2017 Dailymotion, licensed under the
+Apache License 2.0: https://github.com/video-dev/hls.js/blob/master/LICENSE

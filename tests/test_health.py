@@ -7,6 +7,8 @@ the recording does not happen.
 """
 import time
 
+import pytest
+
 from app import db, health, sync
 from tests import fake_plex
 
@@ -188,7 +190,16 @@ def test_each_sync_writes_down_what_the_guide_looked_like(plex, synced):
     assert row["guide_ends_at"], "how far the guide reached"
 
 
-def test_a_plex_that_cannot_be_reached_is_a_notice(clean_db):
+@pytest.fixture
+def no_grace(monkeypatch):
+    """Nothing listening looks the same as a Plex that is starting, so a sync
+    waits five minutes before it calls it a fault. These tests are about the
+    fault, and each one sat out the full wait: ten of the suite's twelve
+    minutes. The wait itself is tested in test_startup_grace.py."""
+    monkeypatch.setattr(sync, "STARTUP_GRACE", 0)
+
+
+def test_a_plex_that_cannot_be_reached_is_a_notice(clean_db, no_grace):
     db.set_setting("plex_url", "http://127.0.0.1:1")
     db.set_setting("plex_token", "x")
     ok, detail = sync.full_sync()
@@ -196,7 +207,7 @@ def test_a_plex_that_cannot_be_reached_is_a_notice(clean_db):
     assert health.PLEX_UNREACHABLE in {n["code"] for n in health.open_notices()}
 
 
-def test_reaching_plex_again_clears_the_unreachable_notice(plex, synced):
+def test_reaching_plex_again_clears_the_unreachable_notice(plex, synced, no_grace):
     """A sync that failed once must not leave a permanent scar."""
     db.set_setting("plex_url", "http://127.0.0.1:1")
     assert not sync.full_sync()[0]

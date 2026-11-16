@@ -1,5 +1,46 @@
 # Changelog
 
+## 1.5.5 - 2026-11-15
+
+### Added
+
+- **CouchElephant can make a recording itself, so you can watch it from the
+  start while it is still recording.** Plex cannot do that: come home an hour
+  into a game it is recording and it offers the live channel and nothing else.
+  The fault is in the Plex server, so no Plex client fixes it.
+
+  It is optional and off by default. Mount a `/recordings` folder to turn it
+  on. Until you do, nothing changes and nothing new appears.
+
+  Every recording and every pass then carries one choice, **Recorded by**:
+  Plex, as before, or CouchElephant. A setting picks what a new one starts
+  with. A recording CouchElephant makes is given to Plex when it has ended and
+  nobody is watching it, as the untouched broadcast under the name Plex would
+  have used, with your place in it as Plex's resume point. It stays playable
+  in CouchElephant before, during and after the move. See
+  [Who makes the recording](docs/RECORDING.md#who-makes-the-recording).
+
+- **A Live TV tab.** What is being recorded right now by either recorder, what
+  CouchElephant has recorded, and what is on each channel. It plays in the
+  browser. A recording Plex is making is listed as "Cannot play while Plex is
+  recording".
+
+- **An Apple TV app**, in `clients/appletv`, built from source. The same three
+  lists, "Start from beginning" and "Join live" on a recording in progress,
+  and live channels. With sign-in on it pairs by a six-letter code typed under
+  Settings, Recording, Televisions.
+
+- **The schedule lists what CouchElephant records itself**, next to what Plex
+  will record, and the guide marks those broadcasts as set to record.
+
+### Changed
+
+- The image now carries ffmpeg, which makes the copy of a recording a
+  television can play. An install that never turns the recorder on never runs
+  it. The image is larger for it.
+- The guide sync keeps the season and episode number Plex sends. They name the
+  file a recording is given to Plex under.
+
 ## 1.5.4 - 2026-10-05
 
 ### Fixed

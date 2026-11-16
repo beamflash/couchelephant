@@ -7,12 +7,15 @@ def test_the_guide_is_the_landing_page(page):
     assert page.locator(".pt-tab.active").inner_text().strip() == "Guide"
 
 
-def test_there_are_exactly_two_tabs_and_they_fill_the_bar(page):
+def test_the_tabs_are_the_expected_ones_and_they_fill_the_bar(page):
+    """Guide and Schedule, always. Live TV joins them only where CouchElephant's
+    own recorder can run, which the suite's scratch install is set up for."""
     page.goto("/")
     tabs = page.locator(".pt-tab")
-    assert tabs.count() == 2
+    labels = [tabs.nth(i).inner_text().strip() for i in range(tabs.count())]
+    assert labels == ["Guide", "Schedule", "Live TV"]
     nav = page.locator("#ptnav").bounding_box()
-    total = sum(tabs.nth(i).bounding_box()["width"] for i in range(2))
+    total = sum(tabs.nth(i).bounding_box()["width"] for i in range(tabs.count()))
     # Centred and full width, the way Ludodex does it.
     assert total > nav["width"] * 0.9
 
@@ -107,3 +110,21 @@ def test_preview_mode_is_announced_in_the_header(page):
     db.set_setting("dry_run", "1")
     page.goto("/")
     assert "PREVIEW MODE" in page.locator("header").inner_text()
+
+
+def test_an_install_without_the_recorder_has_no_live_tv_tab(page, monkeypatch):
+    """Not opted in means not asked: no tab, and no Recorded by choice."""
+    from app import recorder
+    monkeypatch.setattr(recorder, "REC_DIR", "/nonexistent-ce-test")
+    page.goto("/")
+    labels = page.eval_on_selector_all(".pt-tab", "els => els.map(e => e.textContent.trim())")
+    assert labels == ["Guide", "Schedule"]
+    assert page.evaluate("window.CE_RECORDER.available") is False
+
+
+def test_the_live_tv_page_draws_its_three_lists(page):
+    page.goto("/live")
+    page.wait_for_selector("#tvrecent .empty")
+    heads = page.eval_on_selector_all(".tvhead", "els => els.map(e => e.textContent.trim())")
+    assert heads == ["Live now", "Recent recordings", "On now"]
+    assert page.locator("#tvplayer").is_hidden()

@@ -5,7 +5,7 @@
 <div class="pagehead">
   <div>
     <h1>Schedule</h1>
-    <div class="sub" style="margin:0">What your Plex server will actually record.</div>
+    <div class="sub" style="margin:0">What your Plex server will actually record{% if recorder_info is defined and recorder_info.available %}, and what CouchElephant records itself{% endif %}.</div>
   </div>
   <button type="button" class="addbtn" id="addrule"
           title="Add a recording schedule" aria-label="Add a recording schedule">
@@ -521,7 +521,7 @@ var esc = CE.esc, fmtTime = CE.fmtTime, fmtDay = CE.fmtDay, KIND_ICON = CE.KIND_
   // has no Plex form at all: Plex rules follow one programme or one team, and
   // a condition tree is not something they can be told.
   function verdict() {
-    if (st.kind === 'smart') return 'ce';
+    if (st.kind === 'smart' || st.who === 'couchelephant') return 'ce';
     return (st.nets.length || st.chans.length) ? 'ce' : 'plex';
   }
 
@@ -547,7 +547,11 @@ var esc = CE.esc, fmtTime = CE.fmtTime, fmtDay = CE.fmtDay, KIND_ICON = CE.KIND_
     if (bar) {
       var v = verdict();
       bar.className = 'optbar ' + v;
-      var why = st.kind === 'smart'
+      var why = st.who === 'couchelephant'
+        ? '<b>CouchElephant schedule, recorded by CouchElephant.</b> It books ' +
+          'each airing and records it itself, so every one can be watched from ' +
+          'the start while it is still recording.'
+        : st.kind === 'smart'
         ? '<b>CouchElephant schedule.</b> A Plex rule follows one programme or ' +
           'one team. It cannot be given conditions, so CouchElephant keeps this ' +
           'rule and books each airing itself.'
@@ -578,7 +582,7 @@ var esc = CE.esc, fmtTime = CE.fmtTime, fmtDay = CE.fmtDay, KIND_ICON = CE.KIND_
            'padding below is filled in for you. Change it if you want to; ' +
            'CouchElephant applies it to every airing this pass books.</div>';
     }
-    h += '<div class="optgrid">' + multiField();
+    h += '<div class="optgrid">' + CE.recorderField(st.who) + multiField();
     if (st.tpl && st.tpl[st.pick]) {
       st.tpl[st.pick].settings.forEach(function (stg) { h += field(stg); });
     }
@@ -602,6 +606,10 @@ var esc = CE.esc, fmtTime = CE.fmtTime, fmtDay = CE.fmtDay, KIND_ICON = CE.KIND_
     if (!zone) return;
     zone.innerHTML = optionsHtml();
     st.picker.wire();
+    var recby = document.getElementById('recby');
+    if (recby) {
+      recby.addEventListener('change', function () { st.who = recby.value; paint(); });
+    }
     paint();
   }
 
@@ -1043,6 +1051,7 @@ var esc = CE.esc, fmtTime = CE.fmtTime, fmtDay = CE.fmtDay, KIND_ICON = CE.KIND_
       ? {networks: JSON.stringify(st.nets),
          channels: JSON.stringify(st.chans),
          settings: JSON.stringify(vals),
+         recorder: CE.recorderChoice(),
          enabled: st.editing.enabled ? '1' : '0'}
       : {kind: st.kind,
          team_id: (st.team && st.team.id) ? st.team.id : '',
@@ -1054,6 +1063,7 @@ var esc = CE.esc, fmtTime = CE.fmtTime, fmtDay = CE.fmtDay, KIND_ICON = CE.KIND_
          // list is sorted to put the named team first; Plex lists the league
          // first. Sending the position booked every NFL game once.
          template: (st.tpl && st.tpl[st.pick]) ? st.tpl[st.pick].index : 0,
+         recorder: CE.recorderChoice(),
          settings: JSON.stringify(vals)};
     if (st.kind === 'smart') {
       fields.filter = JSON.stringify(st.tree);
@@ -1095,7 +1105,7 @@ var esc = CE.esc, fmtTime = CE.fmtTime, fmtDay = CE.fmtDay, KIND_ICON = CE.KIND_
 
   opener.addEventListener('click', function () {
     st.mode = 'smart'; st.sub = 'team'; syncKind();
-    st.team = null; st.series = null; st.editing = null;
+    st.team = null; st.series = null; st.editing = null; st.who = '';
     st.tpl = null; st.pick = 0; st.q = '';
     st.tree = null; st.name = ''; st.preview = null; st.confirmed = false;
     st.tplPending = false; st.sporty = false; st.msg = null; st.busy = false;
@@ -1120,6 +1130,7 @@ var esc = CE.esc, fmtTime = CE.fmtTime, fmtDay = CE.fmtDay, KIND_ICON = CE.KIND_
       st.tree = r.filter || null;
       st.name = r.kind === 'smart' ? (r.title || '') : '';
       st.tpl = null; st.pick = 0; st.editing = r; st.q = '';
+      st.who = r.recorder || 'plex';
       st.preview = null; st.confirmed = false;
       st.nets.length = 0; st.chans.length = 0;
       r.networks.forEach(function (n) { st.nets.push(n); });

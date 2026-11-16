@@ -1116,3 +1116,46 @@ footer .divider{height:5px;width:auto;display:block;margin:0 auto 12px}
 .nm-syncbtn:disabled{opacity:.55;cursor:default}
 .nm-foot{color:var(--dim);font-size:11px;border-top:1px solid var(--line);
   margin:10px -12px -12px;padding:9px 12px}
+
+/* ---------------------------------------------------------------------------
+   Live TV. Rows of cards, the same three the Apple TV app opens on. Amber is a
+   recording CouchElephant makes; blue-grey is one Plex makes, as everywhere.
+   --------------------------------------------------------------------------- */
+.tvhead{font-size:15px;margin:22px 0 10px}
+.tvrow{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:14px}
+.tvrow.small{grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:8px}
+.tvrow > .empty{grid-column:1/-1}
+.tvcard{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+  overflow:hidden;display:flex;flex-direction:column}
+.tvcard.locked{opacity:.78}
+.tvart{aspect-ratio:16/9;background:var(--panel2) center/cover no-repeat;
+  display:flex;align-items:center;justify-content:center}
+.tvart.none img{max-width:46%;max-height:46%;object-fit:contain}
+.tvart.none span{font-size:26px;font-weight:700;color:var(--dim)}
+.tvbody{padding:11px 13px 13px;display:flex;flex-direction:column;gap:3px;flex:1 1 auto}
+.tvbadges{min-height:20px}
+.tvtitle{font-size:15px;line-height:1.25}
+.tvbtns{display:flex;gap:8px;flex-wrap:wrap;margin-top:auto;padding-top:10px}
+.tvlock{margin-top:auto;padding-top:10px;font-size:12px;color:var(--dim)}
+.tvbar{height:4px;border-radius:2px;background:var(--line);margin-top:8px;overflow:hidden}
+.tvbar i{display:block;height:100%;background:var(--accent)}
+.tvchan{display:flex;align-items:center;gap:11px;text-align:left;padding:9px 11px;
+  background:var(--panel);border:1px solid var(--line);border-radius:8px;
+  color:var(--text);cursor:pointer;min-width:0}
+.tvchan:hover{background:var(--hover);border-color:var(--hover-bd)}
+.tvchan img{width:52px;height:30px;flex:0 0 52px;object-fit:contain;padding:2px;
+  background:var(--tile);border-radius:4px}
+.tvnum{width:52px;flex:0 0 52px;text-align:center;font-weight:700;color:var(--dim)}
+.tvchbody{display:flex;flex-direction:column;min-width:0;line-height:1.3}
+.tvchbody b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tvplayer[hidden]{display:none}
+.tvplayer{position:fixed;inset:0;z-index:200;background:var(--bg);display:flex;
+  flex-direction:column}
+.tvpbar{display:flex;align-items:center;gap:8px;padding:10px 14px;
+  border-bottom:1px solid var(--line)}
+.tvptitle{margin-right:auto;min-width:0;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap}
+.tvlivebtn{border-color:var(--accent-bd);color:var(--accent-ink)}
+.tvplayer video{flex:1 1 auto;min-height:0;width:100%;background:var(--bg)}
+.tvpmsg{position:absolute;left:0;right:0;top:50%;text-align:center;color:var(--dim);
+  padding:0 20px;pointer-events:none}

@@ -278,6 +278,7 @@
   // the point of the bar at the top.
   function verdict() {
     var t = optState.templates[optState.pick];
+    if (optState.who === 'couchelephant') return 'rec';
     return (optState.nets.length || optState.chans.length) && !t.one_shot ? 'ce' : 'plex';
   }
 
@@ -286,7 +287,12 @@
   function paintOptions() {
     optState.picker.paint();
     var v = verdict(), bar = document.getElementById('optbar');
-    if (bar) {
+    if (bar && v === 'rec') {
+      bar.className = 'optbar ce';
+      bar.innerHTML = '<i class="own ce"></i><span><b>CouchElephant records ' +
+        'this.</b> You can watch it from the start while it is still recording. ' +
+        'When it has ended it goes into your Plex library.</span>';
+    } else if (bar) {
       bar.className = 'optbar ' + v;
       bar.innerHTML = '<i class="own ' + v + '"></i>' + (v === 'ce'
         ? '<span><b>CouchElephant schedule.</b> It watches the guide and books ' +
@@ -326,6 +332,7 @@
            'you picked. That is what stops Plex choosing a repeat.</div>';
     }
     h += '<div class="optgrid">';
+    h += CE.recorderField(optState.who);
     h += multiField();
     t.settings.forEach(function (st) { h += field(st); });
     h += '</div></div>';
@@ -348,6 +355,13 @@
     });
 
     optState.picker.wire();
+    var recby = document.getElementById('recby');
+    if (recby) {
+      recby.addEventListener('change', function () {
+        optState.who = recby.value;
+        paintOptions();
+      });
+    }
 
     document.getElementById('optgo').addEventListener('click', function (e) {
       var vals = {};
@@ -358,7 +372,8 @@
         airing_id: airingId, template: optState.pick,
         settings: JSON.stringify(vals),
         networks: JSON.stringify(optState.nets),
-        channels: JSON.stringify(optState.chans)
+        channels: JSON.stringify(optState.chans),
+        recorder: CE.recorderChoice()
       }, e.target, airingId);
     });
     paintOptions();
@@ -370,7 +385,8 @@
       .then(function (r) { return r.json(); })
       .then(function (o) {
         if (!o.ok) { box.innerHTML = '<div class="empty">' + esc(o.error) + '</div>'; return; }
-        optState = {templates: o.templates, pick: 0, opts: o, nets: [], chans: []};
+        optState = {templates: o.templates, pick: 0, opts: o, nets: [], chans: [],
+                    who: o.recorder && o.recorder.available ? o.recorder['default'] : ''};
         optState.picker = new CE.SourcePicker(optState, paintOptions);
         renderOptions(o, prog, airingId);
       })
@@ -736,6 +752,111 @@ window.wireSettings = function (root) {
   }
 
   // ---- snapshot jobs ----
+  // ---- CouchElephant's own recorder ---------------------------------
+  //
+  // The form is plain. What needs asking is what this machine and Plex can
+  // offer: whether the recorder can run at all, which tuner Plex records
+  // from, and which folders and libraries a finished recording can go to.
+  var recform = root.querySelector('#recform');
+  if (recform) {
+    var fill = function (sel, items, label) {
+      var want = sel.dataset.value || '';
+      var h = '<option value="">Not chosen</option>';
+      var seen = false;
+      items.forEach(function (it) {
+        if (it.value === want) seen = true;
+        h += '<option value="' + CE.esc(it.value) + '"' +
+             (it.value === want ? ' selected' : '') + '>' + CE.esc(it.label) + '</option>';
+      });
+      // A saved choice that is not offered any more is still shown, or saving
+      // the form for another reason would silently clear it.
+      if (want && !seen) {
+        h += '<option value="' + CE.esc(want) + '" selected>' + CE.esc(want) +
+             ' (not found)</option>';
+      }
+      sel.innerHTML = h;
+    };
+    fetch('/api/recorder/status').then(CE.readJson).then(function (d) {
+      // The window can be closed again before this answers, and then there is
+      // nothing left to fill in.
+      if (!d.ok || !root.querySelector('#recform')) return;
+      verdict(root.querySelector('#recverdict'), d.available,
+        d.available ? 'The recorder can run on this install.'
+                    : d.why + ' Until then every recording is made by Plex.');
+      var t = d.tuner || {}, say = root.querySelector('#rectunersay');
+      if (say) {
+        say.textContent = t.error ? t.error
+          : !t.url ? 'Plex did not name a tuner. Type its address.'
+          : (t.typed ? 'Using ' : 'Found ') + t.url +
+            (t.total != null ? ': ' + t.free + ' of ' + t.total + ' tuners free.' : '.');
+      }
+      var enc = root.querySelector('#recencsay');
+      if (enc && d.encoder) {
+        enc.textContent = 'In use now: ' +
+          (d.encoder === 'vaapi' ? 'the graphics chip.' : 'software.');
+      }
+      var lib = d.library || {}, hs = root.querySelector('#rechandsay');
+      if (hs && d.available && !lib.mounted) {
+        hs.textContent = 'There is no ' + lib.path + ' folder on this container, so ' +
+          'recordings are kept here and not moved. Mount your Plex library there.';
+      } else if (hs && (lib.error || lib.plex_error)) {
+        hs.textContent = lib.error || lib.plex_error;
+      }
+      var folders = (lib.folders || []).map(function (f) { return {value: f, label: f}; });
+      var secs = function (type) {
+        return (lib.sections || []).filter(function (s) { return s.type === type; })
+          .map(function (s) { return {value: s.key, label: s.title}; });
+      };
+      fill(root.querySelector('#recsf'), folders);
+      fill(root.querySelector('#recmf'), folders);
+      fill(root.querySelector('#recss'), secs('show'));
+      fill(root.querySelector('#recms'), secs('movie'));
+    });
+  }
+
+  // ---- Televisions ---------------------------------------------------
+  var tvlist = root.querySelector('#tvlist');
+  if (tvlist) {
+    var tvmsg = root.querySelector('#tvmsg');
+    var drawTvs = function () {
+      fetch('/api/tv/devices').then(CE.readJson).then(function (d) {
+        var rows = (d.devices || []);
+        if (!rows.length) {
+          tvlist.innerHTML = '<div class="empty tiny">No television has been let in yet.</div>';
+          return;
+        }
+        var h = '<table class="stack"><tr><th>Television</th><th>Status</th><th></th></tr>';
+        rows.forEach(function (r) {
+          h += '<tr><td><b>' + CE.esc(r.name || 'Television') + '</b></td>' +
+               '<td class="tiny dim">' + (r.approved_at
+                 ? (r.last_seen ? 'last seen ' + CE.fmtDay(r.last_seen) + ' ' +
+                    CE.fmtTime(r.last_seen) : 'let in, not connected yet')
+                 : 'waiting, showing code ' + CE.esc(r.code || '')) + '</td>' +
+               '<td style="text-align:right"><button type="button" class="tiny danger" ' +
+               'data-tvdel="' + r.id + '">Remove</button></td></tr>';
+        });
+        tvlist.innerHTML = h + '</table>';
+      });
+    };
+    tvlist.addEventListener('click', function (e) {
+      var b = e.target.closest('[data-tvdel]');
+      if (!b) return;
+      fetch('/api/tv/devices/' + b.dataset.tvdel + '/delete', {method: 'POST'})
+        .then(drawTvs);
+    });
+    root.querySelector('#tvapprove').addEventListener('click', function () {
+      var code = root.querySelector('#tvcode');
+      fetch('/api/tv/devices/approve',
+            {method: 'POST', body: new URLSearchParams({code: code.value})})
+        .then(CE.readJson).then(function (j) {
+          tvmsg.className = 'note said ' + (j.ok ? 'ok' : 'bad');
+          tvmsg.textContent = j.ok ? j.name + ' is let in.' : j.error;
+          if (j.ok) { code.value = ''; drawTvs(); }
+        });
+    });
+    drawTvs();
+  }
+
   var bkjobs = root.querySelector('#bkjobs');
   if (bkjobs) {
     function jobRow(j) {

@@ -331,6 +331,48 @@ class Plex:
         return True
 
 
+    # ---------- the library, for a recording we hand over ----------
+
+    def library_sections(self) -> list[dict]:
+        """Every library, with the folders it reads (`Location`)."""
+        return self._get("/library/sections").get("Directory", []) or []
+
+    def scan(self, section: str, path: str | None = None) -> None:
+        """Ask Plex to look at a library, or at one folder of it."""
+        params = {"path": path} if path else {}
+        r = self._client().get(f"{self.base}/library/sections/{section}/refresh",
+                               params=params)
+        if r.status_code >= 400:
+            raise PlexError(f"scan of library {section} -> HTTP {r.status_code}",
+                            r.status_code)
+
+    def find_file(self, section: str, type_: int, name: str) -> dict | None:
+        """The newest library item whose file has this name, or None.
+
+        Asked of the newest items rather than by a file filter, because the
+        filter is not one Plex documents and a recording handed over a minute
+        ago is always among the newest.
+        """
+        items = self._get(f"/library/sections/{section}/all", {
+            "type": type_, "sort": "addedAt:desc",
+            "X-Plex-Container-Start": 0, "X-Plex-Container-Size": 60,
+        }).get("Metadata", []) or []
+        for m in items:
+            for media in m.get("Media") or []:
+                for part in media.get("Part") or []:
+                    if (part.get("file") or "").rsplit("/", 1)[-1] == name:
+                        return m
+        return None
+
+    def set_position(self, rating_key: str, seconds: float) -> None:
+        """Where to resume, for the account whose token this is."""
+        r = self._client().get(self.base + "/:/progress", params={
+            "key": rating_key, "identifier": "com.plexapp.plugins.library",
+            "time": int(seconds * 1000), "state": "stopped"})
+        if r.status_code >= 400:
+            raise PlexError(f"set position -> HTTP {r.status_code}", r.status_code)
+
+
 def discover(plex: Plex) -> tuple[str, str | None, str | None, str | None]:
     """Work out the EPG provider id and which sections hold Shows and Sports.
 

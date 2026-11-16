@@ -10,7 +10,15 @@ from ..plex import PlexError
 from ..sources import tmdb, tvmaze
 from ._shared import _int, _logo_map, _plex, page
 from .guide import _PASS_ICON, _why_for  # noqa: F401
-from .record import _PASS_HIDDEN, SPORTS_PADDING, _make_pass, _pass_prefs, _template_payload
+from .record import (
+    _PASS_HIDDEN,
+    SPORTS_PADDING,
+    _make_pass,
+    _pass_prefs,
+    _template_payload,
+    _who_records,
+    recorder_off,
+)
 
 router = APIRouter()
 
@@ -169,6 +177,27 @@ _GRABS_SQL = """
 """
 
 
+# What our own recorder holds. Plex has no grab for these, so without this
+# branch a broadcast CouchElephant records itself would be missing from the one
+# list that says what will record. `fail_airing_id` and `fail_pass_id` carry
+# the airing and the pass, as they do for a failed booking.
+_OURS_SQL = """
+  SELECT 'ce:' || r.id AS id, r.title AS title,
+         COALESCE(r.show_title, '') AS parent_title,
+         r.channel_vcn AS channel_vcn, r.begins_at AS begins_at,
+         r.ends_at AS ends_at,
+         CASE r.state WHEN 'scheduled' THEN 'scheduled'
+                      WHEN 'recording' THEN 'inprogress'
+                      WHEN 'failed' THEN 'missed'
+                      WHEN 'moving' THEN 'moving to Plex'
+                      WHEN 'in_plex' THEN 'in Plex'
+                      ELSE 'complete' END AS status,
+         NULL AS subscription, r.airing_id AS fail_airing_id, r.error AS error,
+         r.pass_id AS fail_pass_id, 0 AS attempts, NULL AS first_at, NULL AS last_at
+  FROM recordings r WHERE r.kind = 'recording'
+"""
+
+
 def _schedule_source(now):
     """Real bookings and failed ones, in one set, so paging cannot split them.
 
@@ -176,7 +205,7 @@ def _schedule_source(now):
     failure that sorts past the end of the first page lands on no page at all,
     which is the same disappearing act this was written to stop.
     """
-    return f"({_GRABS_SQL} UNION ALL {_FAILED_SQL})", [now, now, now]
+    return f"({_GRABS_SQL} UNION ALL {_FAILED_SQL} UNION ALL {_OURS_SQL})", [now, now, now]
 
 
 def failed_booking(airing_id):
@@ -260,6 +289,24 @@ def _schedule_rows(limit=None, offset=0, start=None, end=None):
                 "pass_id": g["fail_pass_id"], "airing_id": g["fail_airing_id"],
                 "error": g["error"] or "", "attempts": g["attempts"] or 1,
                 "first_at": g["first_at"], "last_at": g["last_at"],
+            })
+            continue
+        if str(g["id"]).startswith("ce:"):
+            name = pass_names.get(g["fail_pass_id"])
+            out.append({
+                "id": g["id"], "title": g["title"] or "",
+                "parent": g["parent_title"] if g["parent_title"] != g["title"] else "",
+                "vcn": g["channel_vcn"] or "",
+                "logo": bool(logos.get(g["channel_vcn"])),
+                "b": g["begins_at"], "e": g["ends_at"], "status": g["status"],
+                "who": "ce", "recorder": "couchelephant",
+                "kind": _PASS_ICON.get(pass_kinds.get(g["fail_pass_id"]), "one"),
+                "reason": (f"recorded by CouchElephant, for the {name} pass" if name
+                           else "recorded by CouchElephant"),
+                "pass_id": g["fail_pass_id"],
+                "airing_id": _live_airing_id(g["fail_airing_id"], g["channel_vcn"],
+                                             g["begins_at"]) if g["begins_at"] else None,
+                "error": g["error"] or "",
             })
             continue
         w = why.get((g["channel_vcn"], g["begins_at"]))
@@ -725,7 +772,11 @@ def api_rules():
             "filter": tree,
             "networks": nets, "channels": chans,
             "prefs": db.unjs(p["prefs"], {}) or {},
-            "enabled": bool(p["enabled"]), "booked": booked,
+            "recorder": passes.pass_recorder(p),
+            "enabled": bool(p["enabled"]),
+            "booked": booked + db.one(
+                "SELECT COUNT(*) c FROM recordings WHERE pass_id = ? "
+                "AND kind = 'recording'", (p["id"],))["c"],
             "waiting": p["kind"] == "team" and not p["team_id"],
             "detail": {
                 "team": ("Every game, from the live broadcast" if p["team_id"] else
@@ -809,8 +860,10 @@ def api_rule_upcoming(rule_id: int):
 async def api_rule_edit(rule_id: int, networks: str = Form(""),
                         channels: str = Form(""), enabled: str = Form(""),
                         settings: str = Form(""), filter: str = Form(""),
-                        name: str = Form("")):
-    """Change a pass: where it may record from, its Plex settings, or pause it."""
+                        name: str = Form(""), recorder: str = Form("")):
+    """Change a pass: where it may record from, its Plex settings, who records
+    it, or pause it. Changing the recorder applies to what it books from now
+    on; a broadcast already booked stays with the recorder that has it."""
     r = db.one("SELECT * FROM passes WHERE id = ?", (rule_id,))
     if not r:
         return JSONResponse({"ok": False, "error": "no such pass"}, status_code=404)
@@ -838,9 +891,11 @@ async def api_rule_edit(rule_id: int, networks: str = Form(""),
     # paused pass.
     on = r["enabled"] if enabled == "" else (0 if enabled in ("0", "false") else 1)
     with db.tx() as c:
+        # Not sent means unchanged, like everything else here.
+        who = recorder if recorder in ("plex", "couchelephant") else r["recorder"]
         c.execute("UPDATE passes SET networks=?, channels=?, prefs=?, filter=?, "
-                  "label=?, enabled=? WHERE id=?",
-                  (db.js(nets), db.js(chans), keep, filt, label, on, rule_id))
+                  "label=?, enabled=?, recorder=? WHERE id=?",
+                  (db.js(nets), db.js(chans), keep, filt, label, on, who, rule_id))
     done = await asyncio.to_thread(passes.run_passes)
     made = len([d for d in done if d["action"] == "scheduled"])
 
@@ -992,7 +1047,7 @@ async def api_rule_create(kind: str = Form("team"), team_id: str = Form(""),
                           channels: str = Form(""), template: int = Form(0),
                           settings: str = Form(""), filter: str = Form(""),
                           name: str = Form(""), confirm: str = Form(""),
-                          team: str = Form("")):
+                          team: str = Form(""), recorder: str = Form("")):
     """Create a schedule that keeps matching new airings.
 
     With no source limit this is something Plex can express on its own, so it
@@ -1003,9 +1058,13 @@ async def api_rule_create(kind: str = Form("team"), team_id: str = Form(""),
     nets = db.unjs(networks, []) or []
     chans = db.unjs(channels, []) or []
     prefs = dict(db.unjs(settings, {}) or {})
+    who = _who_records(recorder)
+    ours = who == "couchelephant"
+    if ours and recorder_off():
+        return recorder_off()
 
     if kind == "smart":
-        return await _make_smart_rule(filter, name, nets, chans, prefs, confirm)
+        return await _make_smart_rule(filter, name, nets, chans, prefs, confirm, who)
 
     if kind == "team":
         t = db.one("SELECT * FROM teams WHERE id = ?", (team_id or 0,))
@@ -1022,7 +1081,7 @@ async def api_rule_create(kind: str = Form("team"), team_id: str = Form(""),
                                     status_code=400)
             _, label, created = await asyncio.to_thread(
                 _make_pass, "team", {"id": None, "name": wanted}, None,
-                nets, chans, prefs, False)
+                nets, chans, prefs, False, None, "", who)
             if not created:
                 return JSONResponse({"ok": False,
                                      "error": f"You already follow {label}."},
@@ -1038,14 +1097,14 @@ async def api_rule_create(kind: str = Form("team"), team_id: str = Form(""),
             return JSONResponse({"ok": False, "error": "pick a programme"}, status_code=400)
         rows = passes.series_airings(label)
 
-    if not (nets or chans):
+    if not (nets or chans or ours):
         return await asyncio.to_thread(_make_plex_rule, label, rows, template, prefs)
 
     _, label, created = await asyncio.to_thread(
         _make_pass, kind,
         dict(t) if kind == "team" else None,
         None if kind == "team" else label,
-        nets, chans, prefs, False)
+        nets, chans, prefs, False, None, "", who)
     if not created:
         return JSONResponse({"ok": False, "error": f"You already follow {label}."},
                             status_code=409)
@@ -1054,11 +1113,13 @@ async def api_rule_create(kind: str = Form("team"), team_id: str = Form(""),
     made = len([d for d in done if d["action"] == "scheduled"])
     where = " or ".join(nets + chans)
     return JSONResponse({"ok": True, "ce_rule": True, "message":
-                         f"CouchElephant is following {label}, only from {where}. "
-                         f"{made} upcoming airing(s) scheduled."})
+                         f"CouchElephant is following {label}"
+                         + (f", only from {where}" if where else "")
+                         + (" and records it itself" if ours else "")
+                         + f". {made} upcoming airing(s) scheduled."})
 
 
-async def _make_smart_rule(filter_json, name, nets, chans, prefs, confirm):
+async def _make_smart_rule(filter_json, name, nets, chans, prefs, confirm, who=None):
     """A smart filter is always CouchElephant's to run.
 
     Plex rules follow one programme or one team. A condition tree is not
@@ -1089,7 +1150,7 @@ async def _make_smart_rule(filter_json, name, nets, chans, prefs, confirm):
         }, status_code=409)
 
     pass_id, label, created = await asyncio.to_thread(
-        _make_pass, "smart", None, None, nets, chans, prefs, False, tree, name)
+        _make_pass, "smart", None, None, nets, chans, prefs, False, tree, name, who)
     if not created:
         return JSONResponse({"ok": False, "error":
                              f"You already have a smart pass for {label}."},

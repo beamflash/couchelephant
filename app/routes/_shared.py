@@ -7,12 +7,12 @@ import zoneinfo
 
 from fastapi.templating import Jinja2Templates
 
-from .. import auth, cf_access, db, health
+from .. import auth, cf_access, db, health, recorder
 from ..plex import Plex
 
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 templates = Jinja2Templates(directory=os.path.join(BASE, "templates"))
-VERSION = "1.5.4"
+VERSION = "1.5.5"
 
 # What the browser should call this build of the scripts and the stylesheet.
 # The version alone is not enough: it does not change between deploys, so a
@@ -174,6 +174,13 @@ def page(request, name, **ctx):
     # wherever you happen to be rather than only on the page that noticed it.
     ctx.setdefault("notices", health.open_notices())
     ctx.setdefault("now", int(time.time()))
+    # Whether our own recorder can run here, and what a new booking starts
+    # with. Every page that offers the "Recorded by" choice reads this.
+    ctx.setdefault("recorder_info", {
+        "available": recorder.available(),
+        "default": ("couchelephant" if recorder.available()
+                    and db.get_setting("recorder_default") == "couchelephant" else "plex"),
+    })
     ctx.setdefault("version", VERSION)
     ctx.setdefault("asset_v", ASSET_V)
     ctx["request"] = request

@@ -19,6 +19,9 @@ readable by whoever inherits it.
 | `app/health.py` | **Watching Plex do its own job**, and the notices that come of it |
 | `app/notify.py` | **Sending those notices somewhere you will see them.** Discord, Telegram and Notifiarr, behind one call |
 | `app/verify.py` | **Comparing a booking against the pass that made it**, without inventing a difference |
+| `app/tuner.py` | The tuner. HDHomeRun only, and everything that knows that |
+| `app/recorder.py` | **CouchElephant's own recorder**: the capture, the copy you watch, the state of each recording, and the loop that starts and stops them |
+| `app/handover.py` | Giving a finished recording to Plex: the name, the copy, the scan, the resume point |
 | `app/teamcat.py` | The shipped team catalogue, and matching a Plex team to it |
 | `app/filters.py` | The guide's filter tokens |
 | `app/auth.py` | Accounts, sessions and per-user preferences |
@@ -34,12 +37,42 @@ readable by whoever inherits it.
 | `app/routes/passes.py` | The schedule, passes, rules, smart filters |
 | `app/routes/account.py` | First run, sign in, sign out, theme |
 | `app/routes/data.py` | Export, import, backups, the backing store |
-| `app/routes/settings.py` | The Plex connection, accounts, artwork, sync, alert destinations |
+| `app/routes/settings.py` | The Plex connection, accounts, artwork, sync, alert destinations, the recorder |
+| `app/routes/tv.py` | What a television client reads, pairing one, live viewing, the video itself, and the Live TV page |
 
 `dbstore.py`, `portable.py`, `backups.py` and `backingstore.py` are explained
 in [Your data](DATA.md), including why the guide is never copied.
 
 `passes.py` is where the value is. If you read one file, read that one.
+
+### The own recorder
+
+Off unless a `/recordings` folder exists. Nothing in it runs otherwise, and no
+page offers it.
+
+A recording is two files made by two workers, on purpose. A thread copies the
+tuner's HTTP stream to `broadcast.ts` untouched. A separate ffmpeg process is
+fed that file as it grows and writes an HLS **event** playlist: one that only
+grows and never drops a segment, which is the property that lets a player
+start at the beginning of something still being recorded. Nothing decodes the
+broadcast file, so a converter that falls behind or dies cannot damage the
+recording; it is started again from the first byte.
+
+`recorder.tick()` runs every five seconds from `web.py` and is the whole state
+machine: start what is due, stop what is over, restart a dead converter,
+close live viewing nobody is watching. A row left `recording` by a process
+that died is settled on the next tick from what is on disk. `handover.tick()`
+moves one finished recording at a time in its own thread, because a copy to a
+network disk takes minutes. It deletes nothing until Plex lists the file.
+
+`passes.already_handled` asks the recorder first, so a broadcast it holds is
+not also booked in Plex. `recorder.book` is keyed by slot as well as by
+airing, so a generic "NFL Football" slot the guide later names stays one
+recording and takes the name.
+
+The suite runs all of it against `tests/fake_tuner.py`, an HDHomeRun over real
+HTTP, and `tests/fake_ffmpeg.py`, which keeps the one promise the recorder
+relies on: grow a playlist while stdin is open, close it when stdin closes.
 
 ## The database
 

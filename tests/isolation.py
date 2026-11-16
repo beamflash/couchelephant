@@ -46,6 +46,9 @@ def assert_isolated():
     _check_path("COUCHELEPHANT_DB", os.environ.get("COUCHELEPHANT_DB"))
     _check_path("COUCHELEPHANT_AUTH_DB", os.environ.get("COUCHELEPHANT_AUTH_DB"))
     _check_path("COUCHELEPHANT_LOGOS", os.environ.get("COUCHELEPHANT_LOGOS"))
+    # The recorder deletes whole folders under these two.
+    _check_path("COUCHELEPHANT_RECORDINGS", os.environ.get("COUCHELEPHANT_RECORDINGS"))
+    _check_path("COUCHELEPHANT_LIBRARY", os.environ.get("COUCHELEPHANT_LIBRARY"))
     # A test must never reach a real Plex. The fake one binds to localhost.
     url = os.environ.get("COUCHELEPHANT_TEST_PLEX", "")
     if url and not (url.startswith("http://127.0.0.1") or

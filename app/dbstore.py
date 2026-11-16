@@ -56,7 +56,7 @@ STORES = {
         "table": "passes", "key": ("uid",), "pk": ("uid",), "db": "main",
         "cols": ("uid", "kind", "team_id", "team_name", "series_guid",
                  "series_title", "networks", "channels", "prefs", "filter",
-                 "label", "enabled", "created_at"),
+                 "label", "enabled", "recorder", "created_at"),
         "label": "Passes",
     },
     "our_grabs": {

@@ -17,7 +17,7 @@ Selection order for a game:
 """
 import time
 
-from . import db, expectations, smartfilter, teamcat
+from . import db, expectations, recorder, smartfilter, teamcat
 from .plex import Plex, PlexError
 
 # Give a game this much slack before treating it as too late to schedule.
@@ -253,6 +253,8 @@ def already_handled(program_guid: str, read_at: int | None = None) -> str | None
     # it yet, and without this two runs in a row would book the game twice.
     if read_at is None:
         read_at = last_read()
+    if recorder.booked(program_guid=program_guid):
+        return "CouchElephant is recording it"
     mine = db.one(
         """SELECT 1 FROM our_grabs o
              LEFT JOIN plex_subscriptions s ON s.key = o.subscription
@@ -402,6 +404,47 @@ def _schedule(plex, row, target_section, source="pass", template=None, prefs=Non
     return chosen.get("targetLibrarySectionID")
 
 
+def pass_recorder(p) -> str:
+    """Who records what this pass books. Anything but our name means Plex."""
+    mine = p["recorder"] if "recorder" in p.keys() else None
+    return "couchelephant" if mine == "couchelephant" else "plex"
+
+
+def padding(prefs: dict) -> tuple[int | None, int | None]:
+    """Plex's two padding settings as (lead, trail) minutes, None where unset.
+
+    A pass keeps Plex's own settings. Our recorder honours the two that mean
+    the same thing to it, so "ten minutes after" is not lost by the choice of
+    recorder.
+    """
+    def minutes(key):
+        try:
+            return max(0, int(prefs.get(key)))
+        except (TypeError, ValueError):
+            return None
+    return minutes("startOffsetMinutes"), minutes("endOffsetMinutes")
+
+
+def _book(plex, p, pick, expectation_id=None):
+    """Book one broadcast for a pass, with the recorder the pass names.
+
+    A pass that names our recorder on an install where it cannot run fails
+    here, in words. It does not fall back to Plex: the user chose, and a
+    silent switch would hide that the recorder is off.
+    """
+    prefs = dict(db.unjs(p["prefs"]) or {})
+    if pass_recorder(p) != "couchelephant":
+        _schedule(plex, pick, None, "pass", prefs=prefs, pass_id=p["id"],
+                  expectation_id=expectation_id)
+        return
+    why = recorder.why_unavailable()
+    if why:
+        raise RuntimeError(why)
+    lead, trail = padding(prefs)
+    recorder.book(pick, "pass", pass_id=p["id"], pass_uid=p["uid"],
+                  trail_minutes=trail, lead_minutes=lead)
+
+
 def remember(row, source: str, subscription: str | None = None,
              pass_id: int | None = None, expectation_id: int | None = None) -> None:
     """Record that this airing was scheduled by us, and by what.
@@ -468,6 +511,8 @@ def stand_in_held(item, pick, read_at) -> str | None:
     name for a game, and a guide that reused one guid for every bare "NFL
     Football" would otherwise read one booked slot as all of them booked.
     """
+    if recorder.booked(pick):
+        return "CouchElephant is recording it"
     mine = db.one(
         """SELECT 1 FROM our_grabs o
              LEFT JOIN plex_subscriptions s ON s.key = o.subscription
@@ -563,8 +608,7 @@ def _evaluate(rows, plex, dry, results):
                                 "channel": pick["channel_vcn"], "begins_at": pick["begins_at"]})
                 continue
             try:
-                _schedule(plex, pick, None, "pass", prefs=dict(db.unjs(p["prefs"]) or {}),
-                          pass_id=p["id"])
+                _book(plex, p, pick)
                 _log(p["id"], pick, "scheduled", reason, False)
                 results.append({"pass": label, "game": pick["title"],
                                 "action": "scheduled", "reason": reason,
@@ -613,8 +657,7 @@ def _stand_ins(p, plex, dry, results, read_at, label, networks, channels):
                             "begins_at": pick["begins_at"]})
             continue
         try:
-            _schedule(plex, pick, None, "pass", prefs=dict(db.unjs(p["prefs"]) or {}),
-                      pass_id=p["id"], expectation_id=item["id"])
+            _book(plex, p, pick, expectation_id=item["id"])
             _log(p["id"], pick, "scheduled", reason, False)
             results.append({"pass": label, "game": game, "action": "scheduled",
                             "reason": reason, "channel": pick["channel_vcn"],

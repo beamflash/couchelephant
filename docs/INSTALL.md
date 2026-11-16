@@ -60,10 +60,61 @@ up.
 | `COUCHELEPHANT_DB` | `/data/couchelephant.db` | The main database |
 | `COUCHELEPHANT_AUTH_DB` | next to the main one | Accounts and sessions |
 | `COUCHELEPHANT_LOGOS` | `/data/logos` | Cached channel artwork |
+| `COUCHELEPHANT_RECORDINGS` | `/recordings` | Where CouchElephant's own recorder keeps its files. The recorder is off unless this folder exists |
+| `COUCHELEPHANT_LIBRARY` | `/library` | The Plex library folder a finished recording is moved into |
 | `TZ` | `UTC` | The container's clock |
 
 Everything else is a setting in the app, not an environment variable, because
 it is the kind of thing you change while looking at the result.
+
+## Recording with CouchElephant itself
+
+Optional. Skip this and Plex makes every recording, as it always has.
+
+Turn it on to watch a recording from its start while it is still being made.
+See [Who makes the recording](RECORDING.md#who-makes-the-recording) for what
+it does. It needs an HDHomeRun tuner, which is the tuner Plex already uses.
+
+```bash
+docker run -d --name couchelephant --restart unless-stopped \
+  -p 8710:8710 \
+  -v /opt/couchelephant/data:/data \
+  -v /opt/couchelephant/recordings:/recordings \
+  -v /path/to/your/plex/media:/library \
+  --device /dev/dri \
+  -e TZ=UTC \
+  ghcr.io/datbird/couchelephant:latest
+```
+
+| Addition | What it is for |
+| --- | --- |
+| `/recordings` | Where a recording is held until Plex has it, and the copies you watch. A local disk. Allow about 4 GB for each hour held. **Mounting this is what turns the recorder on** |
+| `/library` | The folder your Plex library reads, so a finished recording can be moved into it. Without it recordings are kept in `/recordings` and not moved |
+| `--device /dev/dri` | Lets an Intel or AMD graphics chip make the copy you watch. Without it the processor does the work, which a small machine may not manage for more than one recording at a time |
+
+The container must be able to write to both folders.
+
+Then open **Settings, Recording, Own recorder**. It says whether the recorder
+can run and why not, shows the tuner it found, and asks two things for the
+move into Plex: which folder inside `/library` takes shows and which takes
+films, and which Plex library each belongs to. The tuner address is read from
+Plex. Type one only if that fails.
+
+A station sends MPEG-2 video, which a television app and most browsers cannot
+play. So each recording has two files: the broadcast, untouched, which is what
+Plex receives, and a copy made for watching (H.264, stereo). The copy is kept
+for two days after Plex has the recording and is made again on demand.
+
+### The Apple TV app
+
+`clients/appletv` in the repository is an Apple TV app that plays what
+CouchElephant records and tunes live channels. It is built from source with
+Xcode; see its README. The first run asks for the address of your
+CouchElephant. With sign-in on it shows a six-letter code, and you type that
+code under **Settings, Recording, Televisions** to let that television in.
+
+The **Live TV** tab in the web app shows the same three lists and plays in a
+browser.
 
 ## Point it at Plex
 

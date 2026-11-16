@@ -257,6 +257,77 @@ CREATE TABLE IF NOT EXISTS expectations (
     UNIQUE (source, source_id, pass_id)
 );
 
+-- A broadcast CouchElephant records itself, rather than asking Plex to. One
+-- row from the moment it is booked until long after Plex has the file, because
+-- the list of what is live and what was recorded is read from here.
+--
+-- `kind` is 'recording' or 'live'. A live row is somebody watching a channel
+-- now: it uses the same capture and the same viewing copy, and is deleted with
+-- its files the moment nobody is watching.
+--
+-- begins_at and ends_at are the broadcast. starts_at and stops_at are when the
+-- tuner is opened and closed, which is the broadcast plus its padding.
+CREATE TABLE IF NOT EXISTS recordings (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    -- Names the folder on disk, and the recording to a client.
+    uid           TEXT NOT NULL,
+    kind          TEXT NOT NULL DEFAULT 'recording',
+    -- scheduled, recording, finished, moving, in_plex, failed
+    state         TEXT NOT NULL DEFAULT 'scheduled',
+    error         TEXT,
+    airing_id     TEXT,
+    program_guid  TEXT,
+    title         TEXT,
+    show_title    TEXT,
+    -- Kept here at booking, because the guide forgets a programme once it has
+    -- aired and the handover names the file after it has.
+    ptype         TEXT,
+    season        INTEGER,
+    episode       INTEGER,
+    year          INTEGER,
+    channel_vcn   TEXT,
+    channel_title TEXT,
+    begins_at     INTEGER,
+    ends_at       INTEGER,
+    starts_at     INTEGER,
+    stops_at      INTEGER,
+    started_at    INTEGER,
+    ended_at      INTEGER,
+    bytes         INTEGER DEFAULT 0,
+    source        TEXT,
+    pass_id       INTEGER,
+    pass_uid      TEXT,
+    -- Where the player was, in seconds, and when a player last said it was
+    -- here. The second one is what "nobody is watching" is measured from.
+    position      REAL DEFAULT 0,
+    watched_at    INTEGER,
+    -- Set by the handover: where the file went, and what Plex calls it.
+    plex_path     TEXT,
+    plex_rating_key TEXT,
+    moved_at      INTEGER,
+    -- When the handover was last tried, so a failing one is not tried every
+    -- five seconds.
+    tried_at      INTEGER,
+    created_at    INTEGER,
+    updated_at    INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_recordings_state ON recordings(state, starts_at);
+CREATE INDEX IF NOT EXISTS idx_recordings_airing ON recordings(airing_id);
+
+-- A television client that has been let in. With sign-in on, the app on the
+-- television cannot type a password, so it shows a code and an administrator
+-- types the code into Settings. Keys are stored hashed, like a session.
+CREATE TABLE IF NOT EXISTS tv_devices (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT,
+    code        TEXT,
+    poll_hash   TEXT,
+    key_hash    TEXT,
+    approved_at INTEGER,
+    created_at  INTEGER,
+    last_seen   INTEGER
+);
+
 CREATE TABLE IF NOT EXISTS notices (
     code        TEXT PRIMARY KEY,
     severity    TEXT,
@@ -352,6 +423,23 @@ DEFAULTS = {
     # neither of these set.
     "sportsdb_key": "",
     "tmdb_key": "",
+    # The own recorder. Off in effect until a /recordings folder is mounted,
+    # and Plex stays the recorder for anything that does not say otherwise.
+    "tuner_url": "",
+    "tuner_detected": "",
+    "recorder_default": "plex",
+    "recorder_encoder": "auto",
+    "recorder_lead_minutes": "1",
+    "recorder_trail_minutes": "3",
+    # The handover. The folder names are inside the /library mount, and the
+    # section is the Plex library that folder belongs to. Empty means the
+    # recording is held here and not handed over.
+    "recorder_shows_folder": "",
+    "recorder_shows_section": "",
+    "recorder_movies_folder": "",
+    "recorder_movies_section": "",
+    # Days a viewing copy is kept after Plex has the recording.
+    "recorder_keep_days": "2",
 }
 
 
@@ -395,6 +483,13 @@ def tx():
 # Columns added after the first release. CREATE TABLE IF NOT EXISTS will not
 # add them to a database that already exists, so they are applied by hand.
 MIGRATIONS = [
+    # The season and episode number, which the guide sends and nothing kept.
+    # Our own recorder names a file with them, the way Plex names its own.
+    ("programs", "season", "INTEGER"),
+    ("programs", "episode", "INTEGER"),
+    # Who makes the recordings this pass books: 'plex' or 'couchelephant'.
+    # Empty on a pass made before the choice existed, which means Plex.
+    ("passes", "recorder", "TEXT"),
     ("channels", "thumb_url", "TEXT"),
     ("channels", "logo_path", "TEXT"),
     # What we actually fetched, so a changed upstream URL triggers a re-fetch.

@@ -16,6 +16,13 @@ HOST="${COUCHELEPHANT_HOST:?set COUCHELEPHANT_HOST to the ssh host to deploy to}
 REMOTE_DIR="${COUCHELEPHANT_REMOTE_DIR:-/opt/couchelephant}"
 PORT="${COUCHELEPHANT_PORT:-8710}"
 TZ_NAME="${COUCHELEPHANT_TZ:-UTC}"
+# The own recorder, all optional. A folder on the host for recordings turns it
+# on, the Plex library folder lets it hand them over, and the graphics device
+# makes the copy you watch on the GPU.
+EXTRA=""
+[ -n "${COUCHELEPHANT_RECORDINGS_DIR:-}" ] && EXTRA="$EXTRA -v $COUCHELEPHANT_RECORDINGS_DIR:/recordings"
+[ -n "${COUCHELEPHANT_LIBRARY_DIR:-}" ] && EXTRA="$EXTRA -v $COUCHELEPHANT_LIBRARY_DIR:/library"
+[ -n "${COUCHELEPHANT_DRI:-}" ] && EXTRA="$EXTRA --device /dev/dri"
 TAG="couchelephant:local"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -39,7 +46,7 @@ ssh -o ConnectTimeout=60 "$HOST" "
   docker run -d --name couchelephant --restart unless-stopped \
     -p $PORT:8710 \
     -v $REMOTE_DIR/data:/data \
-    -e TZ=$TZ_NAME \
+    -e TZ=$TZ_NAME $EXTRA \
     $TAG >/dev/null
   sleep 8
   docker ps --filter name=couchelephant --format '    {{.Status}}'

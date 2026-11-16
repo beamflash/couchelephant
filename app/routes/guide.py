@@ -7,7 +7,7 @@ import urllib.parse
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 
-from .. import db, filters, smartfilter
+from .. import db, filters, passes, recorder, smartfilter
 from . import record
 from ._shared import _logo_map, page, templates, tz
 
@@ -99,6 +99,10 @@ def api_grid(start: int, end: int, choffset: int = 0, chlimit: int = 12,
                  "logo": bool(r["logo_path"])} for r in crows]
 
     ours = {r["airing_id"] for r in db.query("SELECT airing_id FROM our_grabs")}
+    # And the ones our own recorder holds, which Plex knows nothing about.
+    ours |= {r["airing_id"] for r in db.query(
+        "SELECT airing_id FROM recordings WHERE kind = 'recording' "
+        "AND state IN ('scheduled', 'recording')")}
     # Keyed by broadcast, not by title, or every episode of a daily programme
     # showed as being recorded because one of them is.
     plex_slots = {(r["channel_vcn"], r["begins_at"]) for r in db.query(
@@ -156,6 +160,17 @@ _PASS_ICON = {"team": "sports", "series": "series", "smart": "smart"}
 
 def _why_for(airing):
     """Why this broadcast is set to record, in words, or nothing."""
+    mine = recorder.booked(airing)
+    if mine:
+        p = db.one("SELECT * FROM passes WHERE id = ?", (mine["pass_id"] or 0,))
+        if p:
+            return {"who": "ce", "kind": _PASS_ICON.get(p["kind"], "series"),
+                    "text": "CouchElephant records this itself, for the "
+                            f"{passes.rule_label(p)} pass.",
+                    "pass_id": p["id"], "recorder": "couchelephant"}
+        return {"who": "ce", "kind": "one",
+                "text": "CouchElephant records this itself. You chose it by hand.",
+                "pass_id": None, "recorder": "couchelephant"}
     r = db.one(
         """SELECT o.source, o.pass_id, p.kind, p.team_name, p.series_title, p.label
            FROM our_grabs o LEFT JOIN passes p ON p.id = o.pass_id
@@ -211,6 +226,13 @@ def api_program(airing_id: str):
         (a["channel_vcn"], a["begins_at"]))
     ours = {r["airing_id"] for r in db.query(
         "SELECT airing_id FROM our_grabs WHERE program_guid = ?", (a["program_guid"],))}
+    # A recording our own recorder holds reads the same to the panel: it is
+    # set to record, by us, and can be cancelled here.
+    held = recorder.booked(a)
+    if held:
+        ours.add(a["id"])
+        scheduled = {"status": {"scheduled": "scheduled", "recording": "inprogress"}
+                     .get(held["state"], "complete")}
     # What Plex is actually holding for this recording, so somebody can see
     # their padding took effect rather than trusting that it did. Read from the
     # copy of Plex's own subscription, refreshed every sync, so opening a panel

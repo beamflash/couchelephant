@@ -14,12 +14,17 @@ _ROOT = tempfile.mkdtemp(prefix="ce-test-")
 os.environ["COUCHELEPHANT_DB"] = os.path.join(_ROOT, "couchelephant.db")
 os.environ["COUCHELEPHANT_AUTH_DB"] = os.path.join(_ROOT, "auth.db")
 os.environ["COUCHELEPHANT_LOGOS"] = os.path.join(_ROOT, "logos")
+os.environ["COUCHELEPHANT_RECORDINGS"] = os.path.join(_ROOT, "recordings")
+os.environ["COUCHELEPHANT_LIBRARY"] = os.path.join(_ROOT, "library")
+# Not the real ffmpeg: no codecs to install, and nothing to wait for.
+os.environ["COUCHELEPHANT_FFMPEG"] = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "fake_ffmpeg.py")
 
-from tests import fake_plex, isolation  # noqa: E402
+from tests import fake_plex, fake_tuner, isolation  # noqa: E402
 
 isolation.assert_isolated()                      # before anything is imported
 
-from app import auth, db, sync  # noqa: E402
+from app import auth, db, recorder, sync  # noqa: E402
 
 
 def pytest_sessionfinish(session, exitstatus):
@@ -44,6 +49,12 @@ def clean_db(plex_url):
     order is worth very little.
     """
     isolation.assert_isolated()
+    # No worker from the last test may still be writing, and no file of its
+    # may be left for this one to find.
+    recorder.shutdown()
+    for name in ("COUCHELEPHANT_RECORDINGS", "COUCHELEPHANT_LIBRARY"):
+        shutil.rmtree(os.environ[name], ignore_errors=True)
+        os.makedirs(os.environ[name])
     db.init()
     conn = db.connect()
     # Order would otherwise matter, and a new table would break the wipe the
@@ -75,6 +86,23 @@ def _tables(conn):
     return [r[0] for r in conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' "
         "AND name NOT LIKE 'sqlite_%'")]
+
+
+@pytest.fixture(scope="session")
+def tuner_url():
+    url, stop = fake_tuner.start()
+    yield url
+    stop()
+
+
+@pytest.fixture
+def tuner(tuner_url):
+    """The fake HDHomeRun, set as the tuner, with every tuner free."""
+    fake_tuner.STATE.reset()
+    db.set_setting("tuner_url", tuner_url)
+    db.set_setting("recorder_encoder", "software")
+    yield fake_tuner.STATE
+    recorder.shutdown()
 
 
 @pytest.fixture

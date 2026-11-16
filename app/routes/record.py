@@ -8,7 +8,7 @@ import uuid
 from fastapi import APIRouter, Form
 from fastapi.responses import JSONResponse
 
-from .. import db, passes, smartfilter, sync
+from .. import db, passes, recorder, smartfilter, sync, tuner
 from ..plex import PlexError
 from ._shared import _plex
 
@@ -173,6 +173,25 @@ def _template_payload(options, row=None, pin=True):
     return out
 
 
+def _who_records(asked: str = "") -> str:
+    """'plex' or 'couchelephant': what was asked for, else the default setting.
+
+    Our recorder is only ever the answer on an install where it can run.
+    """
+    want = (asked or db.get_setting("recorder_default") or "plex").strip().lower()
+    if want == "couchelephant" and (asked or recorder.available()):
+        return "couchelephant"
+    return "plex"
+
+
+def recorder_off():
+    """The reply to send when our recorder was asked for and cannot run."""
+    why = recorder.why_unavailable()
+    if why:
+        return JSONResponse({"ok": False, "error": why}, status_code=400)
+    return None
+
+
 def _airing_row(airing_id):
     return db.one(
         """SELECT a.*, p.rating_key, p.title, p.grandparent_title, p.teams
@@ -211,6 +230,9 @@ async def api_record_options(airing_id: str):
                       "network": c["network"] or ""})
     return JSONResponse({
         "ok": True, "title": row["title"], "templates": out,
+        # The choice is only offered where our recorder can run.
+        "recorder": {"available": recorder.available(),
+                     "default": _who_records()},
         "dry_run": db.get_setting("dry_run") == "1",
         "networks": [{"name": n, "channels": v} for n, v in
                      sorted(nets.items(), key=lambda kv: kv[0].lower())],
@@ -234,12 +256,15 @@ def _pass_prefs(prefs):
 
 
 def _make_pass(kind, team=None, series=None, nets=None, chans=None, prefs=None,
-               update=True, smart=None, name=""):
+               update=True, smart=None, name="", who=None):
     """Create or update one CouchElephant pass.
 
     The only place a pass is written. There were three, and they had already
     drifted: one checked for a duplicate, one checked the wrong column, one did
     not check at all.
+
+    `who` is who records what the pass books. Not given means the default
+    for a new pass, and no change for an existing one.
 
     Returns (pass_id, label, created).
     """
@@ -273,37 +298,41 @@ def _make_pass(kind, team=None, series=None, nets=None, chans=None, prefs=None,
 
     with db.tx() as c:
         if existing:
-            c.execute("UPDATE passes SET networks=?, channels=?, prefs=?, enabled=1 "
-                      "WHERE id=?",
-                      (db.js(nets), db.js(chans), db.js(prefs), existing["id"]))
+            c.execute("UPDATE passes SET networks=?, channels=?, prefs=?, enabled=1, "
+                      "recorder=COALESCE(?, recorder) WHERE id=?",
+                      (db.js(nets), db.js(chans), db.js(prefs), who, existing["id"]))
             return existing["id"], label, False
         uid = uuid.uuid4().hex
+        who = who or _who_records()
         if kind == "smart":
             c.execute("INSERT INTO passes (kind, filter, label, networks, channels, "
-                      "prefs, uid, enabled, created_at) VALUES ('smart',?,?,?,?,?,?,1,?)",
+                      "prefs, uid, recorder, enabled, created_at) "
+                      "VALUES ('smart',?,?,?,?,?,?,?,1,?)",
                       (db.js(smart), label, db.js(nets), db.js(chans),
-                       db.js(prefs), uid, int(time.time())))
+                       db.js(prefs), uid, who, int(time.time())))
         elif kind == "team":
             c.execute("INSERT INTO passes (kind, team_id, team_name, networks, channels, "
-                      "prefs, uid, enabled, created_at) VALUES ('team',?,?,?,?,?,?,1,?)",
+                      "prefs, uid, recorder, enabled, created_at) "
+                      "VALUES ('team',?,?,?,?,?,?,?,1,?)",
                       (team.get("id"), team["name"], db.js(nets), db.js(chans),
-                       db.js(prefs), uid, int(time.time())))
+                       db.js(prefs), uid, who, int(time.time())))
         else:
             c.execute("INSERT INTO passes (kind, series_title, series_guid, networks, "
-                      "channels, prefs, uid, enabled, created_at) "
-                      "VALUES ('series',?,?,?,?,?,?,1,?)",
+                      "channels, prefs, uid, recorder, enabled, created_at) "
+                      "VALUES ('series',?,?,?,?,?,?,?,1,?)",
                       (series, series, db.js(nets), db.js(chans), db.js(prefs),
-                       uid, int(time.time())))
+                       uid, who, int(time.time())))
         new_id = c.execute("SELECT last_insert_rowid()").fetchone()[0]
     return new_id, label, True
 
 
-def _make_ce_rule(row, chosen, nets, chans, prefs=None):
+def _make_ce_rule(row, chosen, nets, chans, prefs=None, who=None):
     """Take over a recurring choice that Plex cannot express.
 
     Plex's team and series rules accept one channel. Several networks, or
     several channels, needs someone to watch the guide and pin each airing, so
-    CouchElephant keeps the rule and does that itself.
+    CouchElephant keeps the rule and does that itself. The same goes for a rule
+    whose recordings CouchElephant makes: Plex cannot hold that either.
     """
     title = chosen.get("title") or ""
     # A team template names the team it follows: "All Kansas City Chiefs Events".
@@ -313,26 +342,53 @@ def _make_ce_rule(row, chosen, nets, chans, prefs=None):
             team = t
             break
     if team:
-        _, label, _ = _make_pass("team", team=team, nets=nets, chans=chans, prefs=prefs)
+        _, label, _ = _make_pass("team", team=team, nets=nets, chans=chans,
+                                 prefs=prefs, who=who)
     else:
         series = row["grandparent_title"] or row["title"]
         _, label, _ = _make_pass("series", series=series, nets=nets, chans=chans,
-                                 prefs=prefs)
+                                 prefs=prefs, who=who)
 
     done = passes.run_passes()
     made = len([d for d in done if d["action"] == "scheduled"])
     where = " or ".join(nets + chans)
     return JSONResponse({
         "ok": True, "ce_rule": True,
-        "message": (f"CouchElephant is following {label}, only from {where}. "
-                    f"{made} upcoming airing(s) scheduled."),
+        "message": (f"CouchElephant is following {label}"
+                    + (f", only from {where}" if where else "")
+                    + (" and records it itself" if who == "couchelephant" else "")
+                    + f". {made} upcoming airing(s) scheduled."),
     })
+
+
+def _record_ourselves(row, prefs):
+    """One broadcast, recorded by CouchElephant. Answers the reply to send."""
+    if recorder_off():
+        return recorder_off()
+    try:
+        # Asked now, so an ATSC 3.0 or encrypted channel is refused at the
+        # booking and not at kickoff.
+        tuner.stream_url(row["channel_vcn"])
+    except tuner.TunerError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    held = passes.already_handled(row["program_guid"])
+    if held and not recorder.booked(row):
+        # Plex has it. Two recordings of one broadcast is two tuners for nothing.
+        return JSONResponse({"ok": False, "error":
+                             f"This is already set to record: {held}. Cancel that "
+                             "first to record it with CouchElephant."}, status_code=409)
+    lead, trail = passes.padding(prefs)
+    recorder.book(row, "manual", trail_minutes=trail, lead_minutes=lead)
+    return JSONResponse({"ok": True, "recorder": "couchelephant", "message":
+                         "CouchElephant will record this. You can watch it from "
+                         "the start while it records."})
 
 
 @router.post("/api/record")
 async def api_record(airing_id: str = Form(...), template: int = Form(0),
                      settings: str = Form(""), networks: str = Form(""),
-                     channels: str = Form("")):
+                     channels: str = Form(""), recorder_choice: str = Form("",
+                                                                           alias="recorder")):
     """Schedule this broadcast with the options the user chose.
 
     A source limit across several networks or channels is something Plex cannot
@@ -364,12 +420,18 @@ async def api_record(airing_id: str = Form(...), template: int = Form(0),
             prefs = dict(db.unjs(settings, {}) or {})
             prefs = {k: v for k, v in prefs.items() if v is not None}
 
-            if (nets or chans) and not one_shot:
+            who = _who_records(recorder_choice)
+            if who == "couchelephant" and recorder_off():
+                return recorder_off()
+            if who == "couchelephant" and one_shot:
+                return await asyncio.to_thread(_record_ourselves, row, prefs)
+            if (nets or chans or who == "couchelephant") and not one_shot:
                 # The settings the user just filled in belong to the pass too,
                 # or padding and quality are silently lost by choosing a
                 # source limit.
-                return await asyncio.to_thread(_make_ce_rule, row, chosen, nets,
-                                               chans, prefs)
+                return await asyncio.to_thread(
+                    _make_ce_rule, row, chosen, nets, chans, prefs,
+                    who if who == "couchelephant" else None)
 
             # oneShot is never shown, and it is what separates one game from
             # every future airing of the same programme. It follows the template.
@@ -386,6 +448,14 @@ async def api_record(airing_id: str = Form(...), template: int = Form(0),
 @router.post("/api/record/cancel")
 async def api_record_cancel(airing_id: str = Form(...)):
     """Undo a recording this app scheduled."""
+    ours = db.one("SELECT * FROM recordings WHERE airing_id = ? AND kind = 'recording' "
+                  "AND state IN ('scheduled', 'recording')", (airing_id,))
+    if ours:
+        running = ours["state"] == "recording"
+        await asyncio.to_thread(recorder.cancel, ours["id"])
+        return JSONResponse({"ok": True, "message":
+                             "Stopped, and what was recorded so far is removed."
+                             if running else "Recording cancelled."})
     mine = db.one("SELECT * FROM our_grabs WHERE airing_id = ?", (airing_id,))
     if not mine:
         return JSONResponse({"ok": False, "error": "CouchElephant did not schedule this."},
