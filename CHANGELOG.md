@@ -19,6 +19,13 @@
 
 ### Fixed
 
+- **Apple TV: the tab bar could not be reached again from Home.** With
+  nothing in "Live now", scrolling down left nothing above "Recent
+  recordings" to move up to. An empty shelf's sentence can now hold focus.
+- **Apple TV: the Guide tab jumped back to Home the first time.** Nothing could
+  hold focus while the guide loaded, so the television moved focus back to
+  the first tab. The guide now starts loading when the app opens, and every
+  loading screen holds focus with a spinner and a sentence.
 - **The iPhone guide showed no channel logos.** A picture with an empty
   placeholder made no view at all, so it never loaded. The Apple TV channel
   page had the same fault.
