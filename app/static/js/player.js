@@ -6,6 +6,31 @@
    channel, all through the three calls at the bottom. */
 (function () {
   var el = null, video = null, msg = null, hls = null, now = null, beat = null;
+  var onNow = null, beat_n = 0;
+  var CC_KEY = 'ce.captions';
+
+  // Captions on or off is kept in this browser, so the next video starts the
+  // way the last one was left. Storage can be missing; then they start off.
+  function captionsWanted() {
+    try { return localStorage.getItem(CC_KEY) === 'on'; } catch (e) { return false; }
+  }
+  function keepCaptions(on) {
+    try { localStorage.setItem(CC_KEY, on ? 'on' : 'off'); } catch (e) {}
+  }
+  function captionTracks() {
+    return Array.prototype.filter.call(video.textTracks, function (t) {
+      return t.kind === 'captions' || t.kind === 'subtitles';
+    });
+  }
+  function showCaptions(on) {
+    // Each video adds its own track and the old ones stay on the element, so
+    // only the newest is the one with captions in it.
+    var all = captionTracks();
+    all.forEach(function (t, i) { t.mode = on && i === all.length - 1 ? 'showing' : 'hidden'; });
+    var b = el.querySelector('#tvpcc');
+    b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    b.hidden = !captionTracks().length;
+  }
 
   function build() {
     if (el) return;
@@ -14,10 +39,19 @@
     el.hidden = true;
     el.innerHTML =
       '<div class="tvpbar">' +
-        '<div class="tvptitle"><b id="tvpt"></b><span class="dim" id="tvps"></span></div>' +
+        '<img class="tvplogo" id="tvplogo" alt="" hidden>' +
+        '<span class="tvpnum" id="tvpnum"></span>' +
+        '<div class="tvptitle"><b id="tvpt"></b></div>' +
+        '<button type="button" id="tvpinfo" class="tvpinfo" aria-label="About this programme"' +
+          ' aria-expanded="false">i</button>' +
+        '<button type="button" id="tvpcc" aria-pressed="false" hidden' +
+          ' aria-label="Captions">CC</button>' +
         '<button type="button" id="tvpstart">From the start</button>' +
         '<button type="button" id="tvplive" class="tvlivebtn">Live</button>' +
         '<button type="button" id="tvpclose" aria-label="Close the player">Close</button>' +
+      '</div>' +
+      '<div class="tvpabout" id="tvpabout" hidden>' +
+        '<div class="tvpsub dim" id="tvps"></div><p id="tvpdesc"></p>' +
       '</div>' +
       '<video id="tvvideo" controls playsinline></video>' +
       '<div class="tvpmsg" id="tvpmsg" hidden></div>';
@@ -25,6 +59,25 @@
     video = el.querySelector('#tvvideo');
     msg = el.querySelector('#tvpmsg');
     el.querySelector('#tvpclose').addEventListener('click', close);
+    el.querySelector('#tvpcc').addEventListener('click', function () {
+      var on = this.getAttribute('aria-pressed') !== 'true';
+      keepCaptions(on);
+      showCaptions(on);
+    });
+    el.querySelector('#tvpinfo').addEventListener('click', function () {
+      var box = el.querySelector('#tvpabout');
+      box.hidden = !box.hidden;
+      this.setAttribute('aria-expanded', box.hidden ? 'false' : 'true');
+      if (!box.hidden) whatIsOn();
+    });
+    // A track appears once the player has found captions in the video. It is
+    // set the way this browser last left captions.
+    video.textTracks.addEventListener('addtrack', function () {
+      setTimeout(function () { showCaptions(captionsWanted()); }, 0);
+    });
+    // A second video on the same page reuses the track it already has, which
+    // adds nothing, so the setting is laid on again once it plays.
+    video.addEventListener('playing', function () { showCaptions(captionsWanted()); });
     el.querySelector('#tvpstart').addEventListener('click', function () {
       video.currentTime = 0; video.play().catch(function () {});
     });
@@ -38,6 +91,30 @@
   }
 
   function say(text) { msg.hidden = !text; msg.textContent = text || ''; }
+
+  // The channel, its logo and the programme on screen. A live channel moves on
+  // to the next programme while it plays, so this is asked again now and then.
+  function header(channel, title) {
+    var logo = el.querySelector('#tvplogo');
+    logo.hidden = !channel || !channel.logo;
+    if (channel && channel.logo) logo.src = channel.logo;
+    el.querySelector('#tvpnum').textContent = channel ? channel.number : '';
+    el.querySelector('#tvpt').textContent = title || '';
+  }
+
+  function whatIsOn() {
+    if (!now || !now.id) return;
+    var asked = now.id;
+    fetch('/api/tv/recordings/' + asked + '/now?seconds=' + (video.currentTime || 0))
+      .then(CE.readJson).then(function (d) {
+        if (!d.ok || !now || now.id !== asked) return;
+        onNow = d.program;
+        header(onNow.channel, onNow.title);
+        el.querySelector('#tvps').textContent = onNow.subtitle || '';
+        el.querySelector('#tvpdesc').textContent =
+          onNow.summary || 'The guide has no description for this programme.';
+      }).catch(function () {});
+  }
 
   function liveEdge() {
     if (hls && hls.liveSyncPosition) return hls.liveSyncPosition;
@@ -59,8 +136,9 @@
 
   function wait(title, text) {
     build();
-    el.querySelector('#tvpt').textContent = title;
+    header(null, title);
     el.querySelector('#tvps').textContent = '';
+    el.querySelector('#tvpdesc').textContent = '';
     el.querySelector('#tvplive').hidden = true;
     el.querySelector('#tvpstart').hidden = true;
     el.hidden = false;
@@ -71,8 +149,10 @@
   function open(r, at) {
     build();
     now = r;
-    el.querySelector('#tvpt').textContent = r.title;
-    el.querySelector('#tvps').textContent = r.subtitle ? ' ' + r.subtitle : '';
+    header(r.channel, r.title);
+    el.querySelector('#tvps').textContent = r.subtitle || '';
+    el.querySelector('#tvpdesc').textContent = '';
+    el.querySelector('#tvpcc').hidden = true;
     el.querySelector('#tvplive').hidden = !!r.complete;
     el.querySelector('#tvpstart').hidden = r.kind === 'live';
     el.hidden = false;
@@ -101,7 +181,11 @@
     }
     video.play().catch(function () {});
     report();
-    beat = setInterval(report, 10000);
+    whatIsOn();
+    beat = setInterval(function () {
+      report();
+      if (!(beat_n = (beat_n + 1) % 6)) whatIsOn();   // once a minute
+    }, 10000);
   }
 
   function close() {
@@ -110,7 +194,9 @@
     if (hls) { hls.destroy(); hls = null; }
     video.pause(); video.removeAttribute('src'); video.load();
     el.hidden = true;
-    now = null;
+    el.querySelector('#tvpabout').hidden = true;
+    el.querySelector('#tvpinfo').setAttribute('aria-expanded', 'false');
+    now = null; onNow = null;
     if (CE.Player.onClose) CE.Player.onClose();
   }
 

@@ -58,7 +58,8 @@ world rather than creative work.
 
 ## hls.js
 
-`app/static/js/vendor/hls.light.min.js` is hls.js 1.5.17, the light build,
+`app/static/js/vendor/hls.min.js` is hls.js 1.5.17, the full build,
 unmodified. It plays the viewing copy of a recording in browsers that do not
-play HLS on their own. Copyright (c) 2017 Dailymotion, licensed under the
+play HLS on their own. The full build, because the light one leaves out the
+broadcast captions. Copyright (c) 2017 Dailymotion, licensed under the
 Apache License 2.0: https://github.com/video-dev/hls.js/blob/master/LICENSE

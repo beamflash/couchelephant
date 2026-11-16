@@ -213,7 +213,8 @@ def recording_json(request: Request, rec) -> dict:
         "complete": view["complete"],
         "position": round(rec["position"] or 0, 1),
         "playable": view["segments"] > 0 or state in ("in_plex",),
-        "playlist": f"{_base(request)}/hls/{rec['uid']}/index.m3u8",
+        # The master playlist, which tells a player the captions are there.
+        "playlist": f"{_base(request)}/hls/{rec['uid']}/master.m3u8",
         "error": rec["error"] if state == "failed" else None,
         # What a list of recordings sorts and filters by.
         "group": rec["show_title"] or rec["title"] or "",
@@ -362,6 +363,46 @@ def recording(request: Request, rec_id: int):
     if rec["state"] in ("finished", "moving", "in_plex"):
         recorder.ensure_view(rec, rec["plex_path"] if rec["state"] == "in_plex" else None)
     return {"ok": True, "recording": recording_json(request, rec)}
+
+
+@router.get("/api/tv/recordings/{rec_id}/now")
+def recording_now(request: Request, rec_id: int, seconds: float = 0):
+    """What is on the screen at this point of a recording or a live channel:
+    the guide's programme on that channel at that moment. A live channel moves
+    on to the next programme while it plays, so the player asks each time."""
+    rec = recorder.get(rec_id)
+    if not rec:
+        return JSONResponse({"ok": False, "error": "That recording is gone."},
+                            status_code=404)
+    start = rec["started_at"] or rec["starts_at"] or rec["begins_at"] or int(time.time())
+    at = int(start + max(0.0, seconds))
+    a = db.one(
+        """SELECT a.begins_at, a.ends_at, a.program_guid, p.title, p.grandparent_title,
+                  p.summary, p.section, p.season, p.episode, p.year, p.content_rating
+           FROM airings a JOIN programs p ON p.guid = a.program_guid
+           WHERE a.channel_vcn = ? AND a.begins_at <= ? AND a.ends_at > ?
+           ORDER BY a.begins_at DESC LIMIT 1""", (rec["channel_vcn"], at, at))
+    # In the padding before or after a recording this finds the neighbour,
+    # which is what is on screen then.
+    if a:
+        big, small = _names(a["grandparent_title"], a["title"], a["section"] == "sports")
+        prog = {"title": big, "subtitle": small, "summary": a["summary"] or "",
+                "begins_at": a["begins_at"], "ends_at": a["ends_at"],
+                "season": a["season"], "episode": a["episode"], "year": a["year"],
+                "rating": a["content_rating"] or ""}
+    else:
+        # The guide has forgotten it, which it does once a programme has
+        # aired. The recording kept its own name and description.
+        big, small = _names(rec["show_title"], rec["title"], rec["section"] == "sports")
+        p = db.one("SELECT summary, content_rating FROM programs WHERE guid = ?",
+                   (rec["program_guid"],)) if rec["program_guid"] else None
+        prog = {"title": big, "subtitle": small,
+                "summary": rec["summary"] or (p["summary"] if p else "") or "",
+                "begins_at": rec["begins_at"], "ends_at": rec["ends_at"],
+                "season": rec["season"], "episode": rec["episode"], "year": rec["year"],
+                "rating": (p["content_rating"] if p else "") or ""}
+    prog["channel"] = _channel(request, rec["channel_vcn"], rec["channel_title"])
+    return {"ok": True, "program": prog}
 
 
 @router.post("/api/tv/recordings/{rec_id}/position")
@@ -802,6 +843,22 @@ def live_keepalive(rec_id: int):
 
 
 # ---------- the video ----------
+
+@router.get("/hls/{uid}/master.m3u8")
+def master_playlist(uid: str, start: str = ""):
+    """One picture and the broadcast's captions, CC1, inside it. Without this
+    line Apple's player never offers captions, even though they are there."""
+    if not _UID.match(uid) or not os.path.exists(recorder.playlist_path(uid)):
+        return Response(status_code=404)
+    variant = "index.m3u8" + ("?start=0" if start == "0" else "")
+    text = ("#EXTM3U\n#EXT-X-VERSION:6\n#EXT-X-INDEPENDENT-SEGMENTS\n"
+            '#EXT-X-MEDIA:TYPE=CLOSED-CAPTIONS,GROUP-ID="cc",NAME="English",'
+            'LANGUAGE="en",INSTREAM-ID="CC1",DEFAULT=NO,AUTOSELECT=YES\n'
+            '#EXT-X-STREAM-INF:BANDWIDTH=8000000,CLOSED-CAPTIONS="cc"\n'
+            f"{variant}\n")
+    return Response(text, media_type="application/vnd.apple.mpegurl",
+                    headers={"Cache-Control": "no-store"})
+
 
 @router.get("/hls/{uid}/index.m3u8")
 def playlist(uid: str, start: str = ""):

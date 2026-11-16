@@ -1,5 +1,40 @@
 # Changelog
 
+## 1.5.12 - 2026-11-16
+
+### Added
+
+- **Captions.** The broadcast's own closed captions come through to every
+  player. A captions button turns them on and off, in the web player, on the
+  Apple TV (in the player's bar) and on the iPhone. Each device keeps the last
+  choice for the next video. The playlist a player opens is now a master
+  playlist that names the captions (CC1), which is what Apple's player needs
+  before it offers them.
+- **What is on, in the player.** The Apple TV player shows the channel's logo,
+  its number and the programme on screen whenever its bar is up. An **Info**
+  button opens the guide's description. A live channel follows the guide into
+  the next programme while it plays. The web and iPhone players have the same
+  "i". A recording keeps its description from the moment it was booked, since
+  the guide forgets a programme once it has aired.
+
+### Fixed
+
+- **The iPhone guide showed no channel logos.** A picture with an empty
+  placeholder made no view at all, so it never loaded. The Apple TV channel
+  page had the same fault.
+- **The iPhone player's buttons stayed on screen the whole time.** They now
+  come and go with the player's own controls, and stay while paused. The extra
+  close button is gone, since the player's controls have one.
+- **Captions came out with every letter twice on hardware encoding.** Field
+  rate makes two pictures from every interlaced one and both carried the same
+  captions. The second of each pair now has them removed. Recordings made
+  before this keep the doubled captions.
+
+### Changed
+
+- The web app ships the full hls.js build instead of the light one, which has
+  no caption support.
+
 ## 1.5.11 - 2026-11-16
 
 ### Changed

@@ -583,6 +583,8 @@ MIGRATIONS = [
     # expectation carries the matchup, which is what the schedule shows in
     # place of the guide's generic title. See `expectations.stand_in`.
     ("our_grabs", "expectation_id", "INTEGER"),
+    # The programme's description, kept like its name: the guide forgets it.
+    ("recordings", "summary", "TEXT"),
 ]
 
 

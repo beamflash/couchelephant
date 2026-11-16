@@ -98,7 +98,18 @@ def test_home_lists_what_is_recording_with_a_playlist_that_plays(client, tuner):
     assert (card["title"], card["subtitle"]) == ("Chiefs at Broncos", "NFL Football")
     assert card["playable"] is True and card["complete"] is False
 
-    path = card["playlist"].replace("http://testserver", "")
+    master = card["playlist"].replace("http://testserver", "")
+    assert master.endswith("/master.m3u8")
+    # The master playlist names the captions, or Apple's player never offers them.
+    m = client.get(master)
+    assert m.status_code == 200 and m.headers["cache-control"] == "no-store"
+    assert 'INSTREAM-ID="CC1"' in m.text and 'CLOSED-CAPTIONS="cc"' in m.text
+    assert m.text.rstrip().splitlines()[-1] == "index.m3u8"
+    # "From the beginning" is carried through to the playlist it points at.
+    assert client.get(master + "?start=0").text.rstrip().splitlines()[-1] \
+        == "index.m3u8?start=0"
+
+    path = master.replace("master.m3u8", "index.m3u8")
     pl = client.get(path)
     assert pl.status_code == 200
     assert pl.headers["cache-control"] == "no-store", "it changes while it records"
@@ -130,6 +141,43 @@ def test_the_video_paths_serve_nothing_but_the_viewing_copy(client, tuner):
     assert client.get(f"/hls/{rec['uid']}/ffmpeg.log").status_code == 404
     assert client.get("/hls/../index.m3u8").status_code == 404
     assert client.get("/hls/" + "z" * 32 + "/index.m3u8").status_code == 404
+    assert client.get("/hls/" + "z" * 32 + "/master.m3u8").status_code == 404
+
+
+def test_what_is_on_now_follows_a_live_channel_into_the_next_programme(client, tuner):
+    now = int(time.time())
+    with db.tx() as c:
+        for guid, title, summary, begins in (("p1", "First Show", "One.", now - 600),
+                                             ("p2", "Second Show", "Two.", now + 600)):
+            c.execute("INSERT INTO programs (guid, title, summary, type) "
+                      "VALUES (?, ?, ?, 'episode')", (guid, title, summary))
+            c.execute("INSERT INTO airings (id, program_guid, channel_vcn, channel_title, "
+                      "begins_at, ends_at) VALUES (?, ?, '7.1', 'KTKA', ?, ?)",
+                      ("air-" + guid, guid, begins, begins + 1200))
+        cur = c.execute("INSERT INTO recordings (uid, kind, state, channel_vcn, "
+                        "channel_title, started_at) VALUES (?, 'live', 'recording', "
+                        "'7.1', 'KTKA', ?)", ("a" * 32, now))
+        rec_id = cur.lastrowid
+    d = client.get(f"/api/tv/recordings/{rec_id}/now", params={"seconds": 0}).json()
+    assert (d["program"]["title"], d["program"]["summary"]) == ("First Show", "One.")
+    assert d["program"]["channel"]["number"] == "7.1"
+    later = client.get(f"/api/tv/recordings/{rec_id}/now", params={"seconds": 900}).json()
+    assert later["program"]["title"] == "Second Show"
+
+
+def test_a_recording_the_guide_forgot_keeps_its_own_description(client, tuner):
+    now = int(time.time())
+    with db.tx() as c:
+        cur = c.execute("INSERT INTO recordings (uid, kind, state, title, show_title, "
+                        "summary, channel_vcn, channel_title, begins_at, ends_at, "
+                        "started_at) VALUES (?, 'recording', 'finished', 'Pilot', "
+                        "'The Show', 'Kept at booking.', '9.1', 'KMBC', ?, ?, ?)",
+                        ("b" * 32, now - 9000, now - 7200, now - 9000))
+        rec_id = cur.lastrowid
+    d = client.get(f"/api/tv/recordings/{rec_id}/now", params={"seconds": 60}).json()
+    assert d["program"]["title"] == "The Show"
+    assert d["program"]["summary"] == "Kept at booking."
+    assert client.get("/api/tv/recordings/999999/now").status_code == 404
 
 
 def test_a_position_is_kept_and_counts_as_watching(client, tuner):

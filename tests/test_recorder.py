@@ -428,12 +428,45 @@ def test_a_show_plex_already_has_keeps_its_folder(tmp_path):
 def test_the_hardware_probe_asks_for_exactly_what_a_conversion_asks_for():
     """A probe that passes on easier settings than the real job is a lie. On a
     live install it passed, and every recording then failed to convert."""
-    args = recorder.convert_args("vaapi", "/x")
-    assert recorder.VAAPI_FILTER in args
-    for word in recorder.VAAPI_ENCODE:
-        assert word in args
-    # Constant quality. The free Intel driver refuses a bitrate target.
-    assert "-b:v" not in args and "-maxrate" not in args
+    for laced in (False, True):
+        args = recorder.convert_args("vaapi", "/x", laced)
+        for word in recorder.VAAPI_ENCODE:
+            assert word in args
+        # Constant quality. The free Intel driver refuses a bitrate target.
+        assert "-b:v" not in args and "-maxrate" not in args
+    assert recorder.VAAPI_FILTER in recorder.convert_args("vaapi", "/x", False)
+    # The probe runs the harder of the two, the graph that keeps captions single.
+    assert recorder.VAAPI_FILTER in recorder.VAAPI_CAPTIONS_ONCE
+
+
+def test_an_interlaced_channel_on_hardware_gets_its_captions_once():
+    """Field rate made two pictures carrying the same captions, and every
+    letter came out twice. The second of each pair has them taken off."""
+    args = recorder.convert_args("vaapi", "/x", True)
+    graph = args[args.index("-filter_complex") + 1]
+    assert graph == recorder.VAAPI_CAPTIONS_ONCE
+    assert "sidedata=mode=delete:type=A53_CC" in graph
+    assert args[args.index("[v]") - 1] == "-map"
+    # Without it HLS output ran at 25 pictures a second (found on a live channel).
+    assert args[args.index("-fps_mode:v") + 1] == "passthrough"
+    # A progressive channel is one picture each, and keeps every caption.
+    assert "-filter_complex" not in recorder.convert_args("vaapi", "/x", False)
+    assert "-filter_complex" not in recorder.convert_args("software", "/x", True)
+
+
+def test_the_field_order_is_read_the_way_ffprobe_really_prints_it():
+    """A live install printed "tt," twice, and a strict match took it for
+    progressive, so captions stayed doubled."""
+    assert recorder.field_order_interlaced("tt,\n\ntt,\n")
+    assert recorder.field_order_interlaced("bb\n")
+    assert not recorder.field_order_interlaced("progressive\n")
+    assert not recorder.field_order_interlaced("")
+
+
+def test_a_broadcast_ffprobe_cannot_read_counts_as_progressive(tmp_path, monkeypatch):
+    monkeypatch.setattr(recorder, "FFPROBE", "/nonexistent/ffprobe")
+    (tmp_path / "b.ts").write_bytes(b"x" * 10)
+    assert recorder.interlaced(str(tmp_path / "b.ts")) is False
 
 
 def test_hardware_that_fails_mid_recording_gives_way_to_software(tuner, monkeypatch, caplog):

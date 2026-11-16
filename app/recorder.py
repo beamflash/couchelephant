@@ -119,6 +119,20 @@ _vaapi = None
 # not ask for what the conversion asked for. Both now use these same lines.
 VAAPI_FILTER = "format=nv12,hwupload,deinterlace_vaapi=rate=field:auto=1"
 VAAPI_ENCODE = ["-c:v", "h264_vaapi", "-rc_mode", "CQP", "-qp", "24"]
+# Field rate makes two pictures from every interlaced one, and both carry that
+# picture's captions, so every letter came out twice ("GOGOINING"). The second
+# picture of each pair has its captions taken off. Only for an interlaced
+# channel: a progressive one stays one picture each, and this would throw away
+# half of its real captions.
+VAAPI_CAPTIONS_ONCE = (
+    "[0:v]" + VAAPI_FILTER + ",split[x][y];"
+    "[x]select=not(mod(n\\,2))[first];"
+    "[y]select=mod(n\\,2),sidedata=mode=delete:type=A53_CC[second];"
+    "[first][second]interleave[v]")
+FFPROBE = os.environ.get("COUCHELEPHANT_FFPROBE", "ffprobe")
+# How much of the broadcast to have before asking whether it is interlaced.
+PROBE_BYTES = 1024 * 1024
+PROBE_WAIT_SECONDS = 5
 
 
 def _vaapi_works() -> bool:
@@ -132,7 +146,8 @@ def _vaapi_works() -> bool:
                     [FFMPEG, "-hide_banner", "-loglevel", "error",
                      "-vaapi_device", VAAPI_DEVICE,
                      "-f", "lavfi", "-i", "testsrc=size=1280x720:rate=30:duration=1",
-                     "-vf", VAAPI_FILTER, *VAAPI_ENCODE, "-f", "null", "-"],
+                     "-filter_complex", VAAPI_CAPTIONS_ONCE, "-map", "[v]",
+                     *VAAPI_ENCODE, "-f", "null", "-"],
                     capture_output=True, timeout=30)
                 _vaapi = r.returncode == 0
             except (OSError, subprocess.SubprocessError):
@@ -148,23 +163,51 @@ def encoder() -> str:
     return "vaapi" if _vaapi_works() else "software"
 
 
-def convert_args(enc: str, out_dir: str) -> list[str]:
+def interlaced(path: str) -> bool:
+    """Is this broadcast interlaced, asked of its first megabyte. False when
+    ffprobe cannot say, which only costs doubled captions, never the video."""
+    try:
+        r = subprocess.run(
+            [FFPROBE, "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=field_order", "-of", "default=nw=1:nk=1", path],
+            capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return field_order_interlaced(r.stdout)
+
+
+def field_order_interlaced(said: str) -> bool:
+    """ffprobe's answer, which can repeat itself and carry stray commas."""
+    first = next((w.strip(" ,") for w in said.splitlines() if w.strip(" ,")), "")
+    return first in ("tt", "bb", "tb", "bt")
+
+
+def convert_args(enc: str, out_dir: str, interlaced: bool = False) -> list[str]:
     """The ffmpeg command that turns a broadcast on stdin into the viewing copy.
 
     A keyframe is forced every segment length, by time and not by frame count,
     so a 30 and a 60 frame channel both cut into segments of the same length.
+    The broadcast's captions ride inside the video and come through the
+    encoder, so a player can turn them on.
     """
     keyframes = f"expr:gte(t,n_forced*{SEGMENT_SECONDS})"
     args = [FFMPEG, "-hide_banner", "-loglevel", "error", "-y"]
     if enc == "vaapi":
         args += ["-vaapi_device", VAAPI_DEVICE]
-    args += ["-fflags", "+genpts+discardcorrupt", "-i", "pipe:0",
-             "-map", "0:v:0", "-map", "0:a:0"]
-    if enc == "vaapi":
+    args += ["-fflags", "+genpts+discardcorrupt", "-i", "pipe:0"]
+    if enc == "vaapi" and interlaced:
         # Decoded on the CPU, which MPEG-2 barely notices, and encoded on the
         # GPU. Field rate, so 1080i sport keeps all 60 pictures a second.
-        args += ["-vf", VAAPI_FILTER, *VAAPI_ENCODE]
+        # The split and interleave lose the frame rate, and HLS output then
+        # falls back to 25 a second and drops pictures. Passthrough keeps
+        # every one, at the 59.94 the deinterlacer made.
+        args += ["-filter_complex", VAAPI_CAPTIONS_ONCE,
+                 "-map", "[v]", "-map", "0:a:0", "-fps_mode:v", "passthrough",
+                 *VAAPI_ENCODE]
+    elif enc == "vaapi":
+        args += ["-map", "0:v:0", "-map", "0:a:0", "-vf", VAAPI_FILTER, *VAAPI_ENCODE]
     else:
+        args += ["-map", "0:v:0", "-map", "0:a:0"]
         # Frame rate, not field rate: 1080p60 in software is more than a small
         # machine can make as fast as it arrives.
         args += ["-vf", "bwdif=mode=send_frame:deint=interlaced",
@@ -252,19 +295,35 @@ class Converter:
         # or the player stalls, and starting over cannot be wrong.
         shutil.rmtree(self.out_dir, ignore_errors=True)
         os.makedirs(self.out_dir, exist_ok=True)
-        log = open(os.path.join(self.out_dir, "ffmpeg.log"), "wb")
-        self.proc = subprocess.Popen(convert_args(self.enc, self.out_dir),
-                                     stdin=subprocess.PIPE, stdout=log, stderr=log)
-        log.close()
         self._thread.start()
 
+    def _launch(self) -> bool:
+        """Start ffmpeg once there is enough broadcast to know its shape."""
+        laced = False
+        if self.enc == "vaapi":
+            # Only the hardware path cares, and it waits a moment at most.
+            until = time.time() + PROBE_WAIT_SECONDS
+            while (os.path.getsize(self.src) < PROBE_BYTES and self.growing()
+                   and time.time() < until and not self._stop):
+                time.sleep(0.2)
+            laced = interlaced(self.src)
+        if self._stop:
+            return False
+        log = open(os.path.join(self.out_dir, "ffmpeg.log"), "wb")
+        self.proc = subprocess.Popen(convert_args(self.enc, self.out_dir, laced),
+                                     stdin=subprocess.PIPE, stdout=log, stderr=log)
+        log.close()
+        return True
+
     def _feed(self):
+        while not os.path.exists(self.src):
+            if self._stop or not self.growing():
+                return
+            time.sleep(0.2)
+        if not self._launch():
+            return
         proc = self.proc
         try:
-            while not os.path.exists(self.src):
-                if self._stop or not self.growing():
-                    return
-                time.sleep(0.2)
             with open(self.src, "rb") as f:
                 while not self._stop:
                     chunk = f.read(256 * 1024)
@@ -422,22 +481,23 @@ def book(airing, source: str = "manual", pass_id: int | None = None,
         return existing["id"]
     trail = pad_seconds("trail") if trail_minutes is None else trail_minutes * 60
     lead = pad_seconds("lead") if lead_minutes is None else lead_minutes * 60
-    prog = db.one("SELECT type, season, episode, year, section FROM programs WHERE guid = ?",
-                  (airing["program_guid"],))
+    prog = db.one("SELECT type, season, episode, year, section, summary FROM programs "
+                  "WHERE guid = ?", (airing["program_guid"],))
     with db.tx() as c:
         cur = c.execute(
             """INSERT INTO recordings
                (uid, kind, state, airing_id, program_guid, title, show_title,
-                ptype, season, episode, year, section,
+                ptype, season, episode, year, section, summary,
                 channel_vcn, channel_title, begins_at, ends_at, starts_at,
                 stops_at, source, pass_id, pass_uid, created_at, updated_at)
-               VALUES (?, 'recording', 'scheduled', ?, ?, ?, ?, ?, ?, ?, ?, ?,
+               VALUES (?, 'recording', 'scheduled', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (uuid.uuid4().hex, airing["id"], airing["program_guid"],
              airing["title"], show,
              prog["type"] if prog else None, prog["season"] if prog else None,
              prog["episode"] if prog else None, prog["year"] if prog else None,
              prog["section"] if prog else None,
+             prog["summary"] if prog else None,
              airing["channel_vcn"],
              airing["channel_title"], airing["begins_at"], airing["ends_at"],
              airing["begins_at"] - lead,
