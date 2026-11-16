@@ -105,13 +105,15 @@ play. So each recording has two files: the broadcast, untouched, which is what
 Plex receives, and a copy made for watching (H.264, stereo). The copy is kept
 for two days after Plex has the recording and is made again on demand.
 
-### The Apple TV app
+### The Apple TV and iPhone apps
 
-`clients/appletv` in the repository is an Apple TV app that plays what
-CouchElephant records and tunes live channels. It is built from source with
-Xcode; see its README. The first run asks for the address of your
-CouchElephant. With sign-in on it shows a six-letter code, and you type that
-code under **Settings, Recording, Televisions** to let that television in.
+`clients/apple` in the repository holds an Apple TV app and an iPhone app.
+Both play what CouchElephant records, tune live channels, show the guide, and
+record from it. They are built from source with Xcode; see the README there.
+The first run asks for the address of your CouchElephant. With sign-in on the
+app shows a six-letter code, and you type that code under **Settings,
+Recording, Televisions** to let that device in. A phone is listed there too,
+with the same per-device settings as a television.
 
 The **Live TV** tab in the web app shows the same three lists and plays in a
 browser.

@@ -204,7 +204,8 @@ administrator makes in Settings. The key is stored hashed, like a session.
 
 ## The Apple TV app
 
-SwiftUI, tvOS 17 and later, in `clients/appletv/`. It uses the system player, so
+SwiftUI, tvOS 17 and later, in `clients/apple/` (it began as
+`clients/appletv/`, and moved when the iPhone app joined it). It uses the system player, so
 the remote, scrubbing and the info panel behave like every other app on the
 box.
 

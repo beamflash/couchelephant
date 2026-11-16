@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.5.8 - 2026-11-15
+
+### Added
+
+- **An iPhone app**, next to the Apple TV app in `clients/apple`. The same
+  three tabs: Home, Guide and Recordings. It plays a recording from its start
+  while it is still recording, tunes live channels, records from the guide,
+  and edits passes. A long press opens the same menus as on the television.
+
+  It is laid out from the space it is given and has no fixed sizes, so it
+  fits a small phone, a large one, a phone on its side and a folding phone
+  open or shut. Lists go to two columns where there is room. Everything stays
+  inside the safe area, clear of the notch, the island and the home indicator.
+
+### Changed
+
+- The Apple TV app moved from `clients/appletv` to `clients/apple`, and the
+  two apps share one Xcode project and the code that talks to the server.
+- A phone shows in Settings, Recording, Televisions as "iPhone", with its own
+  Allow delete setting.
+
 ## 1.5.7 - 2026-11-15
 
 ### Changed
@@ -81,7 +102,7 @@
   browser. A recording Plex is making is listed as "Cannot play while Plex is
   recording".
 
-- **An Apple TV app**, in `clients/appletv`, built from source. The same three
+- **An Apple TV app**, in `clients/apple` (then `clients/appletv`), built from source. The same three
   lists, "Start from beginning" and "Join live" on a recording in progress,
   and live channels. With sign-in on it pairs by a six-letter code typed under
   Settings, Recording, Televisions.
