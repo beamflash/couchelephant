@@ -36,6 +36,11 @@
 <script src="/static/js/ce.js?v={{ asset_v }}"></script>
 <script src="/static/js/sources.js?v={{ asset_v }}"></script>
 <script src="/static/js/smartfilter.js?v={{ asset_v }}"></script>
+{% if recorder_info is defined and recorder_info.available %}
+{# Only where there is something to play. #}
+<script src="/static/js/vendor/hls.light.min.js?v={{ asset_v }}"></script>
+<script src="/static/js/player.js?v={{ asset_v }}"></script>
+{% endif %}
 </head>
 <body class="{% block bodyclass %}{% endblock %}">
 {# The sync icon is drawn by two different buttons now: the one that syncs,
@@ -193,18 +198,18 @@ Click to sync the guide now." aria-label="Sync the guide now">
    burst on arrival. See THIRD_PARTY.md for the attribution. #}
 <nav class="pt-nav" id="ptnav" data-tab="{{ nav or '' }}">
   <span class="pt-line" id="ptline" aria-hidden="true"></span>
-  <a class="pt-tab {{ 'active' if nav=='guide' }}" data-t="guide" href="/">Guide</a>
-  {# The tab is Schedule and the sub-tab inside it is Recordings: this section is
-     where you decide what gets recorded, and the list of bookings lives one level
-     down. The route, the nav key and the data-t stay 'recordings' so existing links
-     and bookmarks keep working. #}
-  <a class="pt-tab {{ 'active' if nav=='recordings' }}" data-t="recordings"
-     href="/recordings">Schedule</a>
-  {# Only where CouchElephant's own recorder can run. An install that has not
-     opted in has nothing to watch here, and does not get an empty page. #}
-  {% if recorder_info is defined and recorder_info.available %}
-  <a class="pt-tab {{ 'active' if nav=='live' }}" data-t="live" href="/live">Live TV</a>
+  {# The same three tabs as the Apple TV and iPhone apps, in the same order.
+     Home is what CouchElephant DVR has to show, so an install without it has
+     no Home and opens on the Guide, as it always did. #}
+  {% set dvr = recorder_info is defined and recorder_info.available %}
+  {% if dvr %}
+  <a class="pt-tab {{ 'active' if nav=='home' }}" data-t="home" href="/home">Home</a>
   {% endif %}
+  <a class="pt-tab {{ 'active' if nav=='guide' }}" data-t="guide" href="/guide">Guide</a>
+  {# The route, the nav key and the data-t have been 'recordings' all along,
+     so links and bookmarks from when this tab was called Schedule still work. #}
+  <a class="pt-tab {{ 'active' if nav=='recordings' }}" data-t="recordings"
+     href="/recordings">Recordings</a>
 </nav>
 </div>
 

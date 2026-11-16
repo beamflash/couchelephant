@@ -39,7 +39,8 @@ and each pass in `GET /api/rules` carries it.
 
 ## Television clients and live viewing
 
-What the Apple TV app and the **Live TV** page read.
+What the Apple TV and iPhone apps read, and the web app's **Home** tab and
+Recorded list.
 
 | | |
 | --- | --- |
@@ -118,8 +119,10 @@ sync fills in its games.
 
 | | |
 | --- | --- |
-| `GET /` | The guide |
-| `GET /recordings` | The schedule and the passes. Both are fetched from the API above |
+| `GET /` | The first tab: Home where CouchElephant DVR is on, the guide where it is not. With a search or a day in the address it is the guide, as it used to be |
+| `GET /home` | Home: recording now, recent recordings, on now |
+| `GET /guide` | The guide |
+| `GET /recordings` | Recordings: Scheduled, Sports pass, Season pass and Recorded. All fetched from the API above |
 | `GET /settings` | The settings window, on its own page |
 | `GET /search` | Guide search results |
 | `GET /partial/settings` | Just the settings window, for the gear to open in place |

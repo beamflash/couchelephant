@@ -3,7 +3,7 @@ from tests import fake_plex
 
 
 def _open_options(page, title="Chiefs"):
-    page.goto("/")
+    page.goto("/guide")
     page.wait_for_selector(".gprog")
     page.click(f'.gprog.live[title*="{title}"]')
     page.wait_for_selector("#ovlbox .air")
@@ -124,7 +124,7 @@ def test_cancelling_takes_it_back_out_of_plex(page):
 
 
 def test_following_a_team_from_the_panel_says_what_it_did(page):
-    page.goto("/")
+    page.goto("/guide")
     page.wait_for_selector(".gprog")
     page.click('.gprog.live[title*="Chiefs"]')
     page.wait_for_selector("#ovlbox .air")

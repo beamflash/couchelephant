@@ -1,0 +1,140 @@
+{% extends "base.html" %}{% set nav='home' %}
+{% block title %}Home - CouchElephant{% endblock %}
+
+{% block body %}
+<div class="pagehead">
+  <div>
+    <h1>Home</h1>
+    <div class="sub" style="margin:0">Everything being recorded right now, and what
+      CouchElephant has recorded. A recording CouchElephant makes plays from its
+      start while it is still being made.</div>
+  </div>
+</div>
+
+<div id="livenote" class="banner bad" hidden></div>
+
+<h2 class="tvhead">Live now</h2>
+<div class="tvrow" id="tvlive"><div class="empty tiny">Loading...</div></div>
+
+<h2 class="tvhead">Recent recordings</h2>
+<div class="tvrow" id="tvrecent"></div>
+
+<h2 class="tvhead">On now</h2>
+<div class="tvrow small" id="tvon"></div>
+
+<script>
+(function () {
+  var esc = CE.esc, fmtTime = CE.fmtTime, fmtDay = CE.fmtDay;
+  var elLive = document.getElementById('tvlive'),
+      elRecent = document.getElementById('tvrecent'),
+      elOn = document.getElementById('tvon'),
+      note = document.getElementById('livenote');
+  var cards = {};          // id -> the row a card was drawn from
+
+  function clock(s) {
+    s = Math.max(0, Math.round(s));
+    var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+    return h ? h + ' h ' + (m < 10 ? '0' : '') + m + ' min' : m + ' min';
+  }
+
+  function art(r) {
+    // The guide's own picture when it has one. A channel plate otherwise, so
+    // a card is never an empty box.
+    if (r.art) return '<div class="tvart" style="background-image:url(\'' +
+                      encodeURI(r.art).replace(/'/g, '%27') + '\')"></div>';
+    return '<div class="tvart none">' + (r.channel && r.channel.logo
+      ? '<img src="' + esc(r.channel.logo) + '" alt="">'
+      : '<span>' + esc(r.channel ? r.channel.number : '') + '</span>') + '</div>';
+  }
+
+  function badge(r) {
+    if (r.recorded_by === 'plex') return '<span class="pill plexsrc">Plex is recording</span>';
+    if (r.state === 'recording') return '<span class="pill ce">Recording</span>';
+    if (r.state === 'moving') return '<span class="pill warn">Moving to Plex</span>';
+    if (r.state === 'in_plex') return '<span class="pill plexsrc">In Plex</span>';
+    if (r.state === 'failed') return '<span class="pill bad">Did not record</span>';
+    return '';
+  }
+
+  function card(r) {
+    cards[r.id] = r;
+    var live = r.state === 'recording' && r.recorded_by !== 'plex';
+    var h = '<div class="tvcard' + (r.recorded_by === 'plex' ? ' locked' : '') + '">';
+    h += art(r) + '<div class="tvbody">';
+    h += '<div class="tvbadges">' + badge(r) + '</div>';
+    h += '<b class="tvtitle">' + esc(r.title) + '</b>';
+    if (r.subtitle) h += '<span class="dim tiny">' + esc(r.subtitle) + '</span>';
+    h += '<span class="dim tiny">' + esc(r.channel.number) + ' ' + esc(r.channel.name) +
+         (r.begins_at ? ', ' + (live ? '' : fmtDay(r.begins_at) + ' ') +
+                        fmtTime(r.begins_at) : '') + '</span>';
+    if (r.recorded_by === 'plex') {
+      h += '<div class="tvlock">' + esc(r.note) + '</div>';
+    } else if (r.state === 'failed') {
+      h += '<div class="tvlock">' + esc(r.error || 'It did not record.') + '</div>';
+    } else {
+      if (live) h += '<span class="dim tiny">' + clock(r.seconds) + ' recorded so far</span>';
+      // How far in somebody stopped, as a bar, when it is far enough to matter.
+      if (!live && r.position > 60 && r.seconds > 0) {
+        h += '<div class="tvbar"><i style="width:' +
+             Math.min(100, Math.round(100 * r.position / r.seconds)) + '%"></i></div>';
+      }
+      h += '<div class="tvbtns">';
+      if (live) {
+        h += '<button type="button" class="primary" data-play="' + r.id +
+             '" data-at="start">Start from beginning</button>' +
+             '<button type="button" data-play="' + r.id + '" data-at="live">Join live</button>';
+      } else if (r.position > 60) {
+        h += '<button type="button" class="primary" data-play="' + r.id +
+             '" data-at="resume">Resume</button>' +
+             '<button type="button" data-play="' + r.id + '" data-at="start">From the start</button>';
+      } else {
+        h += '<button type="button" class="primary" data-play="' + r.id +
+             '" data-at="start">Play</button>';
+      }
+      h += '</div>';
+    }
+    return h + '</div></div>';
+  }
+
+  function channelCard(c) {
+    return '<button type="button" class="tvchan" data-watch="' + esc(c.channel.number) + '">' +
+      (c.channel.logo ? '<img src="' + esc(c.channel.logo) + '" alt="">'
+                      : '<span class="tvnum">' + esc(c.channel.number) + '</span>') +
+      '<span class="tvchbody"><b>' + esc(c.title) + '</b>' +
+      '<span class="dim tiny">' + esc(c.channel.number) + ' ' + esc(c.channel.name) +
+      ', until ' + fmtTime(c.ends_at) + '</span></span></button>';
+  }
+
+  function draw(d) {
+    note.hidden = !d.recorder_note;
+    if (d.recorder_note) note.textContent = d.recorder_note;
+    elLive.innerHTML = d.live_now.length ? d.live_now.map(card).join('')
+      : '<div class="empty tiny">Nothing is being recorded right now.</div>';
+    elRecent.innerHTML = d.recent.length ? d.recent.map(card).join('')
+      : '<div class="empty tiny">Nothing recorded by CouchElephant yet. Choose ' +
+        '<b>Recorded by: CouchElephant</b> when you record something in the Guide.</div>';
+    elOn.innerHTML = d.on_now.length ? d.on_now.map(channelCard).join('')
+      : '<div class="empty tiny">The guide has nothing for this moment.</div>';
+  }
+
+  function load() {
+    // Not while somebody is watching: redrawing the page under the player
+    // costs nothing, but the lists behind it are not being read either.
+    return fetch('/api/tv/home').then(CE.readJson).then(function (d) {
+      if (d.ok) draw(d);
+    });
+  }
+  load();
+  setInterval(function () { if (!CE.Player.isOpen()) load(); }, 15000);
+
+  CE.Player.onClose = load;
+
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest('[data-play]');
+    if (b) { CE.Player.play(cards[b.dataset.play], b.dataset.at); return; }
+    var w = e.target.closest('[data-watch]');
+    if (w) CE.Player.watch(w.dataset.watch);
+  });
+})();
+</script>
+{% endblock %}

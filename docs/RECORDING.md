@@ -208,7 +208,7 @@ carries one choice:
 | Recorded by | What happens |
 | --- | --- |
 | Plex (default) | Plex records it, pinned by CouchElephant, exactly as before |
-| CouchElephant | CouchElephant records it from the tuner. It plays from its first second while it is still recording, on the **Live TV** page and in the Apple TV app |
+| CouchElephant | CouchElephant records it from the tuner. It plays from its first second while it is still recording, on the **Home** page and in the Apple TV app |
 
 The choice only appears where the recorder can run, which means a `/recordings`
 folder is mounted. See [Install](INSTALL.md#couchelephant-dvr).
@@ -255,7 +255,7 @@ What it does not do:
   book. Record the same station on its ordinary channel number.
 - It does not record one broadcast twice. A broadcast Plex already has is
   refused until that booking is cancelled.
-- A recording Plex is making is listed on the Live TV page for information
+- A recording Plex is making is listed on the Home tab for information
   only, as "Cannot play while Plex is recording". Plex writes it into a hidden
   folder and moves it when it ends, and CouchElephant will not read a file
   Plex is still writing.

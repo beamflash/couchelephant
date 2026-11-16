@@ -2,7 +2,7 @@
 
 
 def test_nothing_scrolls_sideways_off_the_screen(phone):
-    phone.goto("/")
+    phone.goto("/guide")
     phone.wait_for_selector(".gprog")
     over = phone.evaluate(
         "() => document.documentElement.scrollWidth - document.documentElement.clientWidth")
@@ -10,7 +10,7 @@ def test_nothing_scrolls_sideways_off_the_screen(phone):
 
 
 def test_the_tagline_gives_way_to_the_controls(phone):
-    phone.goto("/")
+    phone.goto("/guide")
     assert not phone.locator(".tagline").is_visible()
     assert phone.locator("#syncbtn").is_visible()
     assert phone.locator("#gearbtn").is_visible()
@@ -18,7 +18,7 @@ def test_the_tagline_gives_way_to_the_controls(phone):
 
 
 def test_the_tabs_still_fill_the_bar(phone):
-    phone.goto("/")
+    phone.goto("/guide")
     nav = phone.locator("#ptnav").bounding_box()
     tabs = phone.locator(".pt-tab")
     total = sum(tabs.nth(i).bounding_box()["width"] for i in range(tabs.count()))
@@ -26,7 +26,7 @@ def test_the_tabs_still_fill_the_bar(phone):
 
 
 def test_the_guide_grid_is_usable_on_a_phone(phone):
-    phone.goto("/")
+    phone.goto("/guide")
     phone.wait_for_selector(".gprog")
     assert phone.locator(".gch").count() >= 4
     box = phone.eval_on_selector("#gw", "el => ({sw: el.scrollWidth, cw: el.clientWidth})")
@@ -34,7 +34,7 @@ def test_the_guide_grid_is_usable_on_a_phone(phone):
 
 
 def test_a_programme_panel_fits_the_screen(phone):
-    phone.goto("/")
+    phone.goto("/guide")
     phone.wait_for_selector(".gprog")
     phone.tap('.gprog.live[title*="Chiefs"]')
     phone.wait_for_selector("#ovlbox .air")

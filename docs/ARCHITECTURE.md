@@ -38,7 +38,7 @@ readable by whoever inherits it.
 | `app/routes/account.py` | First run, sign in, sign out, theme |
 | `app/routes/data.py` | Export, import, backups, the backing store |
 | `app/routes/settings.py` | The Plex connection, accounts, artwork, sync, alert destinations, the recorder |
-| `app/routes/tv.py` | What a television client reads, pairing one, live viewing, the video itself, and the Live TV page |
+| `app/routes/tv.py` | What a television client reads, pairing one, live viewing, the video itself, and the Home page |
 
 `dbstore.py`, `portable.py`, `backups.py` and `backingstore.py` are explained
 in [Your data](DATA.md), including why the guide is never copied.

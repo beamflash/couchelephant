@@ -13,7 +13,13 @@ import secrets
 import time
 
 from fastapi import APIRouter, Form, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+)
 
 from .. import auth, db, handover, passes, recorder, sync, tuner
 from . import passes as pass_routes
@@ -307,10 +313,22 @@ def _on_now(request, now):
 
 # ---------- the web page ----------
 
-@router.get("/live", response_class=HTMLResponse)
-def live_page(request: Request):
-    """The same three lists the television app opens on, in a browser."""
-    return page(request, "live.html")
+@router.get("/home", response_class=HTMLResponse)
+def home_page(request: Request):
+    """The first tab: the same three lists the television app opens on.
+
+    It is what CouchElephant DVR has to show, so an install without it is sent
+    to the guide, which is its first tab.
+    """
+    if not recorder.available():
+        return RedirectResponse("/guide", status_code=303)
+    return page(request, "home.html")
+
+
+@router.get("/live")
+def live_redirect():
+    """This page was called Live TV, at this address, before it became Home."""
+    return RedirectResponse("/home", status_code=301)
 
 
 # ---------- the lists ----------

@@ -103,7 +103,7 @@ def phone(browser, base_url, synced):
 
 @pytest.fixture
 def guide(page):
-    page.goto("/")
+    page.goto("/guide")
     page.wait_for_selector(".gprog", timeout=15000)
     return page
 

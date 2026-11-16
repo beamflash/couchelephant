@@ -1,10 +1,10 @@
 {% extends "base.html" %}{% set nav='recordings' %}
-{% block title %}Schedule - CouchElephant{% endblock %}
+{% block title %}Recordings - CouchElephant{% endblock %}
 
 {% block body %}
 <div class="pagehead">
   <div>
-    <h1>Schedule</h1>
+    <h1>Recordings</h1>
     <div class="sub" style="margin:0">What your Plex server will actually record{% if recorder_info is defined and recorder_info.available %}, and what CouchElephant records itself{% endif %}.</div>
   </div>
   <button type="button" class="addbtn" id="addrule"
@@ -14,9 +14,14 @@
   </button>
 </div>
 
+{# The same lists as the Recordings tab in the apps, under the same names. #}
 <div class="subtabs">
-  <button type="button" class="subtab on" data-sub="schedule">Recordings</button>
-  <button type="button" class="subtab" data-sub="passes">Passes<span class="n" id="pcount"></span></button>
+  <button type="button" class="subtab on" data-sub="schedule">Scheduled</button>
+  <button type="button" class="subtab" data-sub="sports">Sports pass<span class="n" id="pcount-sports"></span></button>
+  <button type="button" class="subtab" data-sub="season">Season pass<span class="n" id="pcount-season"></span></button>
+  {% if recorder_info is defined and recorder_info.available %}
+  <button type="button" class="subtab" data-sub="recorded">Recorded</button>
+  {% endif %}
 </div>
 
 {# Filled from /api/expectations. Hidden until there is something in it, so a
@@ -72,28 +77,47 @@
   </div>
 </div>
 
-{# ---------------- Passes ---------------- #}
+{# ---------------- Sports pass and Season pass: one list, two views ---------------- #}
 <div data-pane="passes" hidden>
   <div class="sub">A pass keeps matching new airings on its own. Open one to see what
     it will record next, and why it picked that broadcast.</div>
   <div id="passlist"></div>
 </div>
 
+{# ---------------- Recorded ---------------- #}
+<div data-pane="recorded" hidden>
+  <div class="row" style="justify-content:space-between;margin-bottom:14px">
+    <div class="sub" style="margin:0">Everything CouchElephant DVR has recorded. It plays
+      here before, during and after its move into Plex.</div>
+    <div class="viewsw" id="recfilter">
+      <button type="button" class="on" data-cat="all">All</button>
+      <button type="button" data-cat="sports">Sports</button>
+      <button type="button" data-cat="tv">TV</button>
+      <button type="button" data-cat="movies">Movies</button>
+    </div>
+  </div>
+  <div id="reclist"></div>
+</div>
+
 <script>
 // Helpers and the kind icons are shared. See static/js/ce.js.
 var esc = CE.esc, fmtTime = CE.fmtTime, fmtDay = CE.fmtDay, KIND_ICON = CE.KIND_ICON;
 
-// ---- sub-tabs: Schedule and Passes ----
+// ---- sub-tabs: Scheduled, Sports pass, Season pass, Recorded ----
+// Sports pass and Season pass are one list seen two ways, so they share a pane.
+window.passTab = 'sports';
 (function () {
   var tabs = document.querySelectorAll('.subtab');
   if (!tabs.length) return;
   tabs.forEach(function (t) {
     t.addEventListener('click', function () {
+      var sub = t.dataset.sub, isPass = sub === 'sports' || sub === 'season';
       tabs.forEach(function (x) { x.classList.toggle('on', x === t); });
       document.querySelectorAll('[data-pane]').forEach(function (p) {
-        p.hidden = p.dataset.pane !== t.dataset.sub;
+        p.hidden = p.dataset.pane !== (isPass ? 'passes' : sub);
       });
-      if (t.dataset.sub === 'passes') window.loadPasses();
+      if (isPass) { window.passTab = sub; window.loadPasses(); }
+      if (sub === 'recorded' && window.loadRecorded) window.loadRecorded();
     });
   });
 })();
@@ -369,13 +393,23 @@ var esc = CE.esc, fmtTime = CE.fmtTime, fmtDay = CE.fmtDay, KIND_ICON = CE.KIND_
 
   window.loadPasses = function () {
     fetch('/api/rules').then(function (r) { return r.json(); }).then(function (d) {
-      var rules = d.rules || [];
-      var c = document.getElementById('pcount');
-      // Bracketed, or "Passes 1" reads as the name of a second tab.
-      if (c) c.textContent = rules.length ? '(' + rules.length + ')' : '';
+      var all = d.rules || [];
+      // A team pass is a sports pass. Everything else that keeps recording is
+      // a season pass. The same split the apps make.
+      var tabOf = function (r) {
+        return r.kind === 'team' || r.icon === 'sports' ? 'sports' : 'season';
+      };
+      ['sports', 'season'].forEach(function (t) {
+        var n = all.filter(function (r) { return tabOf(r) === t; }).length;
+        var c = document.getElementById('pcount-' + t);
+        // Bracketed, or "Sports pass 1" reads as the name of another tab.
+        if (c) c.textContent = n ? '(' + n + ')' : '';
+      });
+      var rules = all.filter(function (r) { return tabOf(r) === window.passTab; });
       if (!rules.length) {
-        wrap.innerHTML = '<div class="empty">No passes yet. Press <b>+</b> above to ' +
-          'follow a team or a programme.</div>';
+        wrap.innerHTML = '<div class="empty">' + (window.passTab === 'sports'
+          ? 'No sports pass yet. Press <b>+</b> above to follow a team.'
+          : 'No season pass yet. Press <b>+</b> above to follow a programme.') + '</div>';
         return;
       }
       var h = '';
@@ -391,6 +425,11 @@ var esc = CE.esc, fmtTime = CE.fmtTime, fmtDay = CE.fmtDay, KIND_ICON = CE.KIND_
              (where.length ? ' &middot; only on ' + esc(where.join(', ')) : '') +
              ' &middot; ' + r.booked + ' booked</span></div>';
         if (!r.enabled) h += '<span class="pill">paused</span>';
+        if (r.who === 'ce' && window.CE_RECORDER && window.CE_RECORDER.available) {
+          h += r.recorder === 'couchelephant'
+            ? '<span class="pill ce">Recorded by CouchElephant</span>'
+            : '<span class="pill plexsrc">Recorded by Plex</span>';
+        }
         h += '<div class="pacts">';
         if (r.who === 'ce') {
           h += '<button type="button" class="tiny" data-act="edit">Edit</button>' +
@@ -1148,6 +1187,124 @@ var esc = CE.esc, fmtTime = CE.fmtTime, fmtDay = CE.fmtDay, KIND_ICON = CE.KIND_
       loadTemplates();
     });
   };
+})();
+
+// ---- Recorded: what CouchElephant DVR has, by programme, A to Z ----
+(function () {
+  var wrap = document.getElementById('reclist'), bar = document.getElementById('recfilter');
+  if (!wrap) return;
+  var cat = 'all', rows = [], open = {}, canDelete = false;
+
+  function clock(s) {
+    s = Math.max(0, Math.round(s));
+    var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+    return h ? h + ' h ' + (m < 10 ? '0' : '') + m + ' min' : m + ' min';
+  }
+
+  function badge(r) {
+    if (r.state === 'recording') return '<span class="pill ce">Recording</span>';
+    if (r.state === 'moving') return '<span class="pill warn">Moving to Plex</span>';
+    if (r.state === 'in_plex') return '<span class="pill plexsrc">In Plex</span>';
+    return '';
+  }
+
+  function one(r, standsForGroup) {
+    var episode = r.title === r.group ? r.subtitle : r.title;
+    var bits = [];
+    if (standsForGroup && episode) bits.push(episode);
+    if (r.season != null && r.episode != null) {
+      bits.push('S' + ('0' + r.season).slice(-2) + 'E' + ('0' + r.episode).slice(-2));
+    }
+    bits.push(fmtDay(r.begins_at) + ' ' + fmtTime(r.begins_at));
+    bits.push(clock(r.seconds));
+    var live = r.state === 'recording';
+    var h = '<div class="recrow" data-rec="' + r.id + '"><div class="pmeta"><b>' +
+            esc(standsForGroup ? r.group : (episode || r.title)) + '</b>' +
+            '<span class="dim tiny">' + esc(bits.join(', ')) + '</span></div>' + badge(r) +
+            '<div class="pacts">';
+    if (live) {
+      h += '<button type="button" class="tiny primary" data-at="start">Start from beginning</button>' +
+           '<button type="button" class="tiny" data-at="live">Join live</button>';
+    } else if (r.position > 60) {
+      h += '<button type="button" class="tiny primary" data-at="resume">Resume</button>' +
+           '<button type="button" class="tiny" data-at="start">From the start</button>';
+    } else {
+      h += '<button type="button" class="tiny primary" data-at="start">Play</button>';
+    }
+    if (canDelete) {
+      h += '<button type="button" class="tiny danger" data-del="1">' +
+           (live ? 'Stop and delete' : 'Delete') + '</button>';
+    }
+    return h + '</div></div>';
+  }
+
+  function draw() {
+    var shown = rows.filter(function (r) { return cat === 'all' || r.category === cat; });
+    if (!shown.length) {
+      wrap.innerHTML = '<div class="empty">' + (cat === 'all'
+        ? 'Nothing recorded by CouchElephant yet. Choose <b>Recorded by: CouchElephant</b> ' +
+          'when you record something.'
+        : 'Nothing of this kind is recorded.') + '</div>';
+      return;
+    }
+    var groups = {}, names = [];
+    shown.forEach(function (r) {
+      if (!groups[r.group]) { groups[r.group] = []; names.push(r.group); }
+      groups[r.group].push(r);
+    });
+    names.sort(function (a, b) { return a.toLowerCase() < b.toLowerCase() ? -1 : 1; });
+    var h = '';
+    names.forEach(function (n) {
+      var g = groups[n];
+      if (g.length === 1) { h += one(g[0], true); return; }
+      h += '<div class="recgroup' + (open[n] ? ' open' : '') + '" data-group="' + esc(n) + '">' +
+           '<span class="chev">' + (open[n] ? '&#9662;' : '&#9656;') + '</span><b>' + esc(n) +
+           '</b><span class="dim tiny">' + g.length + ' recordings</span></div>';
+      if (open[n]) g.forEach(function (r) { h += '<div class="recin">' + one(r, false) + '</div>'; });
+    });
+    wrap.innerHTML = h;
+  }
+
+  window.loadRecorded = function () {
+    fetch('/api/tv/recordings').then(CE.readJson).then(function (d) {
+      if (!d.ok) { wrap.innerHTML = '<div class="empty">' + esc(d.error || '') + '</div>'; return; }
+      rows = d.recorded || [];
+      canDelete = !!d.can_delete;
+      draw();
+    });
+  };
+
+  bar.addEventListener('click', function (e) {
+    var b = e.target.closest('[data-cat]');
+    if (!b) return;
+    cat = b.dataset.cat;
+    bar.querySelectorAll('[data-cat]').forEach(function (x) { x.classList.toggle('on', x === b); });
+    draw();
+  });
+
+  wrap.addEventListener('click', function (e) {
+    var grp = e.target.closest('.recgroup');
+    if (grp) { open[grp.dataset.group] = !open[grp.dataset.group]; draw(); return; }
+    var rowEl = e.target.closest('[data-rec]');
+    if (!rowEl) return;
+    var r = rows.filter(function (x) { return String(x.id) === rowEl.dataset.rec; })[0];
+    if (!r) return;
+    var play = e.target.closest('[data-at]');
+    if (play && CE.Player) { CE.Player.play(r, play.dataset.at); return; }
+    if (e.target.closest('[data-del]')) {
+      var where = r.state === 'in_plex'
+        ? 'It is deleted for good, from CouchElephant and from your Plex library.'
+        : 'It is deleted for good.';
+      if (!confirm('Delete ' + (r.title || 'this recording') + '? ' + where)) return;
+      fetch('/api/tv/recordings/' + r.id + '/delete', {method: 'POST'})
+        .then(CE.readJson).then(function (j) {
+          if (!j.ok) alert(j.error);
+          window.loadRecorded();
+        });
+    }
+  });
+
+  if (window.CE && CE.Player) CE.Player.onClose = window.loadRecorded;
 })();
 </script>
 {% endblock %}

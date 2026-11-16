@@ -57,7 +57,7 @@ def test_preview_mode_says_so_at_the_top_and_disables_the_buttons(page):
     which is why pressing Record looked like it did nothing."""
     from app import db
     db.set_setting("dry_run", "1")
-    page.goto("/")
+    page.goto("/guide")
     page.wait_for_selector(".gprog")
     page.click('.gprog.live[title*="Chiefs"]')
     page.wait_for_selector("#ovlbox .air")
@@ -75,7 +75,7 @@ def test_the_panel_closes(guide):
 
 
 def test_the_search_box_opens_and_filters(page):
-    page.goto("/")
+    page.goto("/guide")
     page.wait_for_selector(".gprog")
     page.click("#sbtoggle")
     page.fill("#sbinput", "Quiz")
@@ -98,7 +98,7 @@ def test_the_clock_follows_the_viewer_not_the_author(browser, base_url, synced,
     ctx, page = _page(browser, base_url, viewport={"width": 1440, "height": 900},
                       locale=locale)
     try:
-        page.goto("/")
+        page.goto("/guide")
         page.wait_for_selector(".gtick", timeout=20000)
         ticks = [t.strip() for t in page.locator(".gtick").all_inner_texts()]
         assert ticks, "the guide drew no time axis"

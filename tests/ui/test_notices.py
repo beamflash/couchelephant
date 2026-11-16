@@ -22,7 +22,7 @@ def unwell(page):
     fake_plex.STATE.refreshed_at = int(time.time()) - 5 * DAY
     sync.full_sync()
     assert health.EPG_STALE in {n["code"] for n in health.open_notices()}
-    page.goto("/")
+    page.goto("/guide")
     page.wait_for_selector("header")
     yield page
     fake_plex.STATE.refreshed_at = None
@@ -31,7 +31,7 @@ def unwell(page):
 def test_a_healthy_server_shows_no_badge(page):
     with db.tx() as c:
         c.execute("UPDATE notices SET resolved_at = 1 WHERE resolved_at IS NULL")
-    page.goto("/")
+    page.goto("/guide")
     page.wait_for_selector("header")
     assert page.locator("#noticebtn").count() == 0
 
@@ -107,7 +107,7 @@ def test_the_badge_follows_you_between_pages(unwell):
 def test_the_badge_goes_away_once_plex_catches_up(unwell):
     fake_plex.STATE.refreshed_at = None
     sync.full_sync()
-    unwell.goto("/")
+    unwell.goto("/guide")
     unwell.wait_for_selector("header")
     assert health.EPG_STALE not in {n["code"] for n in health.open_notices()}
 
@@ -117,7 +117,7 @@ def test_the_badge_is_legible_in_light_mode_too(light_system):
     nobody sees, which is the same as no badge."""
     fake_plex.STATE.refreshed_at = int(time.time()) - 5 * DAY
     sync.full_sync()
-    light_system.goto("/")
+    light_system.goto("/guide")
     light_system.wait_for_selector("#noticebtn")
     colours = light_system.evaluate(
         """() => {
@@ -192,7 +192,7 @@ def test_a_healthy_sync_button_still_just_syncs(page):
     there is no panel, and the icon syncs in one click as it always did."""
     with db.tx() as c:
         c.execute("UPDATE notices SET resolved_at = 1 WHERE resolved_at IS NULL")
-    page.goto("/")
+    page.goto("/guide")
     page.wait_for_selector("header")
     assert page.locator("#noticemenu").count() == 0
     inside = page.evaluate(

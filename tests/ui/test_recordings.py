@@ -31,20 +31,24 @@ def _follow_the_chiefs(page):
     p.close()
 
 
-def test_there_are_two_sub_tabs_and_no_next_games_section(recordings):
+def test_the_sub_tabs_are_the_same_lists_as_the_apps(recordings):
     labels = [recordings.locator(".subtab").nth(i).inner_text().strip()
               for i in range(recordings.locator(".subtab").count())]
-    assert len(labels) == 2
-    assert labels[0] == "Recordings"
-    assert labels[1].startswith("Passes")
+    assert [x.split("(")[0].strip() for x in labels] == \
+        ["Scheduled", "Sports pass", "Season pass", "Recorded"]
     assert "Next games" not in recordings.content()
 
 
 def test_the_sub_tabs_switch_panes(recordings):
     assert recordings.locator('[data-pane="schedule"]').is_visible()
-    recordings.click('.subtab[data-sub="passes"]')
-    assert recordings.locator('[data-pane="passes"]').is_visible()
-    assert not recordings.locator('[data-pane="schedule"]').is_visible()
+    for sub_tab in ("sports", "season"):
+        recordings.click(f'.subtab[data-sub="{sub_tab}"]')
+        assert recordings.locator('[data-pane="passes"]').is_visible()
+        assert not recordings.locator('[data-pane="schedule"]').is_visible()
+    recordings.click('.subtab[data-sub="recorded"]')
+    assert recordings.locator('[data-pane="recorded"]').is_visible()
+    assert not recordings.locator('[data-pane="passes"]').is_visible()
+    recordings.wait_for_selector("#reclist .empty")
 
 
 def test_the_schedule_starts_empty_and_says_so(recordings):
@@ -87,7 +91,7 @@ def test_the_calendar_moves_month_by_month_and_comes_back(page):
 def test_a_pass_is_listed_with_its_controls(page):
     _follow_the_chiefs(page)
     page.goto("/recordings")
-    page.click('.subtab[data-sub="passes"]')
+    page.click('.subtab[data-sub="sports"]')
     page.wait_for_selector(".passrow", timeout=15000)
     row = page.locator(".passrow").first
     assert "Kansas City Chiefs" in row.inner_text()
@@ -95,13 +99,13 @@ def test_a_pass_is_listed_with_its_controls(page):
     assert row.locator('[data-act="toggle"]').count() == 1
     assert row.locator('[data-act="remove"]').count() == 1
     assert row.locator("i.own.ce").count() == 1
-    assert "1" in page.locator("#pcount").inner_text()
+    assert "1" in page.locator("#pcount-sports").inner_text()
 
 
 def test_opening_a_pass_shows_what_it_will_record_and_why(page):
     _follow_the_chiefs(page)
     page.goto("/recordings")
-    page.click('.subtab[data-sub="passes"]')
+    page.click('.subtab[data-sub="sports"]')
     page.wait_for_selector(".passrow", timeout=15000)
     page.click(".passrow .pmeta")
     page.wait_for_selector(".passdetail table", timeout=15000)
@@ -114,7 +118,7 @@ def test_opening_a_pass_shows_what_it_will_record_and_why(page):
 def test_pausing_a_pass_marks_it_paused(page):
     _follow_the_chiefs(page)
     page.goto("/recordings")
-    page.click('.subtab[data-sub="passes"]')
+    page.click('.subtab[data-sub="sports"]')
     page.wait_for_selector(".passrow", timeout=15000)
     page.click('.passrow [data-act="toggle"]')
     page.wait_for_selector(".passrow .pill", timeout=15000)
@@ -125,7 +129,7 @@ def test_pausing_a_pass_marks_it_paused(page):
 def test_removing_a_pass_empties_the_list(page):
     _follow_the_chiefs(page)
     page.goto("/recordings")
-    page.click('.subtab[data-sub="passes"]')
+    page.click('.subtab[data-sub="sports"]')
     page.wait_for_selector(".passrow", timeout=15000)
     page.click('.passrow [data-act="remove"]')
     page.wait_for_selector("#passlist .empty", timeout=15000)
@@ -193,7 +197,7 @@ def test_a_plain_plex_recording_can_be_booked_from_the_add_panel(recordings):
         "() => !document.getElementById('rgo')", timeout=30000)
     assert fake_plex.STATE.created, "Plex was actually asked for it"
     # No source limit, so Plex holds the rule and it is listed in Plex's colour.
-    recordings.click('.subtab[data-sub="passes"]')
+    recordings.click('.subtab[data-sub="sports"]')
     recordings.wait_for_selector('.passrow[data-who="plex"]', timeout=15000)
 
 
@@ -259,3 +263,13 @@ def test_the_panel_shows_the_settings_in_force_on_a_recording(recordings):
     # The pin is the airing above it, not a setting.
     assert "startTimeslot" not in said and "lineupChannel" not in said, said
 
+
+
+def test_a_team_pass_is_a_sports_pass_and_not_a_season_pass(page):
+    _follow_the_chiefs(page)
+    page.goto("/recordings")
+    page.click('.subtab[data-sub="season"]')
+    page.wait_for_selector("#passlist .empty", timeout=15000)
+    assert "No season pass yet" in page.locator("#passlist").inner_text()
+    assert "1" in page.locator("#pcount-sports").inner_text()
+    assert page.locator("#pcount-season").inner_text() == ""

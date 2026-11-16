@@ -213,7 +213,7 @@ def test_a_smart_pass_appears_in_the_list_with_its_own_icon(page):
                    name="Chiefs football")
     passes.run_passes()
     page.goto("/recordings")
-    page.click('.subtab[data-sub="passes"]')
+    page.click('.subtab[data-sub="season"]')
     page.wait_for_selector(".passrow", timeout=15000)
     row = page.locator(".passrow").first
     assert "Chiefs football" in row.inner_text()
@@ -228,7 +228,7 @@ def test_opening_a_smart_pass_shows_what_it_records_and_why(page):
                    name="Chiefs football")
     passes.run_passes()
     page.goto("/recordings")
-    page.click('.subtab[data-sub="passes"]')
+    page.click('.subtab[data-sub="season"]')
     page.wait_for_selector(".passrow", timeout=15000)
     page.click(".passrow .pmeta")
     page.wait_for_selector(".passdetail table", timeout=15000)
@@ -242,7 +242,7 @@ def test_editing_a_smart_pass_opens_its_conditions(page):
     record_routes._make_pass("smart", smart={"field": "genre", "cmp": "is", "value": "Football"},
                    name="Chiefs football")
     page.goto("/recordings")
-    page.click('.subtab[data-sub="passes"]')
+    page.click('.subtab[data-sub="season"]')
     page.wait_for_selector(".passrow", timeout=15000)
     page.click('.passrow [data-act="edit"]')
     page.wait_for_selector("#sfroot .sfrow", timeout=15000)
@@ -307,7 +307,7 @@ def test_editing_a_smart_pass_shows_the_padding_it_saved(page):
     record_routes._make_pass("smart", smart={"field": "genre", "cmp": "is", "value": "Football"},
                    name="Football", prefs={"endOffsetMinutes": "90"})
     page.goto("/recordings")
-    page.click('.subtab[data-sub="passes"]')
+    page.click('.subtab[data-sub="season"]')
     page.wait_for_selector(".passrow", timeout=15000)
     page.click('.passrow [data-act="edit"]')
     page.wait_for_selector('[data-set="endOffsetMinutes"]', timeout=20000)
@@ -408,7 +408,7 @@ def test_the_tooltip_follows_the_row_when_the_panel_scrolls(add):
 
 def test_the_record_panel_and_the_pass_panel_look_the_same(page):
     """Same component, so the guide's Record panel gets the tooltips too."""
-    page.goto("/")
+    page.goto("/guide")
     page.wait_for_selector(".gprog")
     page.click('.gprog.live[title*="Chiefs"]')
     page.wait_for_selector("#ovlbox .air")

@@ -20,19 +20,19 @@ def settings(page):
 def test_the_gear_opens_settings_over_the_page_it_was_pressed_on(page):
     """It opens in place rather than navigating, so the guide is still behind
     it and closing puts you back where you were."""
-    page.goto("/")
+    page.goto("/guide")
     page.wait_for_selector(".gprog")
     page.click("#gearbtn")
     page.wait_for_selector("#setwin", timeout=15000)
     assert page.locator("#setwin").is_visible()
-    assert page.url.endswith("/")
+    assert page.url.endswith("/guide")
     page.click("#setclose")
     assert not page.locator("#setwin").is_visible()
     assert page.locator(".gprog").count() > 0
 
 
 def test_there_is_no_settings_tab_left_in_the_tab_bar(page):
-    page.goto("/")
+    page.goto("/guide")
     labels = page.eval_on_selector_all(".pt-tab", "els => els.map(e => e.textContent.trim())")
     assert "Settings" not in labels
 
@@ -145,7 +145,7 @@ def test_the_about_tab_carries_the_version_and_plain_words(settings):
 
 def test_the_version_is_on_the_logo_tooltip_too(page):
     from app.routes._shared import VERSION
-    page.goto("/")
+    page.goto("/guide")
     tip = page.get_attribute(".brand .mark", "title") or ""
     assert VERSION in tip
 

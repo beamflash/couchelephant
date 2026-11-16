@@ -17,7 +17,7 @@
 {% if not q %}
 <div class="daybar">
   {% for d in days %}
-    <a href="/?day={{ d.key }}{% if channel %}&channel={{ channel }}{% endif %}{% if sports %}&sports=1{% endif %}"
+    <a href="/guide?day={{ d.key }}{% if channel %}&channel={{ channel }}{% endif %}{% if sports %}&sports=1{% endif %}"
        class="{{ 'on' if d.key == day }}"
        {% if not loop.first %}data-ts="{{ d.ts }}" data-fmt="dayshort"{% endif %}
        >{{ d.label }}</a>
@@ -26,7 +26,7 @@
 {% endif %}
 
 {# One form. Search and the filter panel narrow the same result set. #}
-<form method="get" action="/" class="row filterbar" id="sb">
+<form method="get" action="/guide" class="row filterbar" id="sb">
   {% if not q %}<input type="hidden" name="day" value="{{ day }}">{% endif %}
   <input type="hidden" name="f" id="f_inc" value="{{ f }}">
   <input type="hidden" name="x" id="f_exc" value="{{ x }}">
@@ -39,7 +39,7 @@
     <input name="q" id="sbinput" value="{{ q }}"
            placeholder="Search programmes, teams, descriptions..." autocomplete="off">
     {% if q %}
-      <a class="iconbtn" href="/" title="Clear search" aria-label="Clear">
+      <a class="iconbtn" href="/guide" title="Clear search" aria-label="Clear">
         <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"
              stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></a>
     {% endif %}
@@ -276,6 +276,17 @@
     label.title = c.vcn + (c.call_sign ? ' ' + c.call_sign : '');
     label.innerHTML = (c.logo ? '<img src="/logo/' + c.vcn + '" alt="' + esc(c.call_sign) + '" loading="lazy">' : '') +
       '<span class="n">' + esc(c.vcn) + '<br>' + esc(c.call_sign || '') + '</span>';
+    // Where there is a player, the channel itself is a button: watch it live.
+    if (CE.Player) {
+      label.classList.add('watch');
+      label.title += ', watch live';
+      label.setAttribute('role', 'button');
+      label.tabIndex = 0;
+      label.addEventListener('click', function () { CE.Player.watch(c.vcn); });
+      label.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') CE.Player.watch(c.vcn);
+      });
+    }
     var lane = document.createElement('div');
     lane.className = 'glane';
     row.appendChild(label); row.appendChild(lane); rowsEl.appendChild(row);

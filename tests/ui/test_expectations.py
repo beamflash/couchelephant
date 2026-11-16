@@ -120,7 +120,7 @@ def test_only_a_suggestion_offers_a_way_to_wave_it_off(page):
         {"code": health.EPG_STALE, "severity": "bad",
          "title": "Stale", "detail": "D", "hint": "H"},
     ], 100, owns=frozenset({health.KEYS_AVAILABLE, health.EPG_STALE}))
-    page.goto("/")
+    page.goto("/guide")
     page.wait_for_selector("#noticebtn")
     page.click("#noticebtn")
     page.wait_for_selector("#noticemenu.open")
@@ -132,7 +132,7 @@ def test_waving_off_the_suggestion_makes_it_go_away(page):
     health.record([{"code": health.KEYS_AVAILABLE, "severity": health.TIP,
                     "title": "Keys", "detail": "D", "hint": "H"}], 100,
                   owns=frozenset({health.KEYS_AVAILABLE}))
-    page.goto("/")
+    page.goto("/guide")
     page.wait_for_selector("#noticebtn")
     page.click("#noticebtn")
     page.wait_for_selector("#noticemenu.open")

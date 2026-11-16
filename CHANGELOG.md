@@ -1,5 +1,36 @@
 # Changelog
 
+## 1.5.11 - 2026-11-16
+
+### Changed
+
+- **The web app has the same three tabs as the apps: Home, Guide and
+  Recordings.** The Live TV tab is gone. What it showed is **Home**, which is
+  now the first tab and where the bare address opens. An install without
+  CouchElephant DVR has nothing for Home to show, so it keeps two tabs and
+  opens on the guide, as before.
+- **"Schedule" is now "Recordings"**, and its lists carry the names the apps
+  use: **Scheduled**, **Sports pass**, **Season pass**, and **Recorded**.
+  Recorded is everything CouchElephant DVR has, by programme from A to Z, with
+  All, Sports, TV and Movies, and it plays there.
+- The guide has its own address, `/guide`. Old links still work: `/recordings`
+  never moved, `/live` goes to Home, and a guide link with a search or a day
+  in it still opens the guide.
+- A pass row says who records it.
+
+### Added
+
+- **Watch live from the guide.** Where CouchElephant DVR is on, a channel in
+  the guide's left column is a button that tunes it.
+- **Delete on the web.** A recording in the Recorded list can be deleted by an
+  administrator, from Plex too, after a prompt.
+
+### Fixed
+
+- **A Plex rule for a team is listed as sport.** "All Kansas City Chiefs
+  Events" follows "NFL Football", and neither is a game's title, so it was
+  classed as a series. It is now classed by what it follows.
+
 ## 1.5.10 - 2026-11-15
 
 ### Changed

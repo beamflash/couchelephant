@@ -117,7 +117,7 @@ app shows a six-letter code, and you type that code under **Settings,
 Recording, Televisions** to let that device in. A phone is listed there too,
 with the same per-device settings as a television.
 
-The **Live TV** tab in the web app shows the same three lists and plays in a
+The **Home** tab in the web app shows the same three lists and plays in a
 browser.
 
 ## Point it at Plex

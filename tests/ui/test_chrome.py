@@ -2,18 +2,18 @@
 
 
 def test_the_guide_is_the_landing_page(page):
-    page.goto("/")
+    page.goto("/guide")
     assert "CouchElephant" in page.title()
     assert page.locator(".pt-tab.active").inner_text().strip() == "Guide"
 
 
 def test_the_tabs_are_the_expected_ones_and_they_fill_the_bar(page):
-    """Guide and Schedule, always. Live TV joins them only where CouchElephant's
+    """The same three as the apps. Home is there only where CouchElephant's
     own recorder can run, which the suite's scratch install is set up for."""
-    page.goto("/")
+    page.goto("/guide")
     tabs = page.locator(".pt-tab")
     labels = [tabs.nth(i).inner_text().strip() for i in range(tabs.count())]
-    assert labels == ["Guide", "Schedule", "Live TV"]
+    assert labels == ["Home", "Guide", "Recordings"]
     nav = page.locator("#ptnav").bounding_box()
     total = sum(tabs.nth(i).bounding_box()["width"] for i in range(tabs.count()))
     # Centred and full width, the way Ludodex does it.
@@ -21,14 +21,14 @@ def test_the_tabs_are_the_expected_ones_and_they_fill_the_bar(page):
 
 
 def test_the_tabs_navigate(page):
-    page.goto("/")
+    page.goto("/guide")
     page.click('.pt-tab[data-t="recordings"]')
     page.wait_for_url("**/recordings")
-    assert page.locator(".pt-tab.active").inner_text().strip() == "Schedule"
+    assert page.locator(".pt-tab.active").inner_text().strip() == "Recordings"
 
 
 def test_a_divider_separates_the_header_from_the_tabs(page):
-    page.goto("/")
+    page.goto("/guide")
     # A border, not a spacer element, so it survives a theme change. It sits
     # on the header, between it and the tabs.
     w = page.eval_on_selector("header", "el => getComputedStyle(el).borderBottomWidth")
@@ -39,7 +39,7 @@ def test_a_divider_separates_the_header_from_the_tabs(page):
 
 
 def test_the_header_holds_sync_settings_and_account_in_that_order(page):
-    page.goto("/")
+    page.goto("/guide")
     # By id, not by label. The sync button's label follows what the button
     # does, and with a problem open it reads the problem rather than syncing.
     order = page.eval_on_selector_all(
@@ -51,7 +51,7 @@ def test_the_header_holds_sync_settings_and_account_in_that_order(page):
 
 
 def test_the_sync_time_is_a_tooltip_not_a_line_of_text(page):
-    page.goto("/")
+    page.goto("/guide")
     tip = page.get_attribute("#syncbtn", "title")
     assert "sync" in tip.lower()
     assert "Never synced" in tip or "Last synced" in tip
@@ -59,7 +59,7 @@ def test_the_sync_time_is_a_tooltip_not_a_line_of_text(page):
 
 
 def test_the_account_menu_opens_and_says_sign_in_is_off(page):
-    page.goto("/")
+    page.goto("/guide")
     assert not page.locator("#pmenu").is_visible()
     page.click("#pbtn")
     menu = page.locator("#pmenu")
@@ -69,14 +69,14 @@ def test_the_account_menu_opens_and_says_sign_in_is_off(page):
 
 
 def test_the_account_menu_closes_when_you_click_away(page):
-    page.goto("/")
+    page.goto("/guide")
     page.click("#pbtn")
     page.click("main", position={"x": 5, "y": 5})
     assert not page.locator("#pmenu").is_visible()
 
 
 def test_the_theme_toggle_flips_the_page_and_is_remembered(page):
-    page.goto("/")
+    page.goto("/guide")
     assert page.eval_on_selector(
         "html", "el => el.getAttribute('data-theme')") in (None, "dark")
     dark = page.eval_on_selector("body", "el => getComputedStyle(el).backgroundColor")
@@ -92,13 +92,13 @@ def test_the_theme_toggle_flips_the_page_and_is_remembered(page):
 
 
 def test_a_light_system_preference_is_honoured_on_a_first_visit(light_system):
-    light_system.goto("/")
+    light_system.goto("/guide")
     assert light_system.eval_on_selector(
         "html", "el => el.getAttribute('data-theme')") == "light"
 
 
 def test_the_theme_reaches_the_browser_chrome_too(page):
-    page.goto("/")
+    page.goto("/guide")
     before = page.get_attribute("#themecolor", "content")
     page.click("#pbtn")
     page.click("#themebtn")
@@ -108,23 +108,48 @@ def test_the_theme_reaches_the_browser_chrome_too(page):
 def test_preview_mode_is_announced_in_the_header(page):
     from app import db
     db.set_setting("dry_run", "1")
-    page.goto("/")
+    page.goto("/guide")
     assert "PREVIEW MODE" in page.locator("header").inner_text()
 
 
-def test_an_install_without_the_recorder_has_no_live_tv_tab(page, monkeypatch):
+def test_an_install_without_the_recorder_has_no_home_tab(page, monkeypatch):
     """Not opted in means not asked: no tab, and no Recorded by choice."""
     from app import recorder
     monkeypatch.setattr(recorder, "REC_DIR", "/nonexistent-ce-test")
-    page.goto("/")
+    page.goto("/guide")
     labels = page.eval_on_selector_all(".pt-tab", "els => els.map(e => e.textContent.trim())")
-    assert labels == ["Guide", "Schedule"]
+    assert labels == ["Guide", "Recordings"]
     assert page.evaluate("window.CE_RECORDER.available") is False
 
 
-def test_the_live_tv_page_draws_its_three_lists(page):
-    page.goto("/live")
+def test_home_draws_its_three_lists(page):
+    page.goto("/home")
     page.wait_for_selector("#tvrecent .empty")
     heads = page.eval_on_selector_all(".tvhead", "els => els.map(e => e.textContent.trim())")
     assert heads == ["Live now", "Recent recordings", "On now"]
-    assert page.locator("#tvplayer").is_hidden()
+    assert page.locator(".pt-tab.active").inner_text().strip() == "Home"
+    # No player on the page until something is played.
+    assert page.locator(".tvplayer").count() == 0
+
+
+def test_the_bare_address_opens_the_first_tab(page, monkeypatch):
+    """Home where CouchElephant DVR is on, the guide where it is not, and an
+    old guide link with a search in it still reaches the guide."""
+    page.goto("/")
+    assert page.url.endswith("/home")
+    page.goto("/?q=news")
+    assert page.locator(".pt-tab.active").inner_text().strip() == "Guide"
+    page.goto("/live")
+    assert page.url.endswith("/home"), "the old Live TV address still works"
+    from app import recorder
+    monkeypatch.setattr(recorder, "REC_DIR", "/nonexistent-ce-test")
+    page.goto("/")
+    assert page.locator(".pt-tab.active").inner_text().strip() == "Guide"
+    page.goto("/home")
+    assert page.url.endswith("/guide")
+
+
+def test_a_channel_in_the_guide_is_a_watch_live_button(page):
+    page.goto("/guide")
+    page.wait_for_selector(".gch.watch")
+    assert "watch live" in page.locator(".gch.watch").first.get_attribute("title")

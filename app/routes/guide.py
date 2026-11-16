@@ -288,6 +288,20 @@ def airings_partial(request: Request, day: str = "", channel: str = "", sports: 
 
 
 @router.get("/", response_class=HTMLResponse)
+def front(request: Request, day: str = "", channel: str = "", sports: int = 0,
+          q: str = "", f: str = "", x: str = ""):
+    """The address with nothing after it opens the first tab.
+
+    That is Home where CouchElephant DVR is on, and the guide where it is not.
+    A link made when the guide lived here still carries its search or its day,
+    and still gets the guide.
+    """
+    if recorder.available() and not (day or channel or sports or q or f or x):
+        return RedirectResponse("/home", status_code=303)
+    return guide(request, day, channel, sports, q, f, x)
+
+
+@router.get("/guide", response_class=HTMLResponse)
 def guide(request: Request, day: str = "", channel: str = "", sports: int = 0,
           q: str = "", f: str = "", x: str = ""):
     """Guide and search are the same page.

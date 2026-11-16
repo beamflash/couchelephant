@@ -790,6 +790,12 @@ def api_rules():
     # otherwise be invisible until Plex got round to scheduling something.
     sports_titles = {r["title"] for r in db.query(
         "SELECT DISTINCT title FROM programs WHERE teams IS NOT NULL AND teams != '[]'")}
+    # And by what the rule follows. A Plex team rule is titled "All Kansas City
+    # Chiefs Events" and follows "NFL Football": neither is a game's title, so
+    # the check above called it a series and it was listed with the programmes.
+    sports_shows = {r["grandparent_title"] for r in db.query(
+        "SELECT DISTINCT grandparent_title FROM programs WHERE section = 'sports' "
+        "AND grandparent_title IS NOT NULL")}
     for s_ in db.query("SELECT * FROM plex_subscriptions ORDER BY title"):
         cfg = db.unjs(s_["settings"], {}) or {}
         if str(cfg.get("oneShot", "")).lower() in ("1", "true", "yes"):
@@ -804,7 +810,9 @@ def api_rules():
             "id": s_["key"], "who": "plex",
             "kind": "team" if str(s_["type"]) == "15" else "series",
             "icon": "sports" if (str(s_["type"]) == "15"
-                                 or s_["title"] in sports_titles) else "series",
+                                 or s_["title"] in sports_titles
+                                 or s_["target"] in sports_shows
+                                 or s_["title"] in sports_shows) else "series",
             "title": s_["target"] or s_["title"],
             "team_id": None, "series": None,
             "networks": [], "channels": [], "enabled": True, "booked": booked,
