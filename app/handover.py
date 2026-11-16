@@ -50,9 +50,9 @@ def why_unavailable(rec=None) -> str | None:
     for k in kinds:
         word = "films" if k == "movies" else "shows"
         if not (db.get_setting(f"recorder_{k}_folder") or "").strip():
-            return f"No library folder is chosen for {word}. Choose one in Settings, Recorder."
+            return f"No library folder is chosen for {word}. Choose one in Settings, Recording, CouchElephant DVR."
         if not (db.get_setting(f"recorder_{k}_section") or "").strip():
-            return f"No Plex library is chosen for {word}. Choose one in Settings, Recorder."
+            return f"No Plex library is chosen for {word}. Choose one in Settings, Recording, CouchElephant DVR."
     return None
 
 

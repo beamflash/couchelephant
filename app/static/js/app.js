@@ -752,7 +752,7 @@ window.wireSettings = function (root) {
   }
 
   // ---- snapshot jobs ----
-  // ---- CouchElephant's own recorder ---------------------------------
+  // ---- CouchElephant DVR ---------------------------------------------
   //
   // The form is plain. What needs asking is what this machine and Plex can
   // offer: whether the recorder can run at all, which tuner Plex records
@@ -781,7 +781,7 @@ window.wireSettings = function (root) {
       // nothing left to fill in.
       if (!d.ok || !root.querySelector('#recform')) return;
       verdict(root.querySelector('#recverdict'), d.available,
-        d.available ? 'The recorder can run on this install.'
+        d.available ? 'CouchElephant DVR can run on this install.'
                     : d.why + ' Until then every recording is made by Plex.');
       var t = d.tuner || {}, say = root.querySelector('#rectunersay');
       if (say) {

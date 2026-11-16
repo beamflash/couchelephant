@@ -361,6 +361,7 @@ def test_a_handover_that_is_not_set_up_holds_the_recording_and_says_why(tuner, p
     held = recorder.get(rec["id"])
     assert held["state"] == "finished"
     assert "No library folder is chosen for shows" in held["error"]
+    assert "CouchElephant DVR" in held["error"], "it names the settings tab to go to"
     assert os.path.exists(recorder.broadcast_path(rec["uid"]))
 
 

@@ -344,25 +344,25 @@
         </form>
       </section>
 
-      <section data-sec="recording" data-tab="recorder" data-tab-label="Own recorder" hidden>
-        <h2>CouchElephant's own recorder</h2>
-        <p class="dim">Plex cannot play a recording from its start while it is still
-          being made. A recording CouchElephant makes itself can be. Plex stays the
+      <section data-sec="recording" data-tab="recorder" data-tab-label="CouchElephant DVR" hidden>
+        <h2>CouchElephant DVR</h2>
+        <p class="dim">Records from your tuner itself, so you can watch from the start
+          while it is still recording. Plex DVR cannot do that. Plex DVR stays the
           recorder for everything that does not say otherwise.</p>
         <div class="verdict" id="recverdict" hidden>
           <span class="vmark"></span><span class="vtext"></span></div>
         <form method="post" action="/settings/recorder" class="setform" id="recform"
               style="margin-top:14px">
-          <div class="field" data-find="recorded by default recorder couchelephant plex">
+          <div class="field" data-find="recorded by default recorder dvr couchelephant plex">
             <label for="recdef">New recordings are made by</label>
             <select id="recdef" name="recorder_default">
-              <option value="auto" {{ 'selected' if settings.recorder_default not in ('plex', 'couchelephant') }}>CouchElephant, where its recorder is on</option>
-              <option value="couchelephant" {{ 'selected' if settings.recorder_default == 'couchelephant' }}>CouchElephant</option>
-              <option value="plex" {{ 'selected' if settings.recorder_default == 'plex' }}>Plex</option>
+              <option value="auto" {{ 'selected' if settings.recorder_default not in ('plex', 'couchelephant') }}>CouchElephant DVR, where it is turned on</option>
+              <option value="couchelephant" {{ 'selected' if settings.recorder_default == 'couchelephant' }}>CouchElephant DVR</option>
+              <option value="plex" {{ 'selected' if settings.recorder_default == 'plex' }}>Plex DVR</option>
             </select>
             <span class="help">What a new recording or pass starts with. Each one can
               still choose the other, and nothing already booked changes. Right now a
-              new one is made by <b>{{ 'CouchElephant' if recorder_info.default == 'couchelephant' else 'Plex' }}</b>.</span>
+              new one is made by <b>{{ 'CouchElephant DVR' if recorder_info.default == 'couchelephant' else 'Plex DVR' }}</b>.</span>
           </div>
           <div class="field" data-find="tuner hdhomerun address">
             <label for="rectuner">Tuner address</label>

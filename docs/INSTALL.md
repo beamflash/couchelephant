@@ -60,16 +60,18 @@ up.
 | `COUCHELEPHANT_DB` | `/data/couchelephant.db` | The main database |
 | `COUCHELEPHANT_AUTH_DB` | next to the main one | Accounts and sessions |
 | `COUCHELEPHANT_LOGOS` | `/data/logos` | Cached channel artwork |
-| `COUCHELEPHANT_RECORDINGS` | `/recordings` | Where CouchElephant's own recorder keeps its files. The recorder is off unless this folder exists |
+| `COUCHELEPHANT_RECORDINGS` | `/recordings` | Where CouchElephant DVR keeps its files. It is off unless this folder exists |
 | `COUCHELEPHANT_LIBRARY` | `/library` | The Plex library folder a finished recording is moved into |
 | `TZ` | `UTC` | The container's clock |
 
 Everything else is a setting in the app, not an environment variable, because
 it is the kind of thing you change while looking at the result.
 
-## Recording with CouchElephant itself
+## CouchElephant DVR
 
-Optional. Skip this and Plex makes every recording, as it always has.
+CouchElephant DVR is CouchElephant recording from your tuner itself, next to
+Plex DVR. It is optional. Skip this and Plex makes every recording, as it
+always has.
 
 Turn it on to watch a recording from its start while it is still being made.
 See [Who makes the recording](RECORDING.md#who-makes-the-recording) for what
@@ -94,7 +96,7 @@ docker run -d --name couchelephant --restart unless-stopped \
 
 The container must be able to write to both folders.
 
-Then open **Settings, Recording, Own recorder**. It says whether the recorder
+Then open **Settings, Recording, CouchElephant DVR**. It says whether the recorder
 can run and why not, shows the tuner it found, and asks two things for the
 move into Plex: which folder inside `/library` takes shows and which takes
 films, and which Plex library each belongs to. The tuner address is read from

@@ -32,7 +32,7 @@ def base() -> str | None:
 def _get(path: str):
     b = base()
     if not b:
-        raise TunerError("No tuner address is set. Add one in Settings, Recorder.")
+        raise TunerError("No tuner address is set. Add one in Settings, Recording, CouchElephant DVR.")
     try:
         r = httpx.get(b + path, timeout=5)
         r.raise_for_status()
@@ -94,7 +94,7 @@ def stream_url(vcn: str) -> str:
             return c["URL"]
     b = base()
     if not b:
-        raise TunerError("No tuner address is set. Add one in Settings, Recorder.")
+        raise TunerError("No tuner address is set. Add one in Settings, Recording, CouchElephant DVR.")
     host = b.split("://", 1)[1].split(":")[0]
     return f"http://{host}:5004/auto/v{vcn}"
 

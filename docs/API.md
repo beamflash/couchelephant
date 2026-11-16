@@ -66,8 +66,8 @@ What the Apple TV app and the **Live TV** page read.
 | `POST /api/tv/devices/{id}/settings` | Administrators. `allow_delete` for one television |
 | `GET /hls/{uid}/index.m3u8` | The viewing copy, as an HLS playlist. `?start=0` marks it to open at its first second, which is how a player starts a recording that is still growing from the beginning |
 | `GET /hls/{uid}/seg00000.ts` ... | Its segments |
-| `GET /api/recorder/status` | What the Own recorder settings show: can it run, the tuner, the library folders and Plex libraries to choose from |
-| `POST /settings/recorder` | Save the Own recorder settings |
+| `GET /api/recorder/status` | What the CouchElephant DVR settings show: can it run, the tuner, the library folders and Plex libraries to choose from |
+| `POST /settings/recorder` | Save the CouchElephant DVR settings |
 
 With sign-in on, a paired client sends `Authorization: Bearer <key>`. The key
 opens `/api/tv/` (not the device list), `/hls/` and `/logo/`, and nothing

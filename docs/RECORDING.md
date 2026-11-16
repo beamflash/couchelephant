@@ -211,9 +211,9 @@ carries one choice:
 | CouchElephant | CouchElephant records it from the tuner. It plays from its first second while it is still recording, on the **Live TV** page and in the Apple TV app |
 
 The choice only appears where the recorder can run, which means a `/recordings`
-folder is mounted. See [Install](INSTALL.md#recording-with-couchelephant-itself).
-**Settings, Recording, Own recorder** picks what a new recording starts with.
-Left alone, that is CouchElephant wherever its recorder is on.
+folder is mounted. See [Install](INSTALL.md#couchelephant-dvr).
+**Settings, Recording, CouchElephant DVR** picks what a new recording starts
+with. Left alone, that is CouchElephant wherever CouchElephant DVR is on.
 A pass that names CouchElephant is always CouchElephant's rule, because Plex
 cannot hold it. Changing the choice on a pass moves what it has already booked
 too: each future booking is cancelled with the old recorder and made again
@@ -261,7 +261,7 @@ What it does not do:
   Plex is still writing.
 
 Padding comes from Plex's own start and end settings when the recording or
-pass carries them, and from the two padding settings under **Own recorder**
+pass carries them, and from the two padding settings under **CouchElephant DVR**
 when it does not.
 
 ## Plex's own options

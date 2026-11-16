@@ -20,7 +20,7 @@ readable by whoever inherits it.
 | `app/notify.py` | **Sending those notices somewhere you will see them.** Discord, Telegram and Notifiarr, behind one call |
 | `app/verify.py` | **Comparing a booking against the pass that made it**, without inventing a difference |
 | `app/tuner.py` | The tuner. HDHomeRun only, and everything that knows that |
-| `app/recorder.py` | **CouchElephant's own recorder**: the capture, the copy you watch, the state of each recording, and the loop that starts and stops them |
+| `app/recorder.py` | **CouchElephant DVR**, the recorder of our own: the capture, the copy you watch, the state of each recording, and the loop that starts and stops them |
 | `app/handover.py` | Giving a finished recording to Plex: the name, the copy, the scan, the resume point |
 | `app/teamcat.py` | The shipped team catalogue, and matching a Plex team to it |
 | `app/filters.py` | The guide's filter tokens |
@@ -45,7 +45,10 @@ in [Your data](DATA.md), including why the guide is never copied.
 
 `passes.py` is where the value is. If you read one file, read that one.
 
-### The own recorder
+### CouchElephant DVR
+
+The name on the settings tab for CouchElephant's own recorder. The code calls
+it the recorder.
 
 Off unless a `/recordings` folder exists. Nothing in it runs otherwise, and no
 page offers it.

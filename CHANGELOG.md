@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.5.10 - 2026-11-15
+
+### Changed
+
+- **"Own recorder" is now "CouchElephant DVR".** The settings tab, its heading
+  and the messages that send you there use the new name. It sits next to
+  "Plex DVR", so the name itself says there are two recorders and which one
+  this is. Nothing else about it changed.
+
 ## 1.5.9 - 2026-11-15
 
 ### Fixed
