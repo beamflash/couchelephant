@@ -104,6 +104,7 @@ def test_home_lists_what_is_recording_with_a_playlist_that_plays(client, tuner):
     m = client.get(master)
     assert m.status_code == 200 and m.headers["cache-control"] == "no-store"
     assert 'INSTREAM-ID="CC1"' in m.text and 'CLOSED-CAPTIONS="cc"' in m.text
+    assert "LANGUAGE=" not in m.text, "CC1 is in whatever language the station uses"
     assert m.text.rstrip().splitlines()[-1] == "index.m3u8"
     # "From the beginning" is carried through to the playlist it points at.
     assert client.get(master + "?start=0").text.rstrip().splitlines()[-1] \

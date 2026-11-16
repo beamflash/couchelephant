@@ -170,16 +170,37 @@ def encoder() -> str:
 
 
 def interlaced(path: str) -> bool:
-    """Is this broadcast interlaced, asked of its first megabyte. False when
-    ffprobe cannot say, which only costs doubled captions, never the video."""
+    """Is this broadcast interlaced, asked of its first megabyte.
+
+    A picture 1080, 576 or 480 lines high is broadcast interlaced, or can turn
+    interlaced at the next programme, whatever its first pictures say: a channel
+    opening on six seconds of film was taken for progressive and its interlaced
+    programme came out combed. The interlaced path also handles progressive
+    pictures correctly, at some extra encoding. 720p is progressive by
+    definition. For any other size the field order and the first seconds of
+    pictures decide. False when ffprobe cannot say, which only costs the
+    deinterlacing, never the video.
+    """
     try:
         r = subprocess.run(
-            [FFPROBE, "-v", "error", "-select_streams", "v:0",
-             "-show_entries", "stream=field_order", "-of", "default=nw=1:nk=1", path],
-            capture_output=True, text=True, timeout=20)
+            [FFPROBE, "-v", "error", "-select_streams", "v:0", "-read_intervals", "%+#180",
+             "-show_entries", "stream=field_order,height:frame=interlaced_frame",
+             "-of", "default=nw=1", path],
+            capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.SubprocessError):
         return False
-    return field_order_interlaced(r.stdout)
+    return probe_says_interlaced(r.stdout)
+
+
+def probe_says_interlaced(said: str) -> bool:
+    """ffprobe's lines: field_order=tt, height=1080, interlaced_frame=1 and so on."""
+    heights = [w.split("=", 1)[1] for w in said.split() if w.startswith("height=")]
+    if heights and heights[0].strip(",") in ("1080", "1088", "576", "480"):
+        return True
+    order = [w.split("=", 1)[1] for w in said.split() if w.startswith("field_order=")]
+    if order and field_order_interlaced(order[0]):
+        return True
+    return any(w.strip(",") == "interlaced_frame=1" for w in said.split())
 
 
 def field_order_interlaced(said: str) -> bool:
@@ -201,19 +222,22 @@ def convert_args(enc: str, out_dir: str, interlaced: bool = False) -> list[str]:
     if enc == "vaapi":
         args += ["-vaapi_device", VAAPI_DEVICE]
     args += ["-fflags", "+genpts+discardcorrupt", "-i", "pipe:0"]
+    # The broadcast's own timing, picture for picture, on every path. Left to
+    # itself the HLS output runs at a constant rate: it filled a gap in the
+    # broadcast with copies, each repeating its captions, and after the split
+    # below it fell back to 25 a second and dropped pictures.
+    timing = ["-fps_mode:v", "passthrough"]
+    # Optional, because a data or slideshow subchannel can have no sound.
+    audio = ["-map", "0:a:0?"]
     if enc == "vaapi" and interlaced:
         # Decoded on the CPU, which MPEG-2 barely notices, and encoded on the
         # GPU. Field rate, so 1080i sport keeps all 60 pictures a second.
-        # The split and interleave lose the frame rate, and HLS output then
-        # falls back to 25 a second and drops pictures. Passthrough keeps
-        # every one, at the 59.94 the deinterlacer made.
         args += ["-filter_complex", VAAPI_CAPTIONS_ONCE,
-                 "-map", "[v]", "-map", "0:a:0", "-fps_mode:v", "passthrough",
-                 *VAAPI_ENCODE]
+                 "-map", "[v]", *audio, *timing, *VAAPI_ENCODE]
     elif enc == "vaapi":
-        args += ["-map", "0:v:0", "-map", "0:a:0", "-vf", VAAPI_UPLOAD, *VAAPI_ENCODE]
+        args += ["-map", "0:v:0", *audio, *timing, "-vf", VAAPI_UPLOAD, *VAAPI_ENCODE]
     else:
-        args += ["-map", "0:v:0", "-map", "0:a:0"]
+        args += ["-map", "0:v:0", *audio, *timing]
         # Frame rate, not field rate: 1080p60 in software is more than a small
         # machine can make as fast as it arrives.
         args += ["-vf", "bwdif=mode=send_frame:deint=interlaced",

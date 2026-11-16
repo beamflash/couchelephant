@@ -871,9 +871,11 @@ def master_playlist(uid: str, start: str = ""):
     if not _UID.match(uid) or not os.path.exists(recorder.playlist_path(uid)):
         return Response(status_code=404)
     variant = "index.m3u8" + ("?start=0" if start == "0" else "")
+    # No language: CC1 is whatever the station captions in, English on most,
+    # French or Spanish on others, and a wrong label is worse than none.
     text = ("#EXTM3U\n#EXT-X-VERSION:6\n#EXT-X-INDEPENDENT-SEGMENTS\n"
-            '#EXT-X-MEDIA:TYPE=CLOSED-CAPTIONS,GROUP-ID="cc",NAME="English",'
-            'LANGUAGE="en",INSTREAM-ID="CC1",DEFAULT=NO,AUTOSELECT=YES\n'
+            '#EXT-X-MEDIA:TYPE=CLOSED-CAPTIONS,GROUP-ID="cc",NAME="Captions",'
+            'INSTREAM-ID="CC1",DEFAULT=NO,AUTOSELECT=YES\n'
             '#EXT-X-STREAM-INF:BANDWIDTH=8000000,CLOSED-CAPTIONS="cc"\n'
             f"{variant}\n")
     return Response(text, media_type="application/vnd.apple.mpegurl",

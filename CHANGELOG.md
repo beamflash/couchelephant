@@ -40,6 +40,13 @@
 
 ### Fixed
 
+- **Formats beyond this market.** Every path keeps the broadcast's own
+  timing (a constant rate filled gaps with copies that repeated captions), a
+  subchannel with no sound converts, a 1080/576/480-line channel is always
+  treated as interlaced (one opening on film came out combed), and the
+  captions entry carries no language. `docs/BROADCAST-FORMATS.md` lists what
+  can arrive in ATSC and DVB markets, how each is handled, and the 28 format
+  checks behind it (`scripts/format_matrix.py`, `scripts/channel_sweep.py`).
 - **Captions on 720p channels were nonsense, and the picture ran at 120 a
   second.** The hardware deinterlacer made two pictures from every
   progressive one, captions included. Progressive channels are no longer

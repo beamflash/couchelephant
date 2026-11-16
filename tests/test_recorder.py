@@ -486,6 +486,35 @@ def test_the_field_order_is_read_the_way_ffprobe_really_prints_it():
     assert not recorder.field_order_interlaced("")
 
 
+def test_a_channel_that_opens_on_a_progressive_picture_is_still_interlaced():
+    """A 1080i channel can open on a film or an advert sent as progressive
+    pictures. Any interlaced picture in the first seconds settles it."""
+    said = ("field_order=progressive\ninterlaced_frame=0\ninterlaced_frame=0\n"
+            "interlaced_frame=1\ninterlaced_frame=1\n")
+    assert recorder.probe_says_interlaced(said)
+    assert recorder.probe_says_interlaced("field_order=tt\ninterlaced_frame=0\n")
+    assert not recorder.probe_says_interlaced(
+        "field_order=progressive\n" + "interlaced_frame=0\n" * 180)
+    assert not recorder.probe_says_interlaced("")
+    # A 1080, 576 or 480 line channel takes the interlaced path even when its
+    # first seconds are all progressive: six seconds of film came out combed.
+    for h in ("1080", "576", "480"):
+        assert recorder.probe_says_interlaced(
+            f"field_order=progressive\nheight={h}\n" + "interlaced_frame=0\n" * 180), h
+    assert not recorder.probe_says_interlaced(
+        "field_order=progressive\nheight=720\n" + "interlaced_frame=0\n" * 180)
+
+
+def test_every_path_keeps_the_broadcast_timing_and_needs_no_sound():
+    """Constant-rate output filled gaps in a broadcast with copies, and each
+    copy repeated its captions. A subchannel without sound must not fail."""
+    for enc, laced in (("vaapi", True), ("vaapi", False), ("software", True),
+                       ("software", False)):
+        args = recorder.convert_args(enc, "/x", laced)
+        assert args[args.index("-fps_mode:v") + 1] == "passthrough", (enc, laced)
+        assert "0:a:0?" in args and "0:a:0" not in args, (enc, laced)
+
+
 def test_a_broadcast_ffprobe_cannot_read_counts_as_progressive(tmp_path, monkeypatch):
     monkeypatch.setattr(recorder, "FFPROBE", "/nonexistent/ffprobe")
     (tmp_path / "b.ts").write_bytes(b"x" * 10)
