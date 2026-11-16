@@ -481,3 +481,39 @@ def test_a_recording_already_running_stays_with_couchelephant(client, tuner, ple
     r = client.post("/api/tv/record/move", data={"airing_id": "a1", "recorder": "plex"})
     assert r.status_code == 409 and "already recording" in r.json()["error"]
     assert recorder.get(rec_id)["state"] == "recording"
+
+
+def test_changing_who_records_a_pass_moves_what_it_already_booked(client, synced, tuner):
+    """Seen on a live install: a team pass switched to CouchElephant kept its
+    three booked games in Plex, still marked Recorded by Plex."""
+    team = db.one("SELECT id, name FROM teams ORDER BY id LIMIT 1")
+    with db.tx() as c:
+        c.execute("INSERT INTO passes (kind, team_id, team_name, uid, enabled, created_at) "
+                  "VALUES ('team', ?, ?, 'u1', 1, 0)", (team["id"], team["name"]))
+    passes_mod = __import__("app.passes", fromlist=["x"])
+    booked = [d for d in passes_mod.run_passes() if d["action"] == "scheduled"]
+    assert booked, "the fixture guide has a game for this team"
+    n = len(booked)
+    assert len(fake_plex.STATE.subscriptions) == n
+    pid = db.one("SELECT id FROM passes")["id"]
+
+    r = client.post(f"/api/tv/passes/{pid}", data={"recorder": "couchelephant"}).json()
+    assert r["ok"] is True and f"{n} booked recording(s) moved to CouchElephant" in r["message"]
+    assert fake_plex.STATE.subscriptions == {}
+    assert db.one("SELECT COUNT(*) c FROM recordings WHERE pass_id = ?", (pid,))["c"] == n
+    assert db.one("SELECT COUNT(*) c FROM our_grabs")["c"] == 0
+    up = client.get("/api/tv/recordings").json()["upcoming"]
+    assert {u["recorder"] for u in up} == {"couchelephant"}
+
+    r = client.post(f"/api/tv/passes/{pid}", data={"recorder": "plex"}).json()
+    assert f"{n} booked recording(s) moved to Plex" in r["message"]
+    assert db.one("SELECT COUNT(*) c FROM recordings")["c"] == 0
+    assert len(fake_plex.STATE.subscriptions) == n
+
+
+def test_a_recording_that_has_started_does_not_move_with_its_pass(client, tuner, plex):
+    pid = _chiefs_pass(client)
+    with db.tx() as c:
+        c.execute("UPDATE recordings SET state = 'recording'")
+    client.post(f"/api/tv/passes/{pid}", data={"recorder": "plex"})
+    assert db.one("SELECT state FROM recordings")["state"] == "recording"

@@ -445,6 +445,56 @@ def _book(plex, p, pick, expectation_id=None):
                   trail_minutes=trail, lead_minutes=lead)
 
 
+def rehome(p, plex) -> int:
+    """Hand a pass's future bookings to the recorder the pass now names.
+
+    Changing who records a pass means the games it has already booked, not
+    only the ones it books next. Each booking the other recorder holds, and
+    has not started, is cancelled there. Nothing is booked here: the caller
+    refreshes what Plex has and runs the passes, which book each game again
+    with the right recorder, by the pass's own rules as they stand now.
+
+    Returns how many bookings were cancelled to be made again.
+    """
+    now, moved = _now(), 0
+    if pass_recorder(p) == "couchelephant":
+        for g in db.query("SELECT * FROM our_grabs WHERE pass_id = ? AND begins_at > ?",
+                          (p["id"], now + LEAD_SECONDS)):
+            key = g["subscription"]
+            if not key:
+                key = plex.find_subscription(g["program_guid"], g["begins_at"])
+            if key:
+                plex.delete_subscription(key)
+            forget(g["airing_id"])
+            moved += 1
+    else:
+        for r in db.query("SELECT id FROM recordings WHERE pass_id = ? AND kind = 'recording' "
+                          "AND state = 'scheduled' AND starts_at > ?", (p["id"], now)):
+            recorder.cancel(r["id"])
+            moved += 1
+    return moved
+
+
+def change_recorder(pass_id: int) -> tuple[int, list[dict]]:
+    """After a pass's recorder was changed: move its bookings and book again.
+
+    Plex's schedule is read again between the two halves. Without that, the
+    games just cancelled in Plex still look booked there and are skipped.
+    """
+    p = db.one("SELECT * FROM passes WHERE id = ?", (pass_id,))
+    if not p:
+        return 0, []
+    from . import sync  # sync imports this module
+    with Plex(db.get_setting("plex_url"), db.get_setting("plex_token")) as plex:
+        moved = rehome(p, plex)
+        sync.sync_recordings(plex)
+    done = run_passes()
+    if moved and pass_recorder(p) != "couchelephant":
+        with Plex(db.get_setting("plex_url"), db.get_setting("plex_token")) as plex:
+            sync.sync_recordings(plex)
+    return moved, done
+
+
 def remember(row, source: str, subscription: str | None = None,
              pass_id: int | None = None, expectation_id: int | None = None) -> None:
     """Record that this airing was scheduled by us, and by what.

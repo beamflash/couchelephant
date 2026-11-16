@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.5.9 - 2026-11-15
+
+### Fixed
+
+- **Changing who records a pass now moves the recordings it already booked.**
+  Switching a pass from Plex to CouchElephant changed only what it booked
+  next. The games already on the schedule stayed with Plex and still said
+  "Recorded by Plex", which is not what changing the pass means.
+
+  Seen on 2026-11-15: a team pass switched to CouchElephant from the Apple TV
+  kept its three booked games in Plex.
+
+  Each future booking is now cancelled with the old recorder and made again
+  with the new one, by the pass's own rules. A recording that has started
+  stays where it is. The reply says how many moved.
+
 ## 1.5.8 - 2026-11-15
 
 ### Added

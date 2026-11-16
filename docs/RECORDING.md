@@ -215,8 +215,9 @@ folder is mounted. See [Install](INSTALL.md#recording-with-couchelephant-itself)
 **Settings, Recording, Own recorder** picks what a new recording starts with.
 Left alone, that is CouchElephant wherever its recorder is on.
 A pass that names CouchElephant is always CouchElephant's rule, because Plex
-cannot hold it. Changing the choice on a pass applies to what it books from
-then on; a broadcast already booked stays with the recorder that has it.
+cannot hold it. Changing the choice on a pass moves what it has already booked
+too: each future booking is cancelled with the old recorder and made again
+with the new one. A recording that has started stays where it is.
 
 A recording CouchElephant makes goes through these states:
 

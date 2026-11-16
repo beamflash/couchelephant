@@ -862,8 +862,8 @@ async def api_rule_edit(rule_id: int, networks: str = Form(""),
                         settings: str = Form(""), filter: str = Form(""),
                         name: str = Form(""), recorder: str = Form("")):
     """Change a pass: where it may record from, its Plex settings, who records
-    it, or pause it. Changing the recorder applies to what it books from now
-    on; a broadcast already booked stays with the recorder that has it."""
+    it, or pause it. Changing the recorder moves what the pass has already
+    booked too, except a recording that has started."""
     r = db.one("SELECT * FROM passes WHERE id = ?", (rule_id,))
     if not r:
         return JSONResponse({"ok": False, "error": "no such pass"}, status_code=404)
@@ -896,7 +896,17 @@ async def api_rule_edit(rule_id: int, networks: str = Form(""),
         c.execute("UPDATE passes SET networks=?, channels=?, prefs=?, filter=?, "
                   "label=?, enabled=?, recorder=? WHERE id=?",
                   (db.js(nets), db.js(chans), keep, filt, label, on, who, rule_id))
-    done = await asyncio.to_thread(passes.run_passes)
+    moved = 0
+    if passes.pass_recorder(r) != ("couchelephant" if who == "couchelephant" else "plex"):
+        # Who records changed, so what the pass already booked goes with it.
+        try:
+            moved, done = await asyncio.to_thread(passes.change_recorder, rule_id)
+        except Exception as e:
+            return JSONResponse({"ok": False, "error":
+                                 "The pass is saved, and its booked recordings could not "
+                                 f"be moved: {type(e).__name__}: {e}"}, status_code=502)
+    else:
+        done = await asyncio.to_thread(passes.run_passes)
     made = len([d for d in done if d["action"] == "scheduled"])
 
     # AND THE RECORDINGS ALREADY BOOKED. `run_passes` only books games nobody
@@ -924,7 +934,9 @@ async def api_rule_edit(rule_id: int, networks: str = Form(""),
     where = " or ".join(nets + chans)
     return JSONResponse({"ok": True, "message":
                          (f"Saved. Only from {where}. " if where else "Saved. ")
-                         + f"{made} new airing(s) scheduled."
+                         + (f"{moved} booked recording(s) moved to "
+                            f"{'CouchElephant' if who == 'couchelephant' else 'Plex'}. "
+                            if moved else f"{made} new airing(s) scheduled.")
                          + (f" {fixed} existing recording(s) updated." if fixed else "")
                          + (f" {adrift} too close to the broadcast to change"
                             " safely, so they were left alone." if adrift else "")})

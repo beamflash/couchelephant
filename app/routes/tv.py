@@ -640,7 +640,17 @@ async def tv_pass_edit(pass_id: int, recorder_choice: str = Form("", alias="reco
                   "networks = COALESCE(?, networks) WHERE id = ?",
                   (who, on, db.js(prefs), db.js(nets) if nets is not None else None,
                    pass_id))
-    done = await asyncio.to_thread(passes.run_passes)
+    moved = 0
+    if passes.pass_recorder(p) != ("couchelephant" if who == "couchelephant" else "plex"):
+        # Who records changed, so what the pass already booked goes with it.
+        try:
+            moved, done = await asyncio.to_thread(passes.change_recorder, pass_id)
+        except Exception as e:
+            return JSONResponse({"ok": False, "error":
+                                 "The pass is saved, and its booked recordings could not "
+                                 f"be moved: {e}"}, status_code=502)
+    else:
+        done = await asyncio.to_thread(passes.run_passes)
     made = len([d for d in done if d["action"] == "scheduled"])
     try:
         # The recordings Plex already holds for this pass take the new padding
@@ -652,6 +662,9 @@ async def tv_pass_edit(pass_id: int, recorder_choice: str = Form("", alias="reco
         # The pass is saved. Plex not answering for a moment must not fail it,
         # and the next sync carries the change.
         pass
+    if moved:
+        to = "CouchElephant" if who == "couchelephant" else "Plex"
+        return {"ok": True, "message": f"Saved. {moved} booked recording(s) moved to {to}."}
     return {"ok": True, "message": "Saved." + (f" {made} more set to record." if made else "")}
 
 
