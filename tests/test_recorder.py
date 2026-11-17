@@ -362,14 +362,14 @@ def test_watching_after_the_handover_moves_the_plex_resume_point_too(tuner, libr
     now = int(time.time())
     recorder._set(rec["id"], position=300.0, watched_at=now)
     # Still playing: Plex is not told every few seconds.
-    handover.send_positions(now, force=True)
+    handover.send_positions(now)
     assert fake_plex.STATE.positions[key] == 253_000
     # Stopped a minute ago: Plex is told, once.
-    handover.send_positions(now + 61, force=True)
+    handover.send_positions(now + 61)
     assert fake_plex.STATE.positions[key] == 300_000
     assert recorder.get(rec["id"])["plex_position"] == 300.0
     fake_plex.STATE.positions[key] = 1
-    handover.send_positions(now + 120, force=True)
+    handover.send_positions(now + 120)
     assert fake_plex.STATE.positions[key] == 1
 
 

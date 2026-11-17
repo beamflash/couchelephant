@@ -67,11 +67,12 @@ def test_a_game_still_being_played_keeps_recording_and_stops_after_the_final(boa
     assert rec["ot_event"] == "football/nfl/401"
     assert rec["ot_base"] == base
 
-    # Before the window nothing moves; past the padding the game is still on.
-    at = base + 60
+    # Near the end of the padding the game is still on: the stop moves on
+    # before the recorder reaches the old one.
+    at = base - 120
     overtime.tick(at)
     rec = recorder.get(rec["id"])
-    assert rec["stops_at"] == at + overtime.STILL_PLAYING_SECONDS
+    assert rec["stops_at"] == at + overtime.STILL_PLAYING_SECONDS > base
     assert rec["ot_state"] == "in"
     assert "ran long" in rec["ot_note"]
 
@@ -206,3 +207,54 @@ def test_one_team_and_the_start_time_are_enough_when_only_one_game_fits(board):
     board.append(_event("78", begins, "in", _team("Air Force Falcons", "Air Force", "Falcons"),
                         _team("Navy Midshipmen", "Navy", "Midshipmen")))
     assert overtime.find(rec)[0] is None
+
+
+def test_the_recorder_itself_keeps_recording_through_overtime(board, tuner):
+    """End to end with the real recorder and the fake tuner: a moved stop time
+    is what the capture obeys, not the one it was booked with."""
+    from tests.test_recorder import _until
+    now = int(time.time())
+    rec_id = recorder.book(_airing("a1", "g1", "5.1", now - 60, length=600))
+    _until(lambda: (recorder.tick() or recorder.get(rec_id)["state"] == "recording"))
+    rec = recorder.get(rec_id)
+    board.append(_event("401", rec["begins_at"], "in", BRONCOS, CHIEFS))
+    overtime.tick(now)
+    base = recorder.get(rec_id)["stops_at"]
+    # Past the padding, the game is still on: extended.
+    overtime.tick(base - 30)
+    extended = recorder.get(rec_id)["stops_at"]
+    assert extended > base
+    # The recorder's own clock passes the old stop: it keeps recording.
+    recorder.tick(now=base + 1)
+    assert recorder.get(rec_id)["state"] == "recording"
+    assert recorder.busy(rec_id)
+    # And stops at the new one.
+    recorder.tick(now=extended + 1)
+    assert recorder.get(rec_id)["state"] == "finished"
+
+
+def test_one_league_not_answering_is_not_no_game(board, monkeypatch):
+    """The right league may be the one that failed: try again, do not say
+    there is no game."""
+    begins = int(time.time()) - 3 * 3600
+    rec = _game(begins, show="Sports Special")
+
+    def flaky(path, query, day):
+        if path == "football/nfl":
+            raise httpx.ReadTimeout("slow")
+        return []
+    monkeypatch.setattr(overtime, "_get", flaky)
+    overtime.tick(rec["ends_at"] - 3600)
+    assert recorder.get(rec["id"])["ot_state"] == "unreachable"
+    # Still unanswered after the game's end: too late, the padding stands.
+    overtime.tick(rec["ends_at"] + 60)
+    assert recorder.get(rec["id"])["ot_state"] == "nomatch"
+    assert recorder.get(rec["id"])["stops_at"] == rec["stops_at"]
+
+
+def test_a_broken_answer_is_caught_and_changes_nothing(board, monkeypatch):
+    begins = int(time.time()) - 3 * 3600
+    rec = _game(begins)
+    monkeypatch.setattr(overtime, "_get", lambda *a: [{"no": "id"}, None])
+    overtime.tick(rec["ends_at"] - 3600)
+    assert recorder.get(rec["id"])["stops_at"] == rec["stops_at"]

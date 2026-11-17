@@ -207,7 +207,8 @@ def hand_over(rec) -> None:
 
     recorder._set(rec["id"], state="in_plex", plex_rating_key=key,
                   moved_at=int(time.time()), error=note,
-                  plex_position=sent if sent is not None else at)
+                  # Not given when Plex refused it, so it is sent again later.
+                  plex_position=sent if sent is not None else (None if note else at))
     # Only now. Plex lists the file, so ours is the spare.
     try:
         os.remove(src)
@@ -276,19 +277,12 @@ def tick(now: int | None = None, wait: bool = False) -> None:
 # Plex hears a new position once the player has been quiet this long, not
 # every few seconds while it plays.
 RESUME_QUIET_SECONDS = 60
-# The recorder loop calls this every five seconds, and a Plex that does not
-# answer must not hold the next recording's start up for long.
-_positions_looked = 0.0
 
 
-def send_positions(now: int | None = None, force: bool = False) -> None:
+def send_positions(now: int | None = None) -> None:
     """Tell Plex where a recording was left, when it was watched in
     CouchElephant after the handover. Without this Plex kept the position
     from the day of the move."""
-    global _positions_looked
-    if not force and time.time() - _positions_looked < RESUME_QUIET_SECONDS:
-        return
-    _positions_looked = time.time()
     now = now or int(time.time())
     rows = [r for r in db.query(
         "SELECT * FROM recordings WHERE state = 'in_plex' "

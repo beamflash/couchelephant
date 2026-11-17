@@ -34,5 +34,11 @@ if live:
     write(plan.get("live", []))
     while not os.path.exists(plan["stop"]):
         time.sleep(0.05)
-write(plan.get("final", []))
-print("Commercials were found.", flush=True)
+final = plan.get("final", [])
+write(final)
+# As comskip does on Linux: exit(!found), so no ads at all is exit code 1.
+if final:
+    print("Commercials were found.", flush=True)
+else:
+    print("Commercials were not found.", flush=True)
+    sys.exit(1)

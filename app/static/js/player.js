@@ -114,16 +114,18 @@
   }
   function showSkip() { el.querySelector('#tvpskip').hidden = !breakAt(video.currentTime); }
 
-  // Where the ads are. Asked again every half minute while the recording or
-  // the channel is still coming in, because breaks are added as they are found.
+  // Where the ads are. Asked again while the recording or the channel is
+  // still coming in, and until a finished one has its final breaks, because
+  // breaks are added as they are found.
   function loadBreaks() {
+    clearTimeout(breaksTimer); breaksTimer = null;
     if (!now || !now.id) return;
-    var asked = now.id;
-    fetch('/api/tv/recordings/' + asked + '/breaks').then(CE.readJson).then(function (d) {
-      if (!now || now.id !== asked || !d.ok) return;
+    var asked = now;
+    fetch('/api/tv/recordings/' + asked.id + '/breaks').then(CE.readJson).then(function (d) {
+      if (now !== asked || !d.ok) return;
       breaks = d.breaks || [];
       showSkip();
-      if (d.growing) breaksTimer = setTimeout(loadBreaks, 30000);
+      if (d.growing || !d.final) breaksTimer = setTimeout(loadBreaks, d.growing ? 30000 : 60000);
     }).catch(function () {});
   }
 

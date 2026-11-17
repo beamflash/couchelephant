@@ -157,7 +157,7 @@ async def startup():
     asyncio.create_task(backup_loop())
     asyncio.create_task(backingstore_loop())
     asyncio.create_task(recorder_loop())
-    asyncio.create_task(overtime_loop())
+    asyncio.create_task(outside_loop())
 
 
 @app.on_event("shutdown")
@@ -187,7 +187,6 @@ async def recorder_loop():
             if recorder.available():
                 await asyncio.to_thread(handover.tick)
                 await asyncio.to_thread(handover.tidy)
-                await asyncio.to_thread(handover.send_positions)
                 await asyncio.to_thread(adskip.tick)
         except Exception as e:
             # One bad pass must not be the end of every recording after it,
@@ -196,15 +195,18 @@ async def recorder_loop():
         await asyncio.sleep(5)
 
 
-async def overtime_loop():
-    """Sports overtime, once a minute. Apart from the recorder's loop, because
-    a scoreboard that is slow to answer must never hold a recording up."""
+async def outside_loop():
+    """Once a minute, the work that waits on another server: sports overtime
+    (a scoreboard) and resume points (Plex). Apart from the recorder's loop,
+    because a server slow to answer must never hold a recording up."""
     await asyncio.sleep(20)
     while True:
-        try:
-            await asyncio.to_thread(overtime.tick)
-        except Exception as e:
-            log.exception("overtime loop: %s", e)
+        for name, job in (("overtime", overtime.tick), ("resume", handover.send_positions)):
+            try:
+                if recorder.available():
+                    await asyncio.to_thread(job)
+            except Exception as e:
+                log.exception("%s: %s", name, e)
         await asyncio.sleep(60)
 
 

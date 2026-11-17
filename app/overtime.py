@@ -74,6 +74,8 @@ LEAGUES = [
 ]
 
 _cache: dict[str, tuple[float, list]] = {}
+# Recordings already warned about, so a scoreboard that is down is one log line.
+_warned: set[int] = set()
 
 
 def enabled() -> bool:
@@ -181,10 +183,22 @@ def find(rec) -> tuple[str | None, str]:
     if len(teams) != 2:
         return None, "The guide does not name two teams."
     begins = rec["begins_at"] or rec["starts_at"]
+    if not begins:
+        return None, "The recording has no start time."
     near = {}
+    failed = None
     for path, query in leagues_for(rec):
         for day in _days(begins):
-            for e in _get(path, query, day):
+            try:
+                events = _get(path, query, day)
+            except (httpx.HTTPError, ValueError) as e:
+                # One league not answering is no reason to give up on the
+                # others, but it is a reason not to say "no game" yet.
+                failed = e
+                continue
+            for e in events:
+                if "id" not in e:
+                    continue
                 if abs(_start(e) - begins) > START_SLACK_SECONDS:
                     continue
                 comp = (e.get("competitions") or [{}])[0]
@@ -201,6 +215,8 @@ def find(rec) -> tuple[str | None, str]:
     if len(near) == 1:
         ref, name = next(iter(near.items()))
         return ref, name + " (one team matched by name, and the start time)"
+    if failed is not None:
+        raise failed
     return None, f"No game on the scoreboard for {teams[0]} and {teams[1]}."
 
 
@@ -228,13 +244,19 @@ def tick(now: int | None = None) -> None:
                         "AND section = 'sports' AND state = 'recording'"):
         try:
             _one(rec, now)
-        except (httpx.HTTPError, ValueError) as e:
+        except Exception as e:
             # The padding still holds. Said once a game, not every minute.
-            if rec["ot_state"] != "unreachable":
-                log.warning("overtime: the scoreboard did not answer for recording %s: %s",
-                            rec["id"], e)
-                recorder._set(rec["id"], ot_state="unreachable" if not rec["ot_event"]
-                              else rec["ot_state"], ot_checked_at=now)
+            if rec["id"] not in _warned:
+                _warned.add(rec["id"])
+                log.warning("overtime: no answer about recording %s: %s", rec["id"], e)
+            if not rec["ot_event"]:
+                # Unmatched past the guide's end, it is too late to follow.
+                gone = now > (rec["ends_at"] or 0)
+                recorder._set(rec["id"], ot_state="nomatch" if gone else "unreachable",
+                              ot_checked_at=now,
+                              ot_note="The scoreboard did not answer." if gone else None)
+            else:
+                recorder._set(rec["id"], ot_checked_at=now)
 
 
 def _one(rec, now):
@@ -284,8 +306,13 @@ def _one(rec, now):
 
 def _tuner_wanted(rec, now) -> bool:
     """Another recording is due now and waiting, and no tuner is free."""
-    waiting = db.one("SELECT id FROM recordings WHERE kind = 'recording' AND state = 'scheduled' "
-                     "AND starts_at <= ? AND stops_at > ? AND id != ?", (now, now, rec["id"]))
+    # One the recorder is starting this moment, with no failure yet, may have
+    # just taken the last tuner; it is not waiting. One whose tuner request
+    # failed says so in its error, and is.
+    waiting = [r for r in db.query(
+        "SELECT id, error FROM recordings WHERE kind = 'recording' AND state = 'scheduled' "
+        "AND starts_at <= ? AND stops_at > ? AND id != ?", (now, now, rec["id"]))
+        if r["error"] or not recorder.busy(r["id"])]
     if not waiting and not _plex_starting(now):
         return False
     try:

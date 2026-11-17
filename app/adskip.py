@@ -59,10 +59,11 @@ output_edl=1
 output_default=0
 output_txt=0
 """
-# Live: keep reading the growing file, and stay a little behind its end.
+# Live: keep reading the growing file. comskip waits four seconds for each
+# retry at the end of the file, so 45 rides out three minutes of a tuner that
+# dropped and came back; the recorder tries again every few seconds.
 _LIVE_INI = _INI + """live_tv=1
-live_tv_retries=10
-standoff=8000000
+live_tv_retries=45
 """
 
 _PROGRESS = re.compile(r"(\d+):(\d\d):(\d\d) - \d+ frames")
@@ -96,6 +97,10 @@ class Scan:
     def __init__(self, rec, src: str, live: bool):
         self.rec_id, self.live, self.src = rec["id"], live, src
         self.dir = os.path.join(recorder.rec_dir(rec["uid"]), "ads")
+        # Only inside a folder that still exists: a live channel closed or a
+        # recording deleted a moment ago must not have its folder made again.
+        if not os.path.isdir(recorder.rec_dir(rec["uid"])):
+            raise OSError(f"{recorder.rec_dir(rec['uid'])} is gone")
         os.makedirs(self.dir, exist_ok=True)
         stem = os.path.splitext(os.path.basename(src))[0]
         self.edl = os.path.join(self.dir, stem + ".edl")
@@ -116,6 +121,22 @@ class Scan:
 
     def running(self) -> bool:
         return self.proc.poll() is None
+
+    def succeeded(self) -> bool:
+        """comskip on Linux exits 0 when it found ads and 1 when it found
+        none (`exit(!result)` in its source). Both are a finished scan; a
+        programme with no ads is an answer, not a failure."""
+        code = self.proc.returncode
+        if code == 0:
+            return True
+        if code == 1:
+            try:
+                with open(self.log_path, "rb") as f:
+                    f.seek(max(0, os.path.getsize(self.log_path) - 4096))
+                    return b"Commercials were not found" in f.read()
+            except OSError:
+                return False
+        return False
 
     def breaks(self) -> list[tuple[float, float]]:
         return read_edl(self.edl)
@@ -162,6 +183,17 @@ def read_edl(path: str) -> list[tuple[float, float]]:
 
 
 # ---------- the rows ----------
+
+def _store_live(rec_id: int, breaks, edge: float) -> None:
+    """Breaks from a scan still following the file. Rows this scan has not
+    settled again yet (ending past `edge`) are kept: a scan started again (after a tuner dropped, or
+    a restart) reads from the beginning, and the breaks shown before must not
+    vanish while it catches up."""
+    kept = [(r["start_s"], r["end_s"]) for r in db.query(
+        "SELECT start_s, end_s FROM ad_breaks WHERE recording_id = ? AND end_s > ?",
+        (rec_id, edge))]
+    _store(rec_id, sorted(set(list(breaks) + kept)), final=False)
+
 
 def _store(rec_id: int, breaks, final: bool) -> None:
     with db.tx() as c:
@@ -212,6 +244,8 @@ def _forget_gone():
     for rec_id in list(_scans):
         if not recorder.get(rec_id):
             _scans.pop(rec_id).stop()
+    for rec_id in list(_restarts):
+        if not recorder.get(rec_id):
             _restarts.pop(rec_id, None)
 
 
@@ -230,10 +264,10 @@ def _follow_running(now):
         if scan.running():
             if scan.live:
                 edge = scan.reached() - LIVE_SETTLE_SECONDS
-                _store(rec_id, [(s, e) for s, e in scan.breaks() if e <= edge], final=False)
+                _store_live(rec_id, [(s, e) for s, e in scan.breaks() if e <= edge], edge)
             continue
         _scans.pop(rec_id)
-        ok = scan.proc.returncode == 0
+        ok = scan.succeeded()
         if scan.live and growing:
             # comskip took a pause in the stream for the end. Again from the
             # start, which takes it a minute or two to catch up.
@@ -252,7 +286,7 @@ def _follow_running(now):
 def _start_live():
     for rec in db.query("SELECT * FROM recordings WHERE state = 'recording' "
                         "AND (bytes IS NULL OR bytes >= ?)", (LIVE_START_BYTES,)):
-        if rec["id"] in _scans or _restarts.get(rec["id"], 0) > LIVE_RESTARTS:
+        if rec["id"] in _scans or _restarts.get(rec["id"], 0) >= LIVE_RESTARTS:
             continue
         src = recorder.broadcast_path(rec["uid"])
         if not os.path.exists(src) or os.path.getsize(src) < LIVE_START_BYTES:
@@ -261,7 +295,7 @@ def _start_live():
             _scans[rec["id"]] = Scan(rec, src, live=True)
         except OSError as e:
             log.warning("could not start comskip on recording %s: %s", rec["id"], e)
-            _restarts[rec["id"]] = LIVE_RESTARTS + 1
+            _restarts[rec["id"]] = LIVE_RESTARTS
 
 
 def _start_final(now):

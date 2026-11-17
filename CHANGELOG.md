@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.5.16 - 2026-11-17
+
+### Fixed
+
+- A programme with no ads counted as a failed ad scan and was scanned three
+  more times. comskip exits with 1 when it finds no ads; that is now an answer.
+- A live ad scan started again (after a tuner dropped, or a restart) hid the
+  breaks it had already shown until it caught up. They now stay. It also
+  waits three minutes, not 40 seconds, for a tuner that drops.
+- Sending a resume point to Plex ran inside the recorder's loop, so a Plex
+  slow to answer could delay the start or end of a recording. It now runs
+  apart, with sports overtime.
+- A resume point Plex refused at the move was never sent again.
+- Overtime: one league's scoreboard not answering no longer reads as "no
+  game"; an unexpected answer no longer stops overtime for every recording
+  that minute; and a recording that is starting is no longer taken for one
+  waiting for a tuner.
+- The players kept asking for ad breaks twice after a quick close and reopen,
+  and stopped asking before a finished recording's breaks were final.
+
 ## 1.5.15 - 2026-11-17
 
 ### Added

@@ -128,3 +128,23 @@ def test_the_settings_are_on_unless_turned_off_and_both_forms_save_them():
     assert r.json()["ok"]
     assert db.get_setting("adskip_final") == "1"
     assert c.get("/api/tv/settings").json()["values"]["adskip_live"] == "1"
+
+
+def test_a_programme_with_no_ads_is_a_finished_scan_not_a_failure(tuner, comskip):
+    """comskip exits 1 when it finds no ads. That is an answer."""
+    comskip(final=[])
+    rec = _record()
+    _until(lambda: (adskip.tick() or recorder.get(rec["id"])["ads_final"] == 1))
+    assert recorder.get(rec["id"])["ads_fails"] == 0
+
+
+def test_a_live_scan_started_again_keeps_the_breaks_already_shown(tuner):
+    """A tuner that dropped, or a restart, starts comskip from the beginning.
+    The breaks it showed before stay until the new scan has reached them."""
+    rec = _record()
+    adskip._store_live(rec["id"], [(100.0, 200.0), (900.0, 1000.0)], edge=1100)
+    # The new scan has only got to 300 seconds, and settled the first break.
+    adskip._store_live(rec["id"], [(100.0, 200.0)], edge=240)
+    rows = db.query("SELECT start_s FROM ad_breaks WHERE recording_id = ? ORDER BY start_s",
+                    (rec["id"],))
+    assert [r["start_s"] for r in rows] == [100.0, 900.0]
