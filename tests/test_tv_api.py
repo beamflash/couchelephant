@@ -668,6 +668,7 @@ def test_the_plus_button_finds_a_show_and_follows_it(client, synced, tuner, monk
     assert r["ok"] and r["message"].startswith("Following Quiz Show")
     p = db.one("SELECT * FROM passes")
     assert p["series_title"] == "Quiz Show" and p["recorder"] == "couchelephant"
+    assert client.get("/api/tv/passes/find", headers=tv).json()["results"] == []
     again = client.get("/api/tv/passes/find", headers=tv,
                        params={"q": "quiz"}).json()["results"]
     assert [f for f in again if f["title"] == "Quiz Show"][0]["followed"]

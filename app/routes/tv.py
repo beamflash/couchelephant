@@ -700,6 +700,9 @@ def tv_pass_find(q: str = "", tab: str = "season"):
                         "detail": (t["league"] or "") + (" - plays this week" if t["playing"] else ""),
                         "followed": t["followed"]})
         return {"ok": True, "results": out}
+    if not q:
+        # The busiest titles in a guide are Paid Programming and Shopping.
+        return {"ok": True, "results": []}
     followed = {r["series_title"] for r in db.query(
         "SELECT series_title FROM passes WHERE kind = 'series'")}
     tz = _zone()
@@ -708,15 +711,14 @@ def tv_pass_find(q: str = "", tab: str = "season"):
         out.append({"kind": "series", "id": "", "title": r["name"],
                     "detail": f"{r['airings']} in the guide, next {when}",
                     "followed": r["name"] in followed})
-    if q:
-        seen = {o["title"].lower() for o in out}
-        for a in json.loads(pass_routes.api_announced(q=q).body)["announced"]:
-            if a["title"].lower() in seen:
-                continue
-            bits = [b for b in (a.get("subtitle"), a.get("network"), a.get("when")) if b]
-            out.append({"kind": "announced", "id": f"{a['source']}:{a['source_id']}",
-                        "title": a["title"], "detail": ", ".join(bits) or "Not in the guide yet",
-                        "followed": a["title"] in followed})
+    seen = {o["title"].lower() for o in out}
+    for a in json.loads(pass_routes.api_announced(q=q).body)["announced"]:
+        if a["title"].lower() in seen:
+            continue
+        bits = [b for b in (a.get("subtitle"), a.get("network"), a.get("when")) if b]
+        out.append({"kind": "announced", "id": f"{a['source']}:{a['source_id']}",
+                    "title": a["title"], "detail": ", ".join(bits) or "Not in the guide yet",
+                    "followed": a["title"] in followed})
     return {"ok": True, "results": out}
 
 
