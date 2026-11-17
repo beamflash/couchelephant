@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.5.18 - 2026-11-17
+
+### Changed
+
+- **The iPad.** The iPhone app has always installed on an iPad; it now lays
+  itself out for one. The guide has a wider channel column, taller rows and
+  bigger text on a full iPad screen, and keeps the phone's sizes in a narrow
+  Split View or Stage Manager window. Settings keeps to a readable width on a
+  wide screen. The pairing screen says "Let this iPad in" on an iPad. Checked
+  on the 13-inch iPad Pro and the iPad mini in portrait and landscape, at half
+  and one-third Split View widths, and on the iPhone 17e and an iPhone Pro Max
+  on its side.
+
 ## 1.5.17 - 2026-11-17
 
 ### Fixed
