@@ -283,10 +283,20 @@ def test_it_does_not_offer_what_a_pass_cannot_honour(add):
         assert gone not in ids
 
 
-def test_a_sports_filter_arrives_with_padding_filled_in(add):
+def test_a_sports_filter_arrives_with_padding_filled_in(add, monkeypatch):
+    """Plex's settings are first asked for with an empty filter, when any
+    programme stands in. A filter that turns out to be sport is asked about
+    again, so the padding is filled in whatever stood in first. The stand-in
+    is pinned to one that is not sport: whichever was soonest decided this
+    test, and it failed in CI on the days that was not a game."""
+    from app import passes
+    monkeypatch.setattr(passes, "any_airing", lambda horizon_days=30: passes._future(
+        "COALESCE(a.drm, 0) = 0 AND COALESCE(p.section, '') != 'sports'", (),
+        horizon_days, limit=1))
     _ready_filter(add)
-    add.wait_for_selector('[data-set="endOffsetMinutes"]', timeout=20000)
-    assert add.input_value('[data-set="endOffsetMinutes"]') == "30"
+    add.wait_for_function(
+        "() => (document.querySelector('[data-set=\"endOffsetMinutes\"]') || {}).value === '30'",
+        timeout=20000)
     assert "Sport overruns" in add.locator("#ovlbox").inner_text()
 
 

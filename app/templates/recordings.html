@@ -644,6 +644,11 @@ window.passTab = 'sports';
     var zone = document.getElementById('optzone');
     if (!zone) return;
     zone.innerHTML = optionsHtml();
+    // Once a person has changed one of Plex's settings, a new filter no longer
+    // replaces them with what Plex suggests for it.
+    zone.oninput = zone.onchange = function (e) {
+      if (e.target.dataset && e.target.dataset.set) st.tplTouched = true;
+    };
     st.picker.wire();
     var recby = document.getElementById('recby');
     if (recby) {
@@ -751,9 +756,11 @@ window.passTab = 'sports';
   // the same ones. So there is nothing to wait for, and an Options box that
   // says "choose something first" was a box with nothing in it for no reason.
   // Any upcoming airing stands in until a real one is known.
-  function ensureTemplates() {
-    if (st.tpl || st.tplPending) return;
+  function ensureTemplates(again) {
+    if (!again && (st.tpl || st.tplPending)) return;
     st.tplPending = true;
+    // Only the newest answer counts: a filter edited twice asks twice.
+    var asked = st.tplAsked = (st.tplAsked || 0) + 1;
     var url = st.kind === 'smart'
       ? '/api/rules/options?kind=smart&ce_pass=1&filter=' +
         encodeURIComponent(JSON.stringify(st.tree || null))
@@ -762,13 +769,16 @@ window.passTab = 'sports';
       : '/api/rules/options?kind=any&ce_pass=1' +
         (st.sub === 'team' ? '&sporty=1' : '');
     fetch(url).then(function (r) { return r.json(); }).then(function (d) {
+      if (asked !== st.tplAsked) return;
       st.tplPending = false;
-      if (!d.ok) return;
+      // Asked again for a new filter, but the person set a value meanwhile:
+      // theirs stays.
+      if (!d.ok || (again && st.tplTouched)) return;
       applyTemplates(d);
       // Only the Options section. A full redraw would replace the condition
       // row being edited, and the button waiting to be pressed again.
       paintOptions();
-    }).catch(function () { st.tplPending = false; });
+    }).catch(function () { if (asked === st.tplAsked) st.tplPending = false; });
   }
 
   function applyTemplates(d) {
@@ -812,6 +822,11 @@ window.passTab = 'sports';
       st.previewError = d.ok ? '' : (d.error || 'That filter cannot be read.');
       paintPreview();
       paint();
+      // Plex's settings were first asked for with an empty filter, when any
+      // programme stood in; whether that one was sport decided the padding.
+      // Asked again for what the filter now matches, unless the person has
+      // already set them.
+      if (d.ok && st.kind === 'smart' && !st.editing && !st.tplTouched) ensureTemplates(true);
     }).catch(function () {
       var el = document.getElementById('sfcount');
       if (el) { el.className = 'sfcount bad'; el.textContent = 'Could not reach CouchElephant.'; }
@@ -941,7 +956,7 @@ window.passTab = 'sports';
 
   function resetChoice() {
     syncKind();
-    st.team = null; st.series = null; st.tpl = null; st.pick = 0; st.q = '';
+    st.team = null; st.series = null; st.tpl = null; st.tplTouched = false; st.pick = 0; st.q = '';
     st.preview = null; st.confirmed = false;
     st.tplPending = false; st.sporty = false;
     st.msg = null; st.busy = false;
@@ -1145,7 +1160,7 @@ window.passTab = 'sports';
   opener.addEventListener('click', function () {
     st.mode = 'smart'; st.sub = 'team'; syncKind();
     st.team = null; st.series = null; st.editing = null; st.who = '';
-    st.tpl = null; st.pick = 0; st.q = '';
+    st.tpl = null; st.tplTouched = false; st.pick = 0; st.q = '';
     st.tree = null; st.name = ''; st.preview = null; st.confirmed = false;
     st.tplPending = false; st.sporty = false; st.msg = null; st.busy = false;
     st.nets.length = 0; st.chans.length = 0;
@@ -1168,7 +1183,7 @@ window.passTab = 'sports';
       st.series = r.kind === 'series' ? r.title : null;
       st.tree = r.filter || null;
       st.name = r.kind === 'smart' ? (r.title || '') : '';
-      st.tpl = null; st.pick = 0; st.editing = r; st.q = '';
+      st.tpl = null; st.tplTouched = false; st.pick = 0; st.editing = r; st.q = '';
       st.who = r.recorder || 'plex';
       st.preview = null; st.confirmed = false;
       st.nets.length = 0; st.chans.length = 0;

@@ -17,10 +17,14 @@ def _a_failed_chiefs_booking(page):
     from app.routes import record as record_routes
     team = db.one("SELECT * FROM teams WHERE name LIKE 'Kansas City%'")
     pid, _, _ = record_routes._make_pass("team", team=dict(team))
+    # A game still to come: the schedule lists what is ahead, and the earliest
+    # game in the guide has already aired at some times of day. The test
+    # failed in CI on those.
+    now = int(time.time())
     a = db.one("""SELECT a.*, p.title FROM airings a JOIN programs p
                   ON p.guid = a.program_guid
-                  WHERE p.teams LIKE '%Kansas City%' ORDER BY a.begins_at LIMIT 1""")
-    now = int(time.time())
+                  WHERE p.teams LIKE '%Kansas City%' AND a.begins_at > ?
+                  ORDER BY a.begins_at LIMIT 1""", (now + 600,))
     with db.tx() as c:
         for i in range(3):
             c.execute(

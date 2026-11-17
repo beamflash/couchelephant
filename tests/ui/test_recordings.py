@@ -121,7 +121,9 @@ def test_pausing_a_pass_marks_it_paused(page):
     page.click('.subtab[data-sub="sports"]')
     page.wait_for_selector(".passrow", timeout=15000)
     page.click('.passrow [data-act="toggle"]')
-    page.wait_for_selector(".passrow .pill", timeout=15000)
+    # Not just any pill: every row already has its "Recorded by" one, so
+    # waiting for a pill ended before the click had redrawn the row.
+    page.wait_for_selector('.passrow .pill:text-is("paused")', timeout=15000)
     assert "paused" in page.locator(".passrow").first.inner_text()
     assert "Resume" in page.locator(".passrow").first.inner_text()
 
