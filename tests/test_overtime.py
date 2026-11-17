@@ -107,7 +107,7 @@ def test_a_game_not_on_the_scoreboard_keeps_its_padding(board):
     begins = int(time.time()) - 3 * 3600
     rec = _game(begins)
     board.append(_event("401", begins, "in", _team("Las Vegas Raiders", "Las Vegas", "Raiders"),
-                        CHIEFS))
+                        _team("Dallas Cowboys", "Dallas", "Cowboys")))
     overtime.tick(rec["ends_at"] - 3600)
     overtime.tick(rec["ends_at"] + 1800)
     rec2 = recorder.get(rec["id"])
@@ -192,3 +192,17 @@ def test_the_settings_save_from_both_places():
     assert db.get_setting("overtime_cap_minutes") == "360"
     assert c.post("/api/tv/settings", data={"sports_overtime": "0"}).json()["ok"]
     assert not overtime.enabled()
+
+
+def test_one_team_and_the_start_time_are_enough_when_only_one_game_fits(board):
+    """The guide says "Texas-El Paso" where the scoreboard says "UTEP"."""
+    begins = int(time.time()) - 3 * 3600
+    rec = _game(begins, title="Texas-El Paso at Air Force", show="College Football")
+    board.append(_event("77", begins + 600, "in", _team("Air Force Falcons", "Air Force", "Falcons"),
+                        _team("UTEP Miners", "UTEP", "Miners")))
+    ref, said = overtime.find(rec)
+    assert ref == "football/college-football/77"
+    # Two games that could fit is not a match.
+    board.append(_event("78", begins, "in", _team("Air Force Falcons", "Air Force", "Falcons"),
+                        _team("Navy Midshipmen", "Navy", "Midshipmen")))
+    assert overtime.find(rec)[0] is None

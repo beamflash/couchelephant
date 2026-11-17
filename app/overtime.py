@@ -41,6 +41,10 @@ STILL_PLAYING_SECONDS = 600
 AFTER_FINAL_SECONDS = 300
 # A game on the scoreboard and in the guide start within this much of each other.
 START_SLACK_SECONDS = 4 * 3600
+# One team named alike is enough when the game starts this close to the
+# guide's time and no other game fits: a team plays one game at a time. The
+# guide says "Texas-El Paso" where the scoreboard says "UTEP".
+ONE_TEAM_SLACK_SECONDS = 30 * 60
 # How long one answer from the scoreboard is reused.
 CACHE_SECONDS = 90
 
@@ -110,7 +114,8 @@ def _same_team(guide: str, espn: set[str]) -> bool:
         return False
     # "Air Force" is the location of "Air Force Falcons"; "Kansas City Chiefs"
     # is the display name. Either end of the name may be the shared part.
-    return any(g == n or n.startswith(g + " ") or g.startswith(n + " ") for n in espn)
+    return any(g == n or n.startswith(g + " ") or g.startswith(n + " ") or g.endswith(" " + n)
+               for n in espn)
 
 
 def guide_teams(rec) -> list[str]:
@@ -176,6 +181,7 @@ def find(rec) -> tuple[str | None, str]:
     if len(teams) != 2:
         return None, "The guide does not name two teams."
     begins = rec["begins_at"] or rec["starts_at"]
+    near = {}
     for path, query in leagues_for(rec):
         for day in _days(begins):
             for e in _get(path, query, day):
@@ -189,6 +195,12 @@ def find(rec) -> tuple[str | None, str]:
                 if (_same_team(a, sides[0]) and _same_team(b, sides[1])) or \
                         (_same_team(a, sides[1]) and _same_team(b, sides[0])):
                     return f"{path}/{e['id']}", e.get("name") or ""
+                if abs(_start(e) - begins) <= ONE_TEAM_SLACK_SECONDS and \
+                        any(_same_team(t, s) for t in teams for s in sides):
+                    near[f"{path}/{e['id']}"] = e.get("name") or ""
+    if len(near) == 1:
+        ref, name = next(iter(near.items()))
+        return ref, name + " (one team matched by name, and the start time)"
     return None, f"No game on the scoreboard for {teams[0]} and {teams[1]}."
 
 
