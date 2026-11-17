@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.5.16 - 2026-11-17
+## 1.5.17 - 2026-11-17
 
 ### Fixed
 
@@ -9,6 +9,11 @@
   a pause the person made holds it now; otherwise the tuner goes back within a
   minute, and the Apple TV and iPhone apps give it back at once as they are
   put away. Coming back to the app tunes the channel again.
+
+## 1.5.16 - 2026-11-17
+
+### Fixed
+
 - A programme with no ads counted as a failed ad scan and was scanned three
   more times. comskip exits with 1 when it finds no ads; that is now an answer.
 - A live ad scan started again (after a tuner dropped, or a restart) hid the
