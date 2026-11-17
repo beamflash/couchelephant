@@ -843,7 +843,13 @@ window.wireSettings = function (root) {
                  '<label class="row"><input type="checkbox" data-tvallow="' + r.id + '"' +
                  (r.allow_delete ? ' checked' : '') + '>' +
                  '<span>Allow delete. This television can then delete a recording ' +
-                 'for good, from CouchElephant and from Plex.</span></label></td></tr>';
+                 'for good, from CouchElephant and from Plex.</span></label>' +
+                 (tvlist.dataset.auth && tvlist.dataset.auth !== 'none'
+                   ? '<label class="row"><input type="checkbox" data-tvallowset="' + r.id + '"' +
+                     (r.allow_settings ? ' checked' : '') + '>' +
+                     '<span>Allow settings. This television can then change Settings, ' +
+                     'except sign-in, people, televisions, backups and secret keys.</span></label>'
+                   : '') + '</td></tr>';
           }
         });
         tvlist.innerHTML = h + '</table>';
@@ -863,9 +869,13 @@ window.wireSettings = function (root) {
     });
     tvlist.addEventListener('change', function (e) {
       var box = e.target.closest('[data-tvallow]');
-      if (!box) return;
-      fetch('/api/tv/devices/' + box.dataset.tvallow + '/settings',
-            {method: 'POST', body: new URLSearchParams({allow_delete: box.checked ? '1' : '0'})})
+      var set = e.target.closest('[data-tvallowset]');
+      if (!box && !set) return;
+      var form = box ? {allow_delete: box.checked ? '1' : '0'}
+                     : {allow_settings: set.checked ? '1' : '0'};
+      box = box || set;
+      fetch('/api/tv/devices/' + (box.dataset.tvallow || box.dataset.tvallowset) + '/settings',
+            {method: 'POST', body: new URLSearchParams(form)})
         .then(CE.readJson).then(function (j) { if (!j.ok) box.checked = !box.checked; });
     });
     var approve = root.querySelector('#tvapprove');

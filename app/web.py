@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import auth, backingstore, backups, db, handover, passes, recorder, sync, tuner
 from .plex import Plex
-from .routes import account, data, guide, notices, record, settings, tv
+from .routes import account, data, guide, notices, record, settings, tv, tv_settings
 from .routes import passes as pass_routes
 from .routes._shared import ASSET_V, BASE, VERSION, current_user  # noqa: F401
 from .routes.account import _configured
@@ -51,6 +51,8 @@ def _admin_only(path, method):
         return False
     if path in ("/settings", "/partial/settings") and method == "GET":
         return False          # reading settings is fine; changing them is not
+    if path.startswith("/api/tv/settings"):
+        return method != "GET"
     return path.startswith(_ADMIN_PREFIX)
 
 
@@ -248,5 +250,5 @@ def healthz():
     })
 
 
-for r in (account, data, guide, notices, record, pass_routes, settings, tv):
+for r in (account, data, guide, notices, record, pass_routes, settings, tv, tv_settings):
     app.include_router(r.router)

@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.5.13 - 2026-11-16
+
+### Added
+
+- **Settings in the Apple TV and iPhone apps.** A new Settings tab changes
+  what the web page changes: the Plex address and its test, the timezone,
+  how often to sync, Sync now, channel logos, preview mode, the CouchElephant
+  DVR (who records, tuner, padding, pause limit, encoder), where a finished
+  recording goes in Plex, the TheSportsDB key, and notifications on, off and
+  test. Each change saves at once. Left to the web page on purpose: sign-in,
+  people, televisions, backups, logo uploads, and typing secret keys (the apps
+  show whether each is set). With sign-in on, a television needs **Allow
+  settings** in Settings, Televisions, the same way it needs Allow delete.
+- **New season pass and new sports pass** buttons on the Recordings tab of
+  both apps. Search a show, a film or a team and follow it. A show the guide
+  has not reached yet is found through TVmaze and TMDB and records once it
+  appears.
+
+### Changed
+
+- The web forms and the apps save settings through one set of checks, so
+  neither can store a value the other refuses. The sync interval is now kept
+  between 5 and 1440 minutes.
+
 ## 1.5.12 - 2026-11-16
 
 ### Added

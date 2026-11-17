@@ -11,6 +11,8 @@ import os
 import re
 import secrets
 import time
+import zoneinfo
+from datetime import datetime
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import (
@@ -67,6 +69,7 @@ def hello(request: Request):
             "pairing_required": needs,
             "paired": bool(dev),
             "can_delete": bool(dev and dev["allow_delete"]),
+            "can_change_settings": bool(not needs or (dev and dev["allow_settings"])),
             "recorder": recorder.why_unavailable() is None,
             "recorder_note": recorder.why_unavailable()}
 
@@ -112,7 +115,8 @@ def pair_poll(secret: str = Form(...)):
 def devices():
     now = int(time.time())
     rows = db.query(
-        "SELECT id, name, code, approved_at, created_at, last_seen, allow_delete "
+        "SELECT id, name, code, approved_at, created_at, last_seen, allow_delete, "
+        "allow_settings "
         "FROM tv_devices "
         "WHERE approved_at IS NOT NULL OR created_at > ? ORDER BY created_at DESC",
         (now - PAIR_SECONDS,))
@@ -135,14 +139,17 @@ def device_approve(code: str = Form(...)):
 
 
 @router.post("/api/tv/devices/{device_id}/settings")
-def device_settings(device_id: int, allow_delete: str = Form("0")):
-    """What one television may do. Only delete, so far."""
+def device_settings(device_id: int, allow_delete: str = Form(""),
+                    allow_settings: str = Form("")):
+    """What one television may do. Only what is sent is changed."""
     if not db.one("SELECT 1 FROM tv_devices WHERE id = ?", (device_id,)):
         return JSONResponse({"ok": False, "error": "That television is gone."},
                             status_code=404)
     with db.tx() as c:
-        c.execute("UPDATE tv_devices SET allow_delete = ? WHERE id = ?",
-                  (1 if allow_delete in ("1", "true", "on") else 0, device_id))
+        for col, sent in (("allow_delete", allow_delete), ("allow_settings", allow_settings)):
+            if sent != "":
+                c.execute(f"UPDATE tv_devices SET {col} = ? WHERE id = ?",
+                          (1 if sent in ("1", "true", "on") else 0, device_id))
     return {"ok": True}
 
 
@@ -677,6 +684,90 @@ def _passes() -> list[dict]:
         })
     out.sort(key=lambda p: p["title"].lower())
     return out
+
+
+@router.get("/api/tv/passes/find")
+def tv_pass_find(q: str = "", tab: str = "season"):
+    """What a new pass could follow. `tab` is "season" for shows and films,
+    "sports" for teams. Shows in the guide come first, then what TVmaze or
+    TMDB know that the guide has not reached yet."""
+    q = (q or "").strip()
+    out = []
+    if tab == "sports":
+        teams = json.loads(pass_routes.api_teams(q=q).body)["teams"]
+        for t in teams[:60]:
+            out.append({"kind": "team", "id": str(t["id"] or ""), "title": t["name"],
+                        "detail": (t["league"] or "") + (" - plays this week" if t["playing"] else ""),
+                        "followed": t["followed"]})
+        return {"ok": True, "results": out}
+    followed = {r["series_title"] for r in db.query(
+        "SELECT series_title FROM passes WHERE kind = 'series'")}
+    tz = _zone()
+    for r in json.loads(pass_routes.api_series(q=q).body)["series"]:
+        when = datetime.fromtimestamp(r["next_at"] or 0, tz).strftime("%a %b %-d")
+        out.append({"kind": "series", "id": "", "title": r["name"],
+                    "detail": f"{r['airings']} in the guide, next {when}",
+                    "followed": r["name"] in followed})
+    if q:
+        seen = {o["title"].lower() for o in out}
+        for a in json.loads(pass_routes.api_announced(q=q).body)["announced"]:
+            if a["title"].lower() in seen:
+                continue
+            bits = [b for b in (a.get("subtitle"), a.get("network"), a.get("when")) if b]
+            out.append({"kind": "announced", "id": f"{a['source']}:{a['source_id']}",
+                        "title": a["title"], "detail": ", ".join(bits) or "Not in the guide yet",
+                        "followed": a["title"] in followed})
+    return {"ok": True, "results": out}
+
+
+def _zone():
+    try:
+        return zoneinfo.ZoneInfo(db.get_setting("timezone") or "UTC")
+    except Exception:
+        return zoneinfo.ZoneInfo("UTC")
+
+
+@router.post("/api/tv/passes/new")
+def tv_pass_new(kind: str = Form(...), title: str = Form(""), id: str = Form("")):
+    """Start a pass from the app's + button. Recorded by CouchElephant where
+    it can run, because that is what a television can play."""
+    who = "couchelephant" if recorder.available() else None
+    title = (title or "").strip()
+    if kind == "team":
+        t = db.one("SELECT * FROM teams WHERE id = ?", (id,)) if id else None
+        team = dict(t) if t else {"id": None, "name": title}
+        if not team["name"]:
+            return JSONResponse({"ok": False, "error": "Pick a team."}, status_code=400)
+        pass_id, label, made = record._make_pass("team", team=team, update=False, who=who)
+    elif kind == "announced":
+        source, _, source_id = id.partition(":")
+        got = pass_routes.api_announced_follow(source=source, source_id=source_id,
+                                               title=title)
+        body = json.loads(got.body)
+        if not body.get("ok"):
+            return JSONResponse(body, status_code=got.status_code)
+        if who:
+            with db.tx() as c:
+                c.execute("UPDATE passes SET recorder = ? WHERE id = ?",
+                          (who, body["pass_id"]))
+        return {"ok": True, "message": f"Following {title}. It records once the "
+                                       "guide carries it."}
+    elif kind == "series":
+        if not title:
+            return JSONResponse({"ok": False, "error": "Pick a show."}, status_code=400)
+        pass_id, label, made = record._make_pass("series", series=title, update=False,
+                                                 who=who)
+    else:
+        return JSONResponse({"ok": False, "error": "Unknown kind of pass."},
+                            status_code=400)
+    if not made:
+        with db.tx() as c:
+            c.execute("UPDATE passes SET enabled = 1 WHERE id = ?", (pass_id,))
+    done = passes.run_passes()
+    booked = len([d for d in done if d["action"] == "scheduled"])
+    if not made:
+        return {"ok": True, "message": f"Already following {label}. It is switched on."}
+    return {"ok": True, "message": f"Following {label}. {booked} set to record so far."}
 
 
 @router.post("/api/tv/passes/{pass_id}")

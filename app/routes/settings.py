@@ -56,16 +56,72 @@ def settings_partial(request: Request, tested: str = "", autherror: str = "",
                 cf_ready=cf_access.available())
 
 
+# What each setting may hold. The web forms and the television apps both save
+# through `apply`, so neither can store a value the other would refuse.
+CHOICES = {
+    "recorder_default": ("auto", "plex", "couchelephant"),
+    "recorder_encoder": ("auto", "software", "vaapi"),
+}
+# Whole minutes or days: (lowest, highest).
+NUMBERS = {
+    "sync_minutes": (5, 1440),
+    "recorder_lead_minutes": (0, 240),
+    "recorder_trail_minutes": (0, 240),
+    "recorder_keep_days": (0, 240),
+    "live_pause_minutes": (5, 240),
+}
+# What `apply` takes. Sign-in, accounts and secrets are not here on purpose,
+# except the Plex token, which only the web form sends.
+KEYS = ("plex_url", "plex_token", "timezone", "dry_run", "tuner_url",
+        "recorder_shows_folder", "recorder_movies_folder",
+        "recorder_shows_section", "recorder_movies_section",
+        "sportsdb_key", *CHOICES, *NUMBERS)
+
+
+def apply(values: dict) -> list[str]:
+    """Save the settings given, and only those. Returns what was refused."""
+    refused = []
+    for key, value in values.items():
+        if key not in KEYS or value is None:
+            continue
+        value = str(value).strip()
+        if key in NUMBERS:
+            low, high = NUMBERS[key]
+            try:
+                value = str(max(low, min(high, int(value))))
+            except ValueError:
+                refused.append(key)
+                continue
+        elif key in CHOICES:
+            if value not in CHOICES[key]:
+                refused.append(key)
+                continue
+        elif key == "timezone":
+            if value not in ZONES:
+                refused.append(key)
+                continue
+        elif key == "dry_run":
+            value = "1" if value in ("1", "true", "on") else "0"
+        elif key in ("plex_url", "tuner_url"):
+            value = value.rstrip("/")
+        elif key == "plex_token":
+            # A masked token is a form echoing back what it was shown.
+            if not value or value.startswith("*"):
+                continue
+        elif key in ("recorder_shows_folder", "recorder_movies_folder"):
+            # A folder inside the library mount, and nothing that climbs out of it.
+            value = "/".join(p for p in value.strip("/").split("/")
+                             if p and p not in (".", ".."))
+        db.set_setting(key, value)
+    return refused
+
+
 @router.post("/settings")
 def settings_save(plex_url: str = Form(""), plex_token: str = Form(""),
                   timezone: str = Form("UTC"), sync_minutes: str = Form("60"),
                   dry_run: str = Form("0")):
-    db.set_setting("plex_url", plex_url.strip().rstrip("/"))
-    if plex_token.strip() and not plex_token.startswith("*"):
-        db.set_setting("plex_token", plex_token.strip())
-    db.set_setting("timezone", timezone)
-    db.set_setting("sync_minutes", sync_minutes)
-    db.set_setting("dry_run", "1" if dry_run == "1" else "0")
+    apply({"plex_url": plex_url, "plex_token": plex_token, "timezone": timezone,
+           "sync_minutes": sync_minutes, "dry_run": dry_run})
     return RedirectResponse("/settings", status_code=303)
 
 
@@ -81,31 +137,16 @@ def settings_recorder(tuner_url: str = Form(""), recorder_default: str = Form("a
                       recorder_keep_days: str = Form("2"),
                       live_pause_minutes: str = Form("30")):
     """CouchElephant's own recorder: the tuner, the default, the handover."""
-    def minutes(v, default):
-        try:
-            return str(max(0, min(240, int(v))))
-        except ValueError:
-            return default
-    db.set_setting("tuner_url", tuner_url.strip().rstrip("/"))
-    db.set_setting("recorder_default", recorder_default
-                   if recorder_default in ("auto", "plex", "couchelephant") else "auto")
-    db.set_setting("recorder_encoder", recorder_encoder
-                   if recorder_encoder in ("auto", "software", "vaapi") else "auto")
-    db.set_setting("recorder_lead_minutes", minutes(recorder_lead_minutes, "1"))
-    db.set_setting("recorder_trail_minutes", minutes(recorder_trail_minutes, "3"))
-    db.set_setting("recorder_keep_days", minutes(recorder_keep_days, "2"))
-    try:
-        db.set_setting("live_pause_minutes", str(max(5, min(240, int(live_pause_minutes)))))
-    except ValueError:
-        pass
-    for key, value in (("recorder_shows_folder", recorder_shows_folder),
-                       ("recorder_movies_folder", recorder_movies_folder)):
-        # A folder inside the library mount, and nothing that climbs out of it.
-        clean = "/".join(p for p in value.strip().strip("/").split("/")
-                         if p and p not in (".", ".."))
-        db.set_setting(key, clean)
-    db.set_setting("recorder_shows_section", recorder_shows_section.strip())
-    db.set_setting("recorder_movies_section", recorder_movies_section.strip())
+    apply(dict(tuner_url=tuner_url, recorder_default=recorder_default,
+               recorder_encoder=recorder_encoder,
+               recorder_lead_minutes=recorder_lead_minutes,
+               recorder_trail_minutes=recorder_trail_minutes,
+               recorder_shows_folder=recorder_shows_folder,
+               recorder_shows_section=recorder_shows_section,
+               recorder_movies_folder=recorder_movies_folder,
+               recorder_movies_section=recorder_movies_section,
+               recorder_keep_days=recorder_keep_days,
+               live_pause_minutes=live_pause_minutes))
     return RedirectResponse("/settings", status_code=303)
 
 
@@ -163,7 +204,7 @@ def settings_sources(sportsdb_key: str = Form(""), tmdb_key: str = Form("")):
     handed, so a form posting to it without carrying the server URL, the
     timezone and the rest as hidden fields would blank them.
     """
-    db.set_setting("sportsdb_key", sportsdb_key.strip())
+    apply({"sportsdb_key": sportsdb_key})
     # Masked on the way out, so a form echoing asterisks back must not be saved
     # over the real key. Same rule as `plex_token`.
     if tmdb_key.strip() and not tmdb_key.startswith("*"):

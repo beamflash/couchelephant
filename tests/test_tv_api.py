@@ -581,3 +581,108 @@ def test_a_recording_that_has_started_does_not_move_with_its_pass(client, tuner,
         c.execute("UPDATE recordings SET state = 'recording'")
     client.post(f"/api/tv/passes/{pid}", data={"recorder": "plex"})
     assert db.one("SELECT state FROM recordings")["state"] == "recording"
+
+
+# ---------- settings and new passes, from the apps ----------
+
+def test_the_apps_read_settings_without_any_secret(client, tuner):
+    db.set_setting("plex_token", "the-real-token")
+    db.set_setting("tmdb_key", "the-real-key")
+    tv = _pair(client)
+    d = client.get("/api/tv/settings", headers=tv).json()
+    assert d["may_change"] is True, "sign-in off: anyone may, as in a browser"
+    assert d["plex_token_set"] and d["tmdb_key_set"]
+    assert "the-real-token" not in str(d) and "the-real-key" not in str(d)
+    assert "plex_token" not in d["values"]
+    assert d["values"]["live_pause_minutes"] == "30"
+
+
+def test_the_apps_save_only_what_they_send_and_within_limits(client, tuner):
+    tv = _pair(client)
+    db.set_setting("recorder_trail_minutes", "3")
+    r = client.post("/api/tv/settings", headers=tv,
+                    data={"live_pause_minutes": "999", "timezone": "America/Chicago"})
+    assert r.json()["ok"], r.json()
+    assert db.get_setting("live_pause_minutes") == "240"
+    assert db.get_setting("timezone") == "America/Chicago"
+    assert db.get_setting("recorder_trail_minutes") == "3", "not sent, not changed"
+    bad = client.post("/api/tv/settings", headers=tv, data={"recorder_encoder": "magic"})
+    assert bad.status_code == 400
+    # Never through here, whatever is sent.
+    client.post("/api/tv/settings", headers=tv,
+                data={"plex_token": "new", "auth_mode": "none"})
+    assert db.get_setting("plex_token") != "new"
+
+
+def test_with_sign_in_on_a_television_needs_leave_to_change_settings(client, tuner):
+    db.set_setting("auth_mode", "local")
+    admin = auth.create_user("owner", "a-good-password")
+    kid = auth.create_user("kid", "a-good-password", role="user")
+    asked = client.post("/api/tv/pair", data={"name": "Den"}).json()
+    client.cookies.set(auth.SESSION_COOKIE, auth.create_session(admin))
+    client.post("/api/tv/devices/approve", data={"code": asked["code"]})
+    dev = client.get("/api/tv/devices").json()["devices"][0]["id"]
+    client.cookies.clear()
+    key = client.post("/api/tv/pair/poll", data={"secret": asked["secret"]}).json()["key"]
+    tv = {"Authorization": f"Bearer {key}"}
+
+    assert client.get("/api/tv/settings", headers=tv).json()["may_change"] is False
+    r = client.post("/api/tv/settings", headers=tv, data={"live_pause_minutes": "60"})
+    assert r.status_code == 403
+    assert db.get_setting("live_pause_minutes") != "60"
+
+    client.cookies.set(auth.SESSION_COOKIE, auth.create_session(admin))
+    client.post(f"/api/tv/devices/{dev}/settings", data={"allow_settings": "1"})
+    row = db.one("SELECT allow_delete, allow_settings FROM tv_devices")
+    assert (row["allow_delete"], row["allow_settings"]) == (0, 1), "one flag at a time"
+    # A viewer account in a browser is refused, as on the web page.
+    client.cookies.set(auth.SESSION_COOKIE, auth.create_session(kid))
+    assert client.post("/api/tv/settings",
+                       data={"live_pause_minutes": "60"}).status_code == 403
+    client.cookies.clear()
+
+    assert client.get("/api/tv/hello", headers=tv).json()["can_change_settings"] is True
+    assert client.post("/api/tv/settings", headers=tv,
+                       data={"live_pause_minutes": "60"}).json()["ok"]
+    assert db.get_setting("live_pause_minutes") == "60"
+
+
+def test_the_web_forms_still_save_through_the_same_rules(client):
+    client.post("/settings/recorder", data={"live_pause_minutes": "1",
+                                            "recorder_shows_folder": "../etc/tv"})
+    assert db.get_setting("live_pause_minutes") == "5"
+    assert db.get_setting("recorder_shows_folder") == "etc/tv"
+
+
+def test_the_plus_button_finds_a_show_and_follows_it(client, synced, tuner, monkeypatch):
+    from app.sources import tmdb, tvmaze
+    monkeypatch.setattr(tvmaze, "search", lambda q: [])
+    monkeypatch.setattr(tmdb, "search", lambda q, key="": [])
+    tv = _pair(client)
+    found = client.get("/api/tv/passes/find", headers=tv,
+                       params={"q": "quiz", "tab": "season"}).json()["results"]
+    show = [f for f in found if f["kind"] == "series"][0]
+    assert show["title"] == "Quiz Show" and not show["followed"]
+    r = client.post("/api/tv/passes/new", headers=tv,
+                    data={"kind": "series", "title": show["title"]}).json()
+    assert r["ok"] and r["message"].startswith("Following Quiz Show")
+    p = db.one("SELECT * FROM passes")
+    assert p["series_title"] == "Quiz Show" and p["recorder"] == "couchelephant"
+    again = client.get("/api/tv/passes/find", headers=tv,
+                       params={"q": "quiz"}).json()["results"]
+    assert [f for f in again if f["title"] == "Quiz Show"][0]["followed"]
+    assert "Already following" in client.post(
+        "/api/tv/passes/new", headers=tv,
+        data={"kind": "series", "title": "Quiz Show"}).json()["message"]
+
+
+def test_the_plus_button_follows_a_team_from_the_catalogue(client, synced, tuner):
+    tv = _pair(client)
+    found = client.get("/api/tv/passes/find", headers=tv,
+                       params={"q": "chiefs", "tab": "sports"}).json()["results"]
+    assert found and found[0]["kind"] == "team"
+    r = client.post("/api/tv/passes/new", headers=tv,
+                    data={"kind": "team", "id": found[0]["id"],
+                          "title": found[0]["title"]}).json()
+    assert r["ok"], r
+    assert db.one("SELECT kind, team_name FROM passes")["team_name"] == found[0]["title"]

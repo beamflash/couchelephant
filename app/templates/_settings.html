@@ -466,7 +466,7 @@
         </div>
         {% endif %}
         {# Listed with sign-in on or off: each television has its own settings. #}
-        <div id="tvlist" data-find="television devices remove settings allow delete permissions"></div>
+        <div id="tvlist" data-auth="{{ auth_mode }}" data-find="television devices remove settings allow delete permissions"></div>
       </section>
 
       {# ---------------- Accounts ---------------- #}
