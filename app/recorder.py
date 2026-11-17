@@ -581,8 +581,18 @@ def start_live(vcn: str, title: str | None = None, channel_title: str | None = N
     return rec_id
 
 
-def watching(rec_id: int, position: float | None = None) -> None:
+# Live sessions a player said were paused by the person watching. Only those
+# are held for the pause limit. A player that stops reporting while it plays
+# was closed or put away, and its tuner goes back after LIVE_IDLE_SECONDS.
+# A player that never says (an older app) is held as if paused.
+_live_paused: dict[int, bool] = {}
+
+
+def watching(rec_id: int, position: float | None = None,
+             paused: bool | None = None) -> None:
     """A player says it is on this recording, and where."""
+    if paused is not None:
+        _live_paused[rec_id] = paused
     cols = {"watched_at": int(time.time())}
     if position is not None:
         cols["position"] = max(0.0, float(position))
@@ -724,8 +734,9 @@ def pause_limit() -> int:
 
 
 def _close_idle_live(now):
-    idle = max(LIVE_IDLE_SECONDS, pause_limit())
+    held = max(LIVE_IDLE_SECONDS, pause_limit())
     for rec in db.query("SELECT * FROM recordings WHERE kind = 'live'"):
+        idle = held if _live_paused.get(rec["id"], True) else LIVE_IDLE_SECONDS
         if (rec["watched_at"] or 0) < now - idle:
             _end_live(rec)
 
@@ -740,6 +751,7 @@ def stop_live(rec_id: int) -> None:
 
 def _end_live(rec):
     """A live session leaves nothing behind: no row, no files."""
+    _live_paused.pop(rec["id"], None)
     job = _jobs.pop(rec["id"], None)
     if job:
         job.stop()

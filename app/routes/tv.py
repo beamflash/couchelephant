@@ -968,12 +968,15 @@ def live_stop(rec_id: int):
 
 
 @router.post("/api/tv/live/{rec_id}/keepalive")
-def live_keepalive(rec_id: int):
+def live_keepalive(rec_id: int, paused: str = Form("")):
+    """The player is still on this channel. `paused` is "1" when the person
+    paused it, which is what holds the tuner for the pause limit; "0" while it
+    plays. An app that sends neither is held as before."""
     rec = recorder.get(rec_id)
     if not rec:
         return JSONResponse({"ok": False, "error": "That session has ended."},
                             status_code=404)
-    recorder.watching(rec_id)
+    recorder.watching(rec_id, paused={"1": True, "0": False}.get(paused))
     return {"ok": True}
 
 

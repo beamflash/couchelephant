@@ -217,6 +217,21 @@ def test_live_viewing_starts_a_session_and_keepalive_holds_it(client, tuner):
     assert recorder.get(rec_id) is None
 
 
+def test_live_tv_left_while_playing_gives_the_tuner_back_in_a_minute(client, tuner):
+    """An app closed or put away while live TV plays sends nothing more. Only
+    a pause the person made holds the tuner for the pause limit."""
+    import time
+    playing = client.post("/api/tv/live/9.1").json()["recording"]["id"]
+    paused = client.post("/api/tv/live/5.1").json()["recording"]["id"]
+    _until(lambda: len(tuner.live) == 2)
+    assert client.post(f"/api/tv/live/{playing}/keepalive", data={"paused": "0"}).json()["ok"]
+    assert client.post(f"/api/tv/live/{paused}/keepalive", data={"paused": "1"}).json()["ok"]
+    recorder.tick(now=int(time.time()) + recorder.LIVE_IDLE_SECONDS + 5)
+    assert recorder.get(playing) is None, "the playing one was left: its tuner goes back"
+    assert recorder.get(paused) is not None, "the paused one is held for the pause limit"
+    _until(lambda: len(tuner.live) == 1)
+
+
 def test_live_viewing_of_a_channel_we_cannot_decode_is_refused(client, tuner):
     tuner.extra = [{"GuideNumber": "109.1", "AudioCodec": "AC4", "URL": "x"}]
     r = client.post("/api/tv/live/109.1")

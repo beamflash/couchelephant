@@ -166,7 +166,10 @@
     // A live session is kept alive; a recording is told where the player is,
     // which is also what holds it back from being moved while it is watched.
     if (now.kind === 'live') {
-      fetch('/api/tv/live/' + now.id + '/keepalive', {method: 'POST'});
+      // Paused by the person holds the channel for the pause limit; playing
+      // and then gone (a crashed tab, a lost connection) frees it in a minute.
+      fetch('/api/tv/live/' + now.id + '/keepalive',
+            {method: 'POST', body: new URLSearchParams({paused: video.paused ? '1' : '0'})});
     } else {
       fetch('/api/tv/recordings/' + now.id + '/position',
             {method: 'POST', body: new URLSearchParams({seconds: video.currentTime || 0})});

@@ -4,6 +4,11 @@
 
 ### Fixed
 
+- Live TV left while it played (the app put away, closed, or a browser tab
+  lost) held its tuner for the whole pause limit, 30 minutes by default. Only
+  a pause the person made holds it now; otherwise the tuner goes back within a
+  minute, and the Apple TV and iPhone apps give it back at once as they are
+  put away. Coming back to the app tunes the channel again.
 - A programme with no ads counted as a failed ad scan and was scanned three
   more times. comskip exits with 1 when it finds no ads; that is now an answer.
 - A live ad scan started again (after a tuner dropped, or a restart) hid the
