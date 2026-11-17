@@ -35,3 +35,25 @@ flags could only fake:
 - Skip ad pressed inside a break moves past it.
 - Settings: a switch turned and saved; New season pass searched and followed.
 - The Apple TV remote (`XCUIRemote`) through the tabs, the guide and the player.
+
+## The guide over live TV
+
+Asked 2026-11-17.
+
+While watching live TV, the guide opens over the picture, and the channel
+keeps playing behind it.
+
+- Press up: the player buttons show over the picture (as now).
+- Press down: the guide shows over the picture. Browse it with the remote,
+  and the live channel keeps playing and keeps its tuner.
+- It is the same guide as the Guide tab (`clients/apple/TV/GuideView.swift`,
+  `clients/apple/Phone/GuideView.swift`, `app/templates/guide.html`) in
+  overlay form: same grid, same now line, same details.
+- Record from the overlay: a programme or a season pass, the same choices
+  as the Guide tab.
+- Back (Menu on the remote, Escape on the web) closes the overlay and
+  leaves the channel playing.
+- Picking a programme on now on another channel tunes to that channel.
+- Apple TV first (up and down on the remote, in `PlayerView.swift` beside
+  the Skip ad action). iPhone/iPad: a swipe or a Guide button. Web: the
+  arrow keys in `app/static/js/player.js`.
