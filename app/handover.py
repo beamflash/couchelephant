@@ -8,6 +8,7 @@ The viewing copy is never touched here, so a recording stays playable in
 CouchElephant before, during and after the move.
 """
 import datetime
+import logging
 import os
 import re
 import shutil
@@ -19,6 +20,8 @@ import httpx
 
 from . import db, recorder
 from .plex import Plex, PlexError
+
+log = logging.getLogger("couchelephant.handover")
 
 LIB_DIR = os.environ.get("COUCHELEPHANT_LIBRARY", "/library")
 # A handover that failed is tried again after this long.
@@ -48,7 +51,7 @@ def why_unavailable(rec=None) -> str | None:
                 "have recordings moved into Plex.")
     kinds = [_kind(rec)] if rec is not None else ["shows"]
     for k in kinds:
-        word = "films" if k == "movies" else "shows"
+        word = "movies" if k == "movies" else "TV"
         if not (db.get_setting(f"recorder_{k}_folder") or "").strip():
             return f"No library folder is chosen for {word}. Choose one in Settings, Recording, CouchElephant DVR."
         if not (db.get_setting(f"recorder_{k}_section") or "").strip():
@@ -96,7 +99,7 @@ def _existing(root: str, show: str) -> str:
 
 
 def relative_path(rec, root: str | None = None) -> str:
-    """Where the file goes, under the shows or films folder."""
+    """Where the file goes, under the TV or movies folder."""
     title = clean(rec["title"])
     if rec["ptype"] == "movie":
         name = f"{title} ({rec['year']})" if rec["year"] else title
@@ -187,12 +190,14 @@ def hand_over(rec) -> None:
                     time.sleep(SCAN_POLL_SECONDS)
             key = str(item.get("ratingKey") or "")
             note = None
+            sent = None
             now = recorder.get(rec["id"])
             at = (now["position"] if now else 0) or 0
             # A few seconds in is not a place anybody stopped watching.
             if key and at > 60:
                 try:
                     plex.set_position(key, at)
+                    sent = at
                 except Exception as e:
                     # The recording is safe in Plex. Only the bookmark is lost,
                     # and the row says so.
@@ -201,7 +206,8 @@ def hand_over(rec) -> None:
         raise HandoverError(f"Plex did not answer the handover: {e}") from e
 
     recorder._set(rec["id"], state="in_plex", plex_rating_key=key,
-                  moved_at=int(time.time()), error=note)
+                  moved_at=int(time.time()), error=note,
+                  plex_position=sent if sent is not None else at)
     # Only now. Plex lists the file, so ours is the spare.
     try:
         os.remove(src)
@@ -265,6 +271,42 @@ def tick(now: int | None = None, wait: bool = False) -> None:
         w = _worker
     if wait:
         w.join()
+
+
+# Plex hears a new position once the player has been quiet this long, not
+# every few seconds while it plays.
+RESUME_QUIET_SECONDS = 60
+# The recorder loop calls this every five seconds, and a Plex that does not
+# answer must not hold the next recording's start up for long.
+_positions_looked = 0.0
+
+
+def send_positions(now: int | None = None, force: bool = False) -> None:
+    """Tell Plex where a recording was left, when it was watched in
+    CouchElephant after the handover. Without this Plex kept the position
+    from the day of the move."""
+    global _positions_looked
+    if not force and time.time() - _positions_looked < RESUME_QUIET_SECONDS:
+        return
+    _positions_looked = time.time()
+    now = now or int(time.time())
+    rows = [r for r in db.query(
+        "SELECT * FROM recordings WHERE state = 'in_plex' "
+        "AND plex_rating_key IS NOT NULL AND plex_rating_key != '' "
+        "AND position > 60 AND watched_at IS NOT NULL AND watched_at <= ?",
+        (now - RESUME_QUIET_SECONDS,))
+        if abs((r["position"] or 0) - (r["plex_position"] or 0)) >= 5]
+    if not rows:
+        return
+    try:
+        with Plex(db.get_setting("plex_url"), db.get_setting("plex_token")) as plex:
+            for r in rows:
+                plex.set_position(r["plex_rating_key"], r["position"])
+                recorder._set(r["id"], plex_position=r["position"])
+    except (PlexError, httpx.HTTPError) as e:
+        # Tried again on the next pass. Plex being away for a while is not
+        # worth more than a log line.
+        log.info("resume position not sent to Plex yet: %s", e)
 
 
 def tidy(now: int | None = None) -> None:

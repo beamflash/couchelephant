@@ -1,3 +1,16 @@
+# comskip finds the ad breaks in a recording (app/adskip.py). Debian has no
+# package for it, so it is built from a pinned commit of its source here and
+# only the program is carried into the image below. GPL-2.0, see THIRD_PARTY.md.
+FROM python:3.12-slim AS comskip
+ARG COMSKIP_COMMIT=a140b6ac8bc8f596729e9052819affc779c3b377
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates curl build-essential \
+      autoconf automake libtool pkg-config libargtable2-dev \
+      libavformat-dev libavcodec-dev libavutil-dev libswscale-dev \
+ && curl -fsSL "https://codeload.github.com/erikkaashoek/Comskip/tar.gz/${COMSKIP_COMMIT}" | tar xz \
+ && cd "Comskip-${COMSKIP_COMMIT}" && ./autogen.sh && ./configure && make -j"$(nproc)" \
+ && install -m 755 comskip /usr/local/bin/comskip
+
 FROM python:3.12-slim
 
 # Filled in by the build, so `docker inspect` and the GitHub package page can
@@ -19,11 +32,13 @@ ENV PYTHONUNBUFFERED=1 \
 # two VA drivers let it use an Intel or AMD GPU when /dev/dri is passed in, and
 # do nothing when it is not. An install that never records never runs any of it.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ffmpeg mesa-va-drivers \
+ && apt-get install -y --no-install-recommends ffmpeg mesa-va-drivers libargtable2-0 \
  # The Intel driver exists for amd64 only. Asking for it on arm64 fails the build.
  && if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
       apt-get install -y --no-install-recommends intel-media-va-driver; fi \
  && rm -rf /var/lib/apt/lists/*
+
+COPY --from=comskip /usr/local/bin/comskip /usr/local/bin/comskip
 
 WORKDIR /app
 COPY requirements.txt .

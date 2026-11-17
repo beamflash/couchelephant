@@ -63,3 +63,16 @@ unmodified. It plays the viewing copy of a recording in browsers that do not
 play HLS on their own. The full build, because the light one leaves out the
 broadcast captions. Copyright (c) 2017 Dailymotion, licensed under the
 Apache License 2.0: https://github.com/video-dev/hls.js/blob/master/LICENSE
+
+---
+
+## Comskip
+
+The container image carries `comskip`, built unmodified from
+https://github.com/erikkaashoek/Comskip at commit
+a140b6ac8bc8f596729e9052819affc779c3b377 (see the `Dockerfile`). It finds the
+ad breaks in a recording so CouchElephant's players can offer a Skip button.
+CouchElephant runs it as a separate program and does not link to it.
+Copyright (c) Erik Kaashoek and contributors, licensed under the GNU General
+Public License, version 2: https://github.com/erikkaashoek/Comskip/blob/master/LICENSE.
+The source for the exact build is at the commit above.

@@ -264,7 +264,7 @@
           <table class="stack">
             <tr><td class="dim">EPG provider</td>
                 <td><code>{{ settings.epg_provider or 'not discovered yet' }}</code></td></tr>
-            <tr><td class="dim">Shows section</td><td><code>{{ settings.shows_section or '-' }}</code></td></tr>
+            <tr><td class="dim">TV section</td><td><code>{{ settings.shows_section or '-' }}</code></td></tr>
             <tr><td class="dim">Sports section</td><td><code>{{ settings.sports_section or '-' }}</code></td></tr>
             <tr><td class="dim">Movies section</td><td><code>{{ settings.movies_section or '-' }}</code></td></tr>
           </table>
@@ -291,7 +291,7 @@
           The Plex guide reaches about twelve days ahead. No guide source
           anywhere reaches much further, paid ones included, because no
           broadcaster has decided that far out. These fill in what has been
-          announced beyond it, so you can follow a show or a season before the
+          announced beyond it, so you can follow a series or a season before the
           guide has heard of it.
         </p>
         <p class="dim">
@@ -313,7 +313,7 @@
                  value="{{ "*" * 12 if settings.tmdb_key else "" }}"
                  placeholder="optional">
           <p class="dim tiny">
-            Adds films and their release dates. Free at
+            Adds movies and their release dates. Free at
             themoviedb.org/settings/api.
           </p>
           <button type="submit" class="primary">Save</button>
@@ -408,12 +408,32 @@
               second copy is made for watching. The recording Plex receives is never
               changed. <span id="recencsay"></span></span>
           </div>
+          <div class="field" data-find="ad skip commercials comskip breaks">
+            <label>Skipping ads</label>
+            <label class="row">
+              <input type="hidden" name="adskip_final" value="0">
+              <input type="checkbox" name="adskip_final" value="1"
+                     {{ 'checked' if settings.adskip_final != '0' }}>
+              <span>Skip ads in finished recordings</span>
+            </label>
+            <label class="row">
+              <input type="hidden" name="adskip_live" value="0">
+              <input type="checkbox" name="adskip_live" value="1"
+                     {{ 'checked' if settings.adskip_live != '0' }}>
+              <span>Skip ads while still recording, and in paused live TV</span>
+            </label>
+            <span class="help">The players show a Skip button during an ad break. Nothing
+              is skipped unless you press it. While a recording is still being made, a
+              break shows a minute or so after it ends, and can be shorter than the
+              real one. The copy Plex gets is never changed; Plex finds its own ad
+              markers if its library's "Ad detection" is set to "For all items".</span>
+          </div>
 
           <h3>Moving a finished recording into Plex</h3>
           <p class="dim" id="rechandsay">When a recording has ended and nobody is watching
             it, it is copied into your Plex library and Plex is asked to scan it.</p>
-          <div class="field" data-find="plex library folder shows handover move">
-            <label for="recsf">Shows and sport</label>
+          <div class="field" data-find="plex library folder tv shows handover move">
+            <label for="recsf">TV and sports</label>
             <label class="row">
               <select id="recsf" name="recorder_shows_folder"
                       data-value="{{ settings.recorder_shows_folder }}"></select>
@@ -423,7 +443,7 @@
             </label>
           </div>
           <div class="field" data-find="plex library folder films movies handover move">
-            <label for="recmf">Films</label>
+            <label for="recmf">Movies</label>
             <label class="row">
               <select id="recmf" name="recorder_movies_folder"
                       data-value="{{ settings.recorder_movies_folder }}"></select>

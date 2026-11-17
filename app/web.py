@@ -9,7 +9,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, backingstore, backups, db, handover, passes, recorder, sync, tuner
+from . import adskip, auth, backingstore, backups, db, handover, passes, recorder, sync, tuner
 from .plex import Plex
 from .routes import account, data, guide, notices, record, settings, tv, tv_settings
 from .routes import passes as pass_routes
@@ -150,6 +150,7 @@ async def startup():
 @app.on_event("shutdown")
 async def shutdown():
     recorder.shutdown()
+    adskip.shutdown()
 
 
 def _find_tuner():
@@ -173,6 +174,8 @@ async def recorder_loop():
             if recorder.available():
                 await asyncio.to_thread(handover.tick)
                 await asyncio.to_thread(handover.tidy)
+                await asyncio.to_thread(handover.send_positions)
+                await asyncio.to_thread(adskip.tick)
         except Exception as e:
             # One bad pass must not be the end of every recording after it,
             # and it must not pass unseen either.

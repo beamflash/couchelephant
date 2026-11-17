@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.5.14 - 2026-11-17
+
+### Added
+
+- **Skip ads** in CouchElephant's own players: the web page, the Apple TV and
+  the iPhone. comskip, now in the image, finds the ad breaks, and a Skip ad
+  button shows during each one. Nothing is skipped unless you press it. Two
+  settings, both on: **Skip ads in finished recordings**, worked out from the
+  whole recording once it ends, and **Skip ads while still recording**, which
+  also covers paused live TV. While still recording, a break shows a minute or
+  so after it ends and can be shorter than the real one. The copy Plex gets is
+  never changed.
+
+### Fixed
+
+- A recording watched in CouchElephant after it moved into Plex now moves the
+  resume point in Plex too, a minute after the player stops. Plex kept the
+  point from the day of the move.
+
+### Changed
+
+- TV and movies are called TV and Movies everywhere, as in Plex: no more
+  "Shows" and "Films" in Settings, the guide filters, the new pass search and
+  the server's messages.
+
 ## 1.5.13 - 2026-11-16
 
 ### Added

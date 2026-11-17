@@ -13,9 +13,9 @@ FLAGS = [
     # compare silently dropped every 1080 channel from "HD".
     ("hd", "HD", "CAST(a.resolution AS INTEGER) >= 720"),
     ("recording", "Being recorded", "a.id IN (SELECT airing_id FROM our_grabs)"),
-    ("movie", "Film", "p.section = 'movies'"),
+    ("movie", "Movies", "p.section = 'movies'"),
     ("sport", "Sport", "p.section = 'sports'"),
-    ("show", "Series", "p.section = 'shows'"),
+    ("show", "TV", "p.section = 'shows'"),
 ]
 FLAG_SQL = {k: sql for k, _, sql in FLAGS}
 

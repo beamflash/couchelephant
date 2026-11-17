@@ -349,6 +349,30 @@ def test_a_finished_recording_goes_to_plex_and_stays_playable(tuner, library):
     assert recorder.view_info(rec["uid"])["complete"]
 
 
+def test_watching_after_the_handover_moves_the_plex_resume_point_too(tuner, library):
+    """CE kept saving the position of a recording already in Plex and never
+    sent it again: Plex said 4:13 where CE said 5:00."""
+    rec = _record()
+    recorder._set(rec["id"], position=253.0, watched_at=0)
+    handover.tick(wait=True)
+    done = recorder.get(rec["id"])
+    key = done["plex_rating_key"]
+    assert fake_plex.STATE.positions[key] == 253_000
+    # Watched on in CouchElephant, to 5:00.
+    now = int(time.time())
+    recorder._set(rec["id"], position=300.0, watched_at=now)
+    # Still playing: Plex is not told every few seconds.
+    handover.send_positions(now, force=True)
+    assert fake_plex.STATE.positions[key] == 253_000
+    # Stopped a minute ago: Plex is told, once.
+    handover.send_positions(now + 61, force=True)
+    assert fake_plex.STATE.positions[key] == 300_000
+    assert recorder.get(rec["id"])["plex_position"] == 300.0
+    fake_plex.STATE.positions[key] = 1
+    handover.send_positions(now + 120, force=True)
+    assert fake_plex.STATE.positions[key] == 1
+
+
 def test_nothing_is_moved_while_somebody_is_watching(tuner, library):
     rec = _record()
     recorder.watching(rec["id"], 30)
@@ -379,7 +403,7 @@ def test_a_handover_that_is_not_set_up_holds_the_recording_and_says_why(tuner, p
     handover.tick(wait=True)
     held = recorder.get(rec["id"])
     assert held["state"] == "finished"
-    assert "No library folder is chosen for shows" in held["error"]
+    assert "No library folder is chosen for TV" in held["error"]
     assert "CouchElephant DVR" in held["error"], "it names the settings tab to go to"
     assert os.path.exists(recorder.broadcast_path(rec["uid"]))
 

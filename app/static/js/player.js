@@ -7,6 +7,7 @@
 (function () {
   var el = null, video = null, msg = null, hls = null, now = null, beat = null;
   var onNow = null, beat_n = 0, pausedAt = null;
+  var breaks = [], breaksTimer = null;
   var CC_KEY = 'ce.captions';
 
   // Captions on or off is kept in this browser, so the next video starts the
@@ -54,7 +55,8 @@
         '<div class="tvpsub dim" id="tvps"></div><p id="tvpdesc"></p>' +
       '</div>' +
       '<video id="tvvideo" controls playsinline></video>' +
-      '<div class="tvpmsg" id="tvpmsg" hidden></div>';
+      '<div class="tvpmsg" id="tvpmsg" hidden></div>' +
+      '<button type="button" class="tvpskip" id="tvpskip" hidden>Skip ad</button>';
     document.body.appendChild(el);
     video = el.querySelector('#tvvideo');
     msg = el.querySelector('#tvpmsg');
@@ -92,8 +94,37 @@
       if (now && now.kind === 'live') navigator.sendBeacon('/api/tv/live/' + now.id + '/stop');
       else report();
     });
+    // Inside an ad break the Skip button shows. Nothing skips on its own.
+    video.addEventListener('timeupdate', showSkip);
+    el.querySelector('#tvpskip').addEventListener('click', function () {
+      var b = breakAt(video.currentTime);
+      if (b) video.currentTime = b.end;
+      showSkip();
+    });
     video.addEventListener('pause', function () { pausedAt = Date.now(); });
     video.addEventListener('play', function () { pausedAt = null; });
+  }
+
+  function breakAt(t) {
+    for (var i = 0; i < breaks.length; i++) {
+      // Not in the last second of a break: by then the press would come late.
+      if (t >= breaks[i].start && t < breaks[i].end - 1) return breaks[i];
+    }
+    return null;
+  }
+  function showSkip() { el.querySelector('#tvpskip').hidden = !breakAt(video.currentTime); }
+
+  // Where the ads are. Asked again every half minute while the recording or
+  // the channel is still coming in, because breaks are added as they are found.
+  function loadBreaks() {
+    if (!now || !now.id) return;
+    var asked = now.id;
+    fetch('/api/tv/recordings/' + asked + '/breaks').then(CE.readJson).then(function (d) {
+      if (!now || now.id !== asked || !d.ok) return;
+      breaks = d.breaks || [];
+      showSkip();
+      if (d.growing) breaksTimer = setTimeout(loadBreaks, 30000);
+    }).catch(function () {});
   }
 
   function say(text) { msg.hidden = !text; msg.textContent = text || ''; }
@@ -188,6 +219,7 @@
     video.play().catch(function () {});
     report();
     whatIsOn();
+    loadBreaks();
     beat = setInterval(function () {
       report();
       // Live TV paused longer than the limit set on the server plays on from
@@ -208,6 +240,8 @@
       report();
     }
     clearInterval(beat); beat = null;
+    clearTimeout(breaksTimer); breaksTimer = null; breaks = [];
+    el.querySelector('#tvpskip').hidden = true;
     if (hls) { hls.destroy(); hls = null; }
     video.pause(); video.removeAttribute('src'); video.load();
     el.hidden = true;

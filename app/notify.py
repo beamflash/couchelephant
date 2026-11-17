@@ -96,7 +96,7 @@ FAULTS = [
     (health.TEAM_PASS_UNMATCHED, "A team you follow has no games in the guide"),
     (health.BOOKING_DRIFT, "A booking no longer matches its pass"),
     (health.BOOKING_REPAIR_FAILED, "A booking could not be repaired"),
-    (health.EXPECTATION_MISSED, "The guide passed a date without the show"),
+    (health.EXPECTATION_MISSED, "The guide passed a date without the series"),
 ]
 
 PASS_BOOKED = "pass_booked"

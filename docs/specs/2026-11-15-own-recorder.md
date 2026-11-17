@@ -246,7 +246,11 @@ is less to go wrong than a search that finds nothing.
 
 ## What is deliberately not built
 
-- **Commercial detection.** Plex does it after the handover, on its own copy.
+- **Commercial detection in Plex.** CouchElephant finds ad breaks for its own
+  players (`app/adskip.py`) and writes nothing about ads into Plex. Plex marks
+  ads in a handed-over file only when that library's "Ad detection" is "For
+  all items": its default, "For recorded items", counts only recordings Plex
+  made itself.
 - **A second tuner type.** The tuner code is one small module so another can be
   added, and none is added now.
 - **Recording without Plex.** The guide still comes from Plex. If Plex is down,

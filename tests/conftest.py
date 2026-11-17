@@ -19,12 +19,15 @@ os.environ["COUCHELEPHANT_LIBRARY"] = os.path.join(_ROOT, "library")
 # Not the real ffmpeg: no codecs to install, and nothing to wait for.
 os.environ["COUCHELEPHANT_FFMPEG"] = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "fake_ffmpeg.py")
+# No comskip unless a test brings its stand-in, so a comskip installed on the
+# machine running the suite is never started by it.
+os.environ["COUCHELEPHANT_COMSKIP"] = os.path.join(_ROOT, "no-comskip")
 
 from tests import fake_plex, fake_tuner, isolation  # noqa: E402
 
 isolation.assert_isolated()                      # before anything is imported
 
-from app import auth, db, recorder, sync  # noqa: E402
+from app import adskip, auth, db, recorder, sync  # noqa: E402
 
 
 def pytest_sessionfinish(session, exitstatus):
@@ -52,6 +55,7 @@ def clean_db(plex_url):
     # No worker from the last test may still be writing, and no file of its
     # may be left for this one to find.
     recorder.shutdown()
+    adskip.shutdown()
     for name in ("COUCHELEPHANT_RECORDINGS", "COUCHELEPHANT_LIBRARY"):
         shutil.rmtree(os.environ[name], ignore_errors=True)
         os.makedirs(os.environ[name])

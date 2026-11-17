@@ -90,7 +90,7 @@ COMPARISONS = {
 
 GROUP_OPS = {"all": "AND", "any": "OR", "none": "OR"}
 
-KINDS = [("shows", "TV show"), ("movies", "Movie"), ("sports", "Sport")]
+KINDS = [("shows", "TV"), ("movies", "Movie"), ("sports", "Sport")]
 WEEKDAYS = [(0, "Sunday"), (1, "Monday"), (2, "Tuesday"), (3, "Wednesday"),
             (4, "Thursday"), (5, "Friday"), (6, "Saturday")]
 

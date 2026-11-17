@@ -23,7 +23,7 @@ from fastapi.responses import (
     Response,
 )
 
-from .. import auth, db, handover, passes, recorder, sync, tuner
+from .. import adskip, auth, db, handover, passes, recorder, sync, tuner
 from . import passes as pass_routes
 from . import record
 from ._shared import VERSION, _plex, current_user, page
@@ -385,6 +385,17 @@ def recording(request: Request, rec_id: int):
     return {"ok": True, "recording": recording_json(request, rec)}
 
 
+@router.get("/api/tv/recordings/{rec_id}/breaks")
+def recording_breaks(rec_id: int):
+    """Where the ads are, for a Skip button. A player asks again every half
+    minute while `growing` is true, because breaks are added as they are found."""
+    rec = recorder.get(rec_id)
+    if not rec:
+        return JSONResponse({"ok": False, "error": "That recording is gone."},
+                            status_code=404)
+    return adskip.breaks_for(rec)
+
+
 @router.get("/api/tv/recordings/{rec_id}/now")
 def recording_now(request: Request, rec_id: int, seconds: float = 0):
     """What is on the screen at this point of a recording or a live channel:
@@ -688,7 +699,7 @@ def _passes() -> list[dict]:
 
 @router.get("/api/tv/passes/find")
 def tv_pass_find(q: str = "", tab: str = "season"):
-    """What a new pass could follow. `tab` is "season" for shows and films,
+    """What a new pass could follow. `tab` is "season" for series and movies,
     "sports" for teams. Shows in the guide come first, then what TVmaze or
     TMDB know that the guide has not reached yet."""
     q = (q or "").strip()
@@ -756,7 +767,7 @@ def tv_pass_new(kind: str = Form(...), title: str = Form(""), id: str = Form("")
                                        "guide carries it."}
     elif kind == "series":
         if not title:
-            return JSONResponse({"ok": False, "error": "Pick a show."}, status_code=400)
+            return JSONResponse({"ok": False, "error": "Pick a series."}, status_code=400)
         pass_id, label, made = record._make_pass("series", series=title, update=False,
                                                  who=who)
     else:

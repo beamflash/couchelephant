@@ -211,7 +211,7 @@ def keys_tip(has_tmdb: bool, has_sportsdb: bool,
                      "without a key; a subscriber key at thesportsdb.com "
                      "raises the rate limit and the depth of the answer")
     if film_passes and not has_tmdb:
-        wants.append("TMDB, for films and their release dates, free at "
+        wants.append("TMDB, for movies and their release dates, free at "
                      "themoviedb.org/settings/api")
     if not wants:
         return []

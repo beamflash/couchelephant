@@ -306,6 +306,13 @@ CREATE TABLE IF NOT EXISTS recordings (
     -- Set by the handover: where the file went, and what Plex calls it.
     plex_path     TEXT,
     plex_rating_key TEXT,
+    -- The resume position Plex was last given, so a later change is sent too.
+    plex_position REAL,
+    -- Ad breaks: 1 once found from the whole file, -1 when there was no file
+    -- left to read; failures and the last try, so a bad file is not read forever.
+    ads_final     INTEGER DEFAULT 0,
+    ads_fails     INTEGER DEFAULT 0,
+    ads_tried_at  INTEGER,
     moved_at      INTEGER,
     -- When the handover was last tried, so a failing one is not tried every
     -- five seconds.
@@ -314,6 +321,17 @@ CREATE TABLE IF NOT EXISTS recordings (
     updated_at    INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_recordings_state ON recordings(state, starts_at);
+
+-- Where the ads are in a recording, in seconds from the start of its file.
+-- `final` rows come from the whole file; the others from a recording still
+-- being made, and are replaced as it goes. See app/adskip.py.
+CREATE TABLE IF NOT EXISTS ad_breaks (
+    recording_id INTEGER NOT NULL,
+    start_s      REAL NOT NULL,
+    end_s        REAL NOT NULL,
+    final        INTEGER DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_ad_breaks ON ad_breaks(recording_id, start_s);
 CREATE INDEX IF NOT EXISTS idx_recordings_airing ON recordings(airing_id);
 
 -- A television client that has been let in. With sign-in on, the app on the
@@ -442,6 +460,10 @@ DEFAULTS = {
     # How long live TV may stay paused. The tuner is held that long for a player
     # that has gone quiet, and a player paused that long carries on playing.
     "live_pause_minutes": "30",
+    # Ad breaks found by comskip, for a Skip button in CouchElephant's own
+    # players. One while a recording is still being made, one after it ends.
+    "adskip_live": "1",
+    "adskip_final": "1",
     "recorder_trail_minutes": "3",
     # The handover. The folder names are inside the /library mount, and the
     # section is the Plex library that folder belongs to. Empty means the
@@ -591,6 +613,12 @@ MIGRATIONS = [
     ("our_grabs", "expectation_id", "INTEGER"),
     # The programme's description, kept like its name: the guide forgets it.
     ("recordings", "summary", "TEXT"),
+    # The resume position Plex last took. CE keeps playing a recording after
+    # the handover, and each change is sent to Plex when the player stops.
+    ("recordings", "plex_position", "REAL"),
+    ("recordings", "ads_final", "INTEGER DEFAULT 0"),
+    ("recordings", "ads_fails", "INTEGER DEFAULT 0"),
+    ("recordings", "ads_tried_at", "INTEGER"),
 ]
 
 
