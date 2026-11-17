@@ -234,6 +234,9 @@ def recording_json(request: Request, rec) -> dict:
         # The master playlist, which tells a player the captions are there.
         "playlist": f"{_base(request)}/hls/{rec['uid']}/master.m3u8",
         "error": rec["error"] if state == "failed" else None,
+        # Sports overtime: how long a game ran past its padding, or why it
+        # was not followed.
+        "note": rec["ot_note"] if rec["ot_state"] in ("in", "post") else None,
         # What a list of recordings sorts and filters by.
         "group": rec["show_title"] or rec["title"] or "",
         "category": _category(rec),
@@ -407,7 +410,13 @@ def recording_now(request: Request, rec_id: int, seconds: float = 0):
                             status_code=404)
     start = rec["started_at"] or rec["starts_at"] or rec["begins_at"] or int(time.time())
     at = int(start + max(0.0, seconds))
-    a = db.one(
+    # A game in overtime is still the game, whatever the guide put next.
+    game = db.one(
+        "SELECT * FROM recordings WHERE kind = 'recording' AND channel_vcn = ? "
+        "AND (ot_state = 'in' OR (ot_state = 'post' AND stops_at > ot_base)) "
+        "AND ends_at <= ? AND stops_at > ? "
+        "ORDER BY id = ? DESC LIMIT 1", (rec["channel_vcn"], at, at, rec["id"]))
+    a = None if game else db.one(
         """SELECT a.begins_at, a.ends_at, a.program_guid, p.title, p.grandparent_title,
                   p.summary, p.section, p.season, p.episode, p.year, p.content_rating
            FROM airings a JOIN programs p ON p.guid = a.program_guid
@@ -423,7 +432,9 @@ def recording_now(request: Request, rec_id: int, seconds: float = 0):
                 "rating": a["content_rating"] or ""}
     else:
         # The guide has forgotten it, which it does once a programme has
-        # aired. The recording kept its own name and description.
+        # aired, or the game ran past it. The recording kept its own name and
+        # description.
+        rec = game or rec
         big, small = _names(rec["show_title"], rec["title"], rec["section"] == "sports")
         p = db.one("SELECT summary, content_rating FROM programs WHERE guid = ?",
                    (rec["program_guid"],)) if rec["program_guid"] else None

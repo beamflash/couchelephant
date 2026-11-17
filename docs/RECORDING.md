@@ -264,6 +264,34 @@ Padding comes from Plex's own start and end settings when the recording or
 pass carries them, and from the two padding settings under **CouchElephant DVR**
 when it does not.
 
+**A game that runs long keeps recording.** Padding is a guess; a scoreboard
+knows. When a game CouchElephant records starts, it is looked up on ESPN's
+public scoreboard by its two teams and its start time. From ten minutes
+before the guide's end, the scoreboard is asked every two minutes:
+
+- Still being played (or not started yet, after a delay): the recording runs
+  on to ten minutes from now, and is asked again.
+- Final: it stops five minutes later, or when the padding ends, whichever is
+  later. A recording is never made shorter than its padding.
+- Never more than 180 minutes past the guide's end. **Games that run long**
+  under **CouchElephant DVR** turns it off or changes that limit.
+- A game the scoreboard does not list, or a scoreboard that does not answer,
+  leaves the padding as it was.
+- Another recording that needs a tuner wins. If one is due, CouchElephant's
+  or Plex's, and no tuner is free, the overtime ends there.
+
+While the game runs over, the player's header keeps naming the game rather
+than whatever the guide put after it. Covered: the NFL, NBA, WNBA, MLB, NHL,
+college football and basketball, MLS, NWSL, USL, and the Premier League, La
+Liga, Bundesliga, Serie A, Ligue 1 and Liga MX. A recording Plex makes cannot
+be moved while it runs, so this is for CouchElephant DVR only.
+
+**Skipping ads.** CouchElephant's players (the web page, the Apple TV and the
+iPhone) show a **Skip ad** button during an ad break. comskip finds the breaks
+while the recording is made and again from the whole file once it ends.
+Nothing is skipped unless you press it. Both are settings under
+**CouchElephant DVR**, on by default. The file Plex receives is never changed.
+
 ## Plex's own options
 
 The options in the panel are read from Plex's recording template for that

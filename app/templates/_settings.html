@@ -408,6 +408,22 @@
               second copy is made for watching. The recording Plex receives is never
               changed. <span id="recencsay"></span></span>
           </div>
+          <div class="field" data-find="sports overtime game runs long extend">
+            <label>Games that run long</label>
+            <label class="row">
+              <input type="hidden" name="sports_overtime" value="0">
+              <input type="checkbox" name="sports_overtime" value="1"
+                     {{ 'checked' if settings.sports_overtime != '0' }}>
+              <span>Keep recording until the game is over, up to</span>
+              <input name="overtime_cap_minutes" type="number" min="0" max="360"
+                     value="{{ settings.overtime_cap_minutes or 180 }}" style="width:76px">
+              <span>minutes past its scheduled end</span>
+            </label>
+            <span class="help">For games CouchElephant DVR records. A live scoreboard
+              (ESPN) says whether the game is still being played. A game it cannot
+              find keeps its padding, so a recording is never made shorter. Another
+              recording that needs the tuner wins.</span>
+          </div>
           <div class="field" data-find="ad skip commercials comskip breaks">
             <label>Skipping ads</label>
             <label class="row">

@@ -313,6 +313,14 @@ CREATE TABLE IF NOT EXISTS recordings (
     ads_final     INTEGER DEFAULT 0,
     ads_fails     INTEGER DEFAULT 0,
     ads_tried_at  INTEGER,
+    -- Sports overtime (app/overtime.py): the scoreboard's game, what it last
+    -- said, the stop time before any overtime, when it was asked, and a
+    -- sentence for people.
+    ot_event      TEXT,
+    ot_state      TEXT,
+    ot_base       INTEGER,
+    ot_checked_at INTEGER,
+    ot_note       TEXT,
     moved_at      INTEGER,
     -- When the handover was last tried, so a failing one is not tried every
     -- five seconds.
@@ -464,6 +472,10 @@ DEFAULTS = {
     # players. One while a recording is still being made, one after it ends.
     "adskip_live": "1",
     "adskip_final": "1",
+    # Keep recording a game that runs long, up to this many minutes past the
+    # guide's end. Asks a scoreboard; see app/overtime.py.
+    "sports_overtime": "1",
+    "overtime_cap_minutes": "180",
     "recorder_trail_minutes": "3",
     # The handover. The folder names are inside the /library mount, and the
     # section is the Plex library that folder belongs to. Empty means the
@@ -619,6 +631,11 @@ MIGRATIONS = [
     ("recordings", "ads_final", "INTEGER DEFAULT 0"),
     ("recordings", "ads_fails", "INTEGER DEFAULT 0"),
     ("recordings", "ads_tried_at", "INTEGER"),
+    ("recordings", "ot_event", "TEXT"),
+    ("recordings", "ot_state", "TEXT"),
+    ("recordings", "ot_base", "INTEGER"),
+    ("recordings", "ot_checked_at", "INTEGER"),
+    ("recordings", "ot_note", "TEXT"),
 ]
 
 

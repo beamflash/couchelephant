@@ -9,7 +9,19 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import adskip, auth, backingstore, backups, db, handover, passes, recorder, sync, tuner
+from . import (
+    adskip,
+    auth,
+    backingstore,
+    backups,
+    db,
+    handover,
+    overtime,
+    passes,
+    recorder,
+    sync,
+    tuner,
+)
 from .plex import Plex
 from .routes import account, data, guide, notices, record, settings, tv, tv_settings
 from .routes import passes as pass_routes
@@ -145,6 +157,7 @@ async def startup():
     asyncio.create_task(backup_loop())
     asyncio.create_task(backingstore_loop())
     asyncio.create_task(recorder_loop())
+    asyncio.create_task(overtime_loop())
 
 
 @app.on_event("shutdown")
@@ -181,6 +194,18 @@ async def recorder_loop():
             # and it must not pass unseen either.
             log.exception("recorder loop: %s", e)
         await asyncio.sleep(5)
+
+
+async def overtime_loop():
+    """Sports overtime, once a minute. Apart from the recorder's loop, because
+    a scoreboard that is slow to answer must never hold a recording up."""
+    await asyncio.sleep(20)
+    while True:
+        try:
+            await asyncio.to_thread(overtime.tick)
+        except Exception as e:
+            log.exception("overtime loop: %s", e)
+        await asyncio.sleep(60)
 
 
 async def sync_loop():

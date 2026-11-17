@@ -1,6 +1,6 @@
 # Plan: ad skip, sports overtime
 
-Date: 2026-11-16. Status: steps 1 and 2 built in 1.5.14 (2026-11-17): the resume fix, the TV and Movies words, and ad skip. Step 3, sports overtime, is not started.
+Date: 2026-11-16. Status: steps 1 and 2 built in 1.5.14 (2026-11-17): the resume fix, the TV and Movies words, and ad skip. Step 3, sports overtime, built in 1.5.15 (2026-11-17), see `app/overtime.py`.
 
 ## Why
 

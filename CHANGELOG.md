@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.5.15 - 2026-11-17
+
+### Added
+
+- **Games that run long keep recording.** For a game CouchElephant DVR
+  records, a live scoreboard (ESPN's) says whether it is still being played.
+  While it is, the recording keeps going, ten minutes at a time; once it is
+  final, it stops five minutes later. Never shorter than the padding, and
+  never more than 180 minutes past the scheduled end (a setting, 0 to 360).
+  A game the scoreboard does not list keeps its padding. Another recording
+  that needs the tuner wins. The player's header keeps naming the game while
+  it runs over. On by default; **Games that run long** in Settings, Recording,
+  on the web page and in both apps. Covers the NFL, NBA, WNBA, MLB, NHL,
+  college football and basketball, and the main soccer leagues.
+
 ## 1.5.14 - 2026-11-17
 
 ### Added

@@ -69,13 +69,14 @@ NUMBERS = {
     "recorder_trail_minutes": (0, 240),
     "recorder_keep_days": (0, 240),
     "live_pause_minutes": (5, 240),
+    "overtime_cap_minutes": (0, 360),
 }
 # What `apply` takes. Sign-in, accounts and secrets are not here on purpose,
 # except the Plex token, which only the web form sends.
 KEYS = ("plex_url", "plex_token", "timezone", "dry_run", "tuner_url",
         "recorder_shows_folder", "recorder_movies_folder",
         "recorder_shows_section", "recorder_movies_section",
-        "sportsdb_key", "adskip_live", "adskip_final", *CHOICES, *NUMBERS)
+        "sportsdb_key", "adskip_live", "adskip_final", "sports_overtime", *CHOICES, *NUMBERS)
 
 
 def apply(values: dict) -> list[str]:
@@ -100,7 +101,7 @@ def apply(values: dict) -> list[str]:
             if value not in ZONES:
                 refused.append(key)
                 continue
-        elif key in ("dry_run", "adskip_live", "adskip_final"):
+        elif key in ("dry_run", "adskip_live", "adskip_final", "sports_overtime"):
             value = "1" if value in ("1", "true", "on") else "0"
         elif key in ("plex_url", "tuner_url"):
             value = value.rstrip("/")
@@ -136,7 +137,9 @@ def settings_recorder(tuner_url: str = Form(""), recorder_default: str = Form("a
                       recorder_movies_section: str = Form(""),
                       recorder_keep_days: str = Form("2"),
                       live_pause_minutes: str = Form("30"),
-                      adskip_live: str = Form("0"), adskip_final: str = Form("0")):
+                      adskip_live: str = Form("0"), adskip_final: str = Form("0"),
+                      sports_overtime: str = Form("0"),
+                      overtime_cap_minutes: str = Form("180")):
     """CouchElephant's own recorder: the tuner, the default, the handover."""
     apply(dict(tuner_url=tuner_url, recorder_default=recorder_default,
                recorder_encoder=recorder_encoder,
@@ -148,7 +151,9 @@ def settings_recorder(tuner_url: str = Form(""), recorder_default: str = Form("a
                recorder_movies_section=recorder_movies_section,
                recorder_keep_days=recorder_keep_days,
                live_pause_minutes=live_pause_minutes,
-               adskip_live=adskip_live, adskip_final=adskip_final))
+               adskip_live=adskip_live, adskip_final=adskip_final,
+               sports_overtime=sports_overtime,
+               overtime_cap_minutes=overtime_cap_minutes))
     return RedirectResponse("/settings", status_code=303)
 
 
