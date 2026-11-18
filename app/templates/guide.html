@@ -1,5 +1,5 @@
 {% extends "base.html" %}{% set nav='guide' %}
-{% block bodyclass %}{{ '' if q else 'gridpage' }}{% endblock %}
+{% block bodyclass %}{{ '' if q else 'gridpage' }}{{ ' guideoverlay' if overlay }}{% endblock %}
 {# The grid owns the viewport, so the footer would only push it out of view. #}
 {% block footer %}{% if q %}{{ super() }}{% endif %}{% endblock %}
 {% block title %}{{ 'Search - CouchElephant' if q else 'Guide - CouchElephant' }}{% endblock %}
@@ -93,7 +93,7 @@
   <span><i class="plex"></i> Recording, scheduled in Plex</span>
   <span><i class="ce" style="opacity:.45"></i> Live broadcast</span>
 </div>
-<div class="gridwrap" id="gw" data-day="{{ day }}"
+<div class="gridwrap" id="gw" data-day="{{ day }}" data-overlay="{{ 1 if overlay else 0 }}"
      data-sports="{{ 1 if sports else 0 }}" data-channel="{{ channel }}">
   <div class="gridinner" id="gi">
     <div class="ghead" id="ghead">
@@ -109,6 +109,19 @@
 {% endif %}
 
 <script>
+// The guide over live TV is this page in a frame inside the player. Watching
+// a channel from it goes to the player around it, which changes channel.
+(function () {
+  if (document.body.classList.contains('guideoverlay') && window.parent !== window &&
+      window.parent.CE && window.parent.CE.Player) {
+    CE.Player = window.parent.CE.Player;
+    // Escape closes what is open in the guide first, then the guide itself.
+    document.addEventListener('keydown', function (e) {
+      if (e.key !== 'Escape' || document.querySelector('.ovl.show')) return;
+      CE.Player.closeGuide();
+    }, true);
+  }
+})();
 // The form and the box are different elements: the class that expands the input
 // lives on .searchbox, while submitting has to happen on the <form>. Toggling
 // the class onto the form is a silent no-op, which is exactly what it did.
@@ -183,9 +196,11 @@
       SYNCED = {{ 'true' if last_sync and last_sync.ok else 'false' }};
 
   // Fit the grid to whatever space is actually left below the controls.
+  var OVERLAY = wrap.dataset.overlay === '1';
   function fit() {
     var top = wrap.getBoundingClientRect().top;
-    wrap.style.height = Math.max(240, window.innerHeight - top - 18) + 'px';
+    wrap.style.height = (OVERLAY ? Math.max(120, window.innerHeight - top)
+                                 : Math.max(240, window.innerHeight - top - 18)) + 'px';
   }
   fit();
 
@@ -307,6 +322,7 @@
     el.title = a.title + '\n' + CE.fmtTime(a.b) +
                (a.summary ? '\n\n' + a.summary : '');
     el.dataset.aid = a.id;
+    el.dataset.vcn = a.vcn;
     el.dataset.b = String(a.b);
     el.dataset.e = String(a.e);
     el.dataset.x = String(x(a.b));
@@ -401,7 +417,15 @@
 
   rowsEl.addEventListener('click', function (e) {
     var blk = e.target.closest('.gprog');
-    if (blk && blk.dataset.aid) window.openProgram(blk.dataset.aid);
+    if (!blk || !blk.dataset.aid) return;
+    // Over live TV, what is on now changes to its channel, as a television
+    // does. Anything later opens its details, where it can be recorded.
+    if (OVERLAY && CE.Player && +blk.dataset.b <= Date.now() / 1000 &&
+        !blk.classList.contains('drm')) {
+      CE.Player.watch(blk.dataset.vcn);
+      return;
+    }
+    window.openProgram(blk.dataset.aid);
   });
 
   // Keep every visible title inside the visible part of its block. Reads only

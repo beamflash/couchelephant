@@ -8,6 +8,7 @@
   var el = null, video = null, msg = null, hls = null, now = null, beat = null;
   var onNow = null, beat_n = 0, pausedAt = null;
   var breaks = [], breaksTimer = null;
+  var guideBox = null, guideLoadedAt = 0;
   var CC_KEY = 'ce.captions';
 
   // Captions on or off is kept in this browser, so the next video starts the
@@ -47,6 +48,8 @@
           ' aria-expanded="false">i</button>' +
         '<button type="button" id="tvpcc" aria-pressed="false" hidden' +
           ' aria-label="Captions">CC</button>' +
+        '<button type="button" id="tvpguide" hidden aria-expanded="false"' +
+          ' title="The guide over the picture (down arrow)">Guide</button>' +
         '<button type="button" id="tvpstart">From the start</button>' +
         '<button type="button" id="tvplive" class="tvlivebtn">Live</button>' +
         '<button type="button" id="tvpclose" aria-label="Close the player">Close</button>' +
@@ -56,11 +59,16 @@
       '</div>' +
       '<video id="tvvideo" controls playsinline></video>' +
       '<div class="tvpmsg" id="tvpmsg" hidden></div>' +
-      '<button type="button" class="tvpskip" id="tvpskip" hidden>Skip ad</button>';
+      '<button type="button" class="tvpskip" id="tvpskip" hidden>Skip ad</button>' +
+      '<div class="tvpguidebox" id="tvpguidebox" hidden></div>';
     document.body.appendChild(el);
     video = el.querySelector('#tvvideo');
     msg = el.querySelector('#tvpmsg');
     el.querySelector('#tvpclose').addEventListener('click', close);
+    guideBox = el.querySelector('#tvpguidebox');
+    el.querySelector('#tvpguide').addEventListener('click', function () {
+      if (guideBox.hidden) openGuide(); else closeGuide();
+    });
     el.querySelector('#tvpcc').addEventListener('click', function () {
       var on = this.getAttribute('aria-pressed') !== 'true';
       keepCaptions(on);
@@ -87,7 +95,18 @@
       video.currentTime = liveEdge(); video.play().catch(function () {});
     });
     document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape' && !el.hidden) close();
+      if (el.hidden) return;
+      var typing = e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName);
+      if (e.key === 'Escape') {
+        if (!guideBox.hidden) closeGuide(); else close();
+      } else if (e.key === 'ArrowDown' && !typing && onAir() && guideBox.hidden) {
+        // Down opens the guide over live TV, as on the television.
+        e.preventDefault();
+        openGuide();
+      } else if (e.key === 'ArrowUp' && !typing && !guideBox.hidden) {
+        e.preventDefault();
+        closeGuide();
+      }
     });
     window.addEventListener('pagehide', function () {
       // Leaving the page closes the player: live TV gives its tuner back now.
@@ -127,6 +146,32 @@
       showSkip();
       if (d.growing || !d.final) breaksTimer = setTimeout(loadBreaks, d.growing ? 30000 : 60000);
     }).catch(function () {});
+  }
+
+  // The guide over live TV: the guide page itself, in a frame over the lower
+  // part of the picture. The channel plays on above and behind it. Made again
+  // after a few minutes, so its "now" is not left behind.
+  // Still on the air: live TV, or a recording still being made (watching a
+  // channel that is recording plays that recording). The guide opens over either.
+  function onAir() { return !!now && (now.kind === 'live' || !now.complete); }
+
+  function openGuide() {
+    if (!onAir()) return;
+    var frame = guideBox.querySelector('iframe');
+    if (!frame || Date.now() - guideLoadedAt > 5 * 60000) {
+      guideBox.innerHTML = '<iframe title="Guide" src="/guide?overlay=1"></iframe>';
+      frame = guideBox.querySelector('iframe');
+      guideLoadedAt = Date.now();
+    }
+    guideBox.hidden = false;
+    el.querySelector('#tvpguide').setAttribute('aria-expanded', 'true');
+    frame.focus();
+  }
+  function closeGuide() {
+    if (!guideBox || guideBox.hidden) return;
+    guideBox.hidden = true;
+    el.querySelector('#tvpguide').setAttribute('aria-expanded', 'false');
+    video.focus();
   }
 
   function say(text) { msg.hidden = !text; msg.textContent = text || ''; }
@@ -183,6 +228,7 @@
     el.querySelector('#tvpdesc').textContent = '';
     el.querySelector('#tvplive').hidden = true;
     el.querySelector('#tvpstart').hidden = true;
+    el.querySelector('#tvpguide').hidden = true;
     el.hidden = false;
     say(text);
   }
@@ -197,6 +243,7 @@
     el.querySelector('#tvpcc').hidden = true;
     el.querySelector('#tvplive').hidden = !!r.complete;
     el.querySelector('#tvpstart').hidden = r.kind === 'live';
+    el.querySelector('#tvpguide').hidden = !onAir();
     el.hidden = false;
     say('');
     var from = at === 'resume' ? r.position : at === 'live' ? -1 : 0;
@@ -238,7 +285,8 @@
     }, 10000);
   }
 
-  function close() {
+  // Ends what is playing: live TV gives its tuner back.
+  function stop() {
     if (now && now.kind === 'live') {
       fetch('/api/tv/live/' + now.id + '/stop', {method: 'POST'});
     } else {
@@ -249,6 +297,12 @@
     el.querySelector('#tvpskip').hidden = true;
     if (hls) { hls.destroy(); hls = null; }
     video.pause(); video.removeAttribute('src'); video.load();
+    now = null;
+  }
+
+  function close() {
+    stop();
+    closeGuide();
     el.hidden = true;
     el.querySelector('#tvpabout').hidden = true;
     el.querySelector('#tvpinfo').setAttribute('aria-expanded', 'false');
@@ -274,8 +328,12 @@
       wait(r.title, 'Getting the video ready...');
       whenPlayable(r.id, at, 40);
     },
-    /* Watch a channel live. */
+    /* Watch a channel live. Live TV already playing gives its tuner back
+       first, the way a television changes channel. */
     watch: function (vcn) {
+      if (el && !el.hidden && onAir() && now.channel &&
+          now.channel.number === vcn) { closeGuide(); return; }
+      if (el) { closeGuide(); stop(); }
       wait('Channel ' + vcn, 'Tuning...');
       fetch('/api/tv/live/' + encodeURIComponent(vcn), {method: 'POST'})
         .then(CE.readJson).then(function (d) {
@@ -285,6 +343,7 @@
         });
     },
     isOpen: function () { return !!el && !el.hidden; },
+    closeGuide: function () { closeGuide(); },
     onClose: null
   };
 })();

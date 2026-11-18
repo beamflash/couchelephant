@@ -1,5 +1,38 @@
 # Changelog
 
+## 1.5.19 - 2026-11-17
+
+### Added
+
+- **The guide over live TV.** While a channel plays (live TV, or a channel
+  being recorded), the guide opens over the lower part of the picture and the
+  channel plays on above and behind it.
+  On the Apple TV press down (up, or a touch, still brings up the player's
+  bar, which also has a Guide button). On the iPhone and iPad swipe up or
+  press Guide; in the web app press the down arrow or Guide. It is the same
+  guide as the Guide tab: a channel, or what is on it now, changes to that
+  channel (live TV gives its tuner back first; a recording carries on);
+  anything later opens its details, where it can be recorded, and on the
+  iPhone and iPad a long press records it too. Menu, Close, Escape or the up
+  arrow close it and the channel plays on.
+- **The now line in the apps.** The orange line the web guide draws at the
+  current time, with its dot at the top, is in the Apple TV, iPhone and iPad
+  guides too, and moves on while the guide is open.
+- **Clicking tests for the Apple apps.** Two XCUITest suites press real
+  buttons in the simulator, against a test server with an invented guide and
+  a fake tuner (`scripts/apple_test_server.sh`): the guide and its now line,
+  the iPad turned, the guide over live TV changing channel and recording,
+  live TV left with the Home button and opened again, a paused channel kept
+  while away, Skip ad, a setting saved, and a new season pass; on the Apple
+  TV, the same with the remote.
+
+### Fixed
+
+- The web player changing channel left the old channel's tuner held for a
+  minute.
+- Found by the new clicking tests: changing channel while the player was open
+  kept the old player on screen, black, on the Apple TV, iPhone and iPad.
+
 ## 1.5.18 - 2026-11-17
 
 ### Changed

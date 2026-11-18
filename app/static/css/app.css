@@ -1169,6 +1169,18 @@ footer .divider{height:5px;width:auto;display:block;margin:0 auto 12px}
 .tvpskip{position:absolute;right:24px;bottom:84px;z-index:2;font-size:1.05em;
   padding:10px 18px;background:var(--panel);border-color:var(--accent-bd);color:var(--accent-ink)}
 .tvpskip[hidden]{display:none}
+/* The guide over live TV: the guide page in a frame over the lower part of
+   the picture, which plays on above it. */
+.tvpguidebox{position:absolute;left:0;right:0;bottom:0;height:60%;z-index:3;
+  border-top:2px solid var(--accent);background:var(--bg);box-shadow:0 -12px 40px rgba(0,0,0,.5)}
+.tvpguidebox[hidden]{display:none}
+.tvpguidebox iframe{width:100%;height:100%;border:0;display:block}
+/* The guide page inside it: only the grid. */
+body.guideoverlay .topbar,body.guideoverlay h1,body.guideoverlay .sub,
+body.guideoverlay .daybar,body.guideoverlay .filterbar,body.guideoverlay .legend,
+body.guideoverlay #gstatus,body.guideoverlay footer{display:none}
+body.guideoverlay main{padding:0}
+body.guideoverlay .gridwrap{border:0;border-radius:0}
 .tvpmsg{position:absolute;left:0;right:0;top:50%;text-align:center;color:var(--dim);
   padding:0 20px;pointer-events:none}
 /* A channel in the guide that can be watched: it says so when pointed at. */

@@ -303,7 +303,7 @@ def front(request: Request, day: str = "", channel: str = "", sports: int = 0,
 
 @router.get("/guide", response_class=HTMLResponse)
 def guide(request: Request, day: str = "", channel: str = "", sports: int = 0,
-          q: str = "", f: str = "", x: str = ""):
+          q: str = "", f: str = "", x: str = "", overlay: int = 0):
     """Guide and search are the same page.
 
     A query switches the view from one day's grid to matches across the whole
@@ -327,7 +327,7 @@ def guide(request: Request, day: str = "", channel: str = "", sports: int = 0,
     return page(request, "guide.html", rows=rows, days=days,
                 day=(day or (days[0]["key"] if days else "")),
                 channel=channel, sports=sports,
-                q=q, logos=_logo_map(), f=f, x=x,
+                q=q, logos=_logo_map(), f=f, x=x, overlay=bool(overlay) and not q,
                 nfilters=len(filters.parse(f)) + len(filters.parse(x)))
 
 

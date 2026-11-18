@@ -8,6 +8,9 @@ through httpx and not mocked away. Reproduced from the real box:
   - with every tuner busy, the stream answers 503
 """
 import json
+import os
+import shutil
+import subprocess
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -32,6 +35,22 @@ STATE = State()
 _URL = ""
 
 LINEUP = [("5.1", "KCTV"), ("9.1", "KMBC"), ("41.1", "KSHB")]
+
+# Real pictures, for the Apple apps' clicking tests: each stream is a test
+# pattern made by ffmpeg as it is sent, a different colour per channel, at
+# the speed of a broadcast. The unit tests keep the cheap empty packets.
+VIDEO = os.environ.get("FAKE_TUNER_VIDEO") == "1"
+
+
+def _pattern(vcn):
+    hue = (sum(map(ord, vcn)) * 47) % 360
+    return subprocess.Popen(
+        [shutil.which("ffmpeg") or "ffmpeg", "-hide_banner", "-loglevel", "error", "-re",
+         "-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=30000/1001",
+         "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000",
+         "-vf", f"hue=h={hue}", "-c:v", "mpeg2video", "-b:v", "4M", "-g", "15",
+         "-c:a", "ac3", "-b:a", "192k", "-f", "mpegts", "pipe:1"],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -67,11 +86,18 @@ class Handler(BaseHTTPRequestHandler):
             vcn = self.path[len("/auto/v"):]
             STATE.streams.append(vcn)
             STATE.live.append(vcn)
+            maker = _pattern(vcn) if VIDEO else None
             try:
                 self.send_response(200)
                 self.send_header("Content-Type", "video/mpeg")
                 self.end_headers()
                 while True:
+                    if maker:
+                        chunk = maker.stdout.read(188 * 64)
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+                        continue
                     if not STATE.silent:
                         self.wfile.write(CHUNK * 40)
                         self.wfile.flush()
@@ -79,6 +105,9 @@ class Handler(BaseHTTPRequestHandler):
             except OSError:
                 pass                # the reader hung up, which is how it ends
             finally:
+                if maker:
+                    maker.kill()
+                    maker.wait()
                 STATE.live.remove(vcn)
             return
         self.send_response(404)
@@ -86,11 +115,11 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
 
-def start():
-    """Run the fake tuner on a free localhost port. Returns (url, stop)."""
+def start(host="127.0.0.1"):
+    """Run the fake tuner on a free port. Returns (url, stop)."""
     global _URL
-    srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    srv = ThreadingHTTPServer((host, 0), Handler)
     srv.daemon_threads = True
     threading.Thread(target=srv.serve_forever, daemon=True).start()
-    _URL = f"http://127.0.0.1:{srv.server_address[1]}"
+    _URL = f"http://{host}:{srv.server_address[1]}"
     return _URL, srv.shutdown
