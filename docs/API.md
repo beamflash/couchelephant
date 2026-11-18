@@ -47,6 +47,9 @@ Recorded list.
 | `GET /api/tv/hello` | Open. Who this server is, and whether a client must pair first |
 | `POST /api/tv/pair` | Open. A client asks to be let in. `name`. Answers a six-letter `code` to show and a `secret` to poll with |
 | `POST /api/tv/pair/poll` | Open. `secret`. Answers `approved`, and the client's `key` exactly once |
+| `GET /api/tv/schedule` | Paired device. `offset`, `limit`, `start`, `end`. The schedule the web Agenda and Calendar draw: bookings and failed ones, with `more` for paging |
+| `GET /api/tv/expectations` | Paired device. What every pass is still waiting for, with `when` worded at the guide's precision |
+| `GET /hlsk/<pass>/<uid>/master.m3u8` | The playlist address a paired device is given with sign-in on, with its own pass in the path (24 hours, one recording, dies with the device). For a TV that fetches the stream itself over AirPlay; the segments inherit the pass from the path |
 | `GET /api/tv/devices` | Administrators. Paired televisions, and codes waiting |
 | `POST /api/tv/devices/approve` | Administrators. `code`. Lets that television in |
 | `POST /api/tv/devices/{id}/delete` | Administrators. Locks that television out |

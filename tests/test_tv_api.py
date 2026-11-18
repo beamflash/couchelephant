@@ -702,3 +702,57 @@ def test_the_plus_button_follows_a_team_from_the_catalogue(client, synced, tuner
                           "title": found[0]["title"]}).json()
     assert r["ok"], r
     assert db.one("SELECT kind, team_name FROM passes")["team_name"] == found[0]["title"]
+
+
+def test_a_paired_devices_playlist_plays_with_no_headers_for_airplay(client, tuner):
+    """A TV that gets the stream over AirPlay sends no Authorization header,
+    so the playlist address carries its own pass."""
+    now = int(time.time())
+    rec_id = recorder.book(_airing("a1", "g1", "5.1", now - 60))
+    recorder.tick()
+    _until(lambda: (recorder.tick() or recorder.get(rec_id)["state"] == "recording"))
+    uid = recorder.get(rec_id)["uid"]
+    _until(lambda: recorder.view_info(uid)["segments"] > 0)
+
+    db.set_setting("auth_mode", "local")
+    admin = auth.create_user("owner", "a-good-password")
+    tv = _pair_signed_in(client, admin)
+    card = client.get("/api/tv/home", headers=tv).json()["live_now"][0]
+    assert "/hlsk/" in card["playlist"]
+    master = card["playlist"].replace("http://testserver", "")
+
+    client.cookies.clear()
+    assert client.get(master).status_code == 200            # no headers at all
+    base = master.rsplit("/", 1)[0]
+    assert "seg00000.ts" in client.get(base + "/index.m3u8").text
+    assert client.get(base + "/seg00000.ts").status_code == 200
+    # Another recording's address with this pass is refused, and so is a bad pass.
+    other = "0" * 32
+    def refused(path):
+        return client.get(path, follow_redirects=False).status_code in (303, 401)
+    assert refused(base.rsplit("/", 1)[0] + f"/{other}/master.m3u8")
+    assert refused(master.replace("/hlsk/", "/hlsk/8."))
+    # The plain address still wants the header.
+    assert refused(f"/hls/{uid}/master.m3u8")
+
+
+def _pair_signed_in(client, admin):
+    asked = client.post("/api/tv/pair", data={"name": "Phone"}).json()
+    client.cookies.set(auth.SESSION_COOKIE, auth.create_session(admin))
+    client.post("/api/tv/devices/approve", data={"code": asked["code"]})
+    client.cookies.clear()
+    key = client.post("/api/tv/pair/poll", data={"secret": asked["secret"]}).json()["key"]
+    return {"Authorization": f"Bearer {key}"}
+
+
+def test_the_schedule_and_what_is_awaited_are_open_to_a_television(client, tuner):
+    """The apps' Agenda and Calendar read the web page's own rows."""
+    now = int(time.time())
+    recorder.book(_airing("a1", "g1", "5.1", now + 3600))
+    got = client.get("/api/tv/schedule?limit=10").json()
+    assert got["ok"] and got["more"] is False
+    row = got["rows"][0]
+    assert row["who"] == "ce" and row["channel"]["number"] == "5.1"
+    # A window, as a month asks for it.
+    assert client.get(f"/api/tv/schedule?start={now + 7200}&end={now + 9000}").json()["rows"] == []
+    assert client.get("/api/tv/expectations").json()["ok"] is True

@@ -6,6 +6,7 @@ Everything here is JSON under /api/tv, and the viewing copies under /hls.
 """
 import asyncio
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -54,6 +55,51 @@ def device_for(request: Request):
             c.execute("UPDATE tv_devices SET last_seen = ? WHERE id = ?",
                       (int(time.time()), row["id"]))
     return row
+
+
+# ---------- a video address that carries its own pass ----------
+#
+# AirPlay video has the receiving TV fetch the stream itself, and it has no
+# way to send the Authorization header the phone sends. So with sign-in on, a
+# paired device is given a playlist address with a pass in its path
+# (/hlsk/<pass>/<uid>/master.m3u8). The segments are named relative to the
+# playlist, so they carry the pass too. The pass is made from the device's
+# stored key hash, so it can be checked without storing anything, and it stops
+# working when the device is deleted or paired again.
+
+STREAM_PASS_SECONDS = 24 * 3600
+
+
+def _stream_sig(key_hash: str, uid: str, exp: int) -> str:
+    return hmac.new(key_hash.encode(), f"{uid}.{exp}".encode(), "sha256").hexdigest()[:32]
+
+
+def stream_pass(device, uid: str) -> str:
+    exp = int(time.time()) + STREAM_PASS_SECONDS
+    return f"{device['id']}.{exp}.{_stream_sig(device['key_hash'], uid, exp)}"
+
+
+def stream_pass_ok(token: str, uid: str) -> bool:
+    try:
+        dev_id, exp, sig = token.split(".")
+        dev_id, exp = int(dev_id), int(exp)
+    except ValueError:
+        return False
+    if exp < int(time.time()):
+        return False
+    row = db.one("SELECT key_hash FROM tv_devices WHERE id = ? AND approved_at IS NOT NULL",
+                 (dev_id,))
+    return bool(row and row["key_hash"]
+                and hmac.compare_digest(sig, _stream_sig(row["key_hash"], uid, exp)))
+
+
+_HLSK = re.compile(r"^/hlsk/([0-9]+\.[0-9]+\.[0-9a-f]{32})/([0-9a-f]{32})/[^/]+$")
+
+
+def stream_path_ok(path: str) -> bool:
+    """Is this /hlsk/ address one a good pass was made for."""
+    m = _HLSK.match(path)
+    return bool(m and stream_pass_ok(m.group(1), m.group(2)))
 
 
 @router.get("/api/tv/hello")
@@ -166,6 +212,16 @@ def _base(request: Request) -> str:
     return str(request.base_url).rstrip("/")
 
 
+def _playlist_url(request: Request, uid: str) -> str:
+    """The master playlist. For a paired device with sign-in on it carries
+    its own pass, so a TV that fetches it over AirPlay can open it."""
+    if auth.mode() != "none":
+        dev = device_for(request)
+        if dev and dev["key_hash"]:
+            return f"{_base(request)}/hlsk/{stream_pass(dev, uid)}/{uid}/master.m3u8"
+    return f"{_base(request)}/hls/{uid}/master.m3u8"
+
+
 def _art(program_guid):
     if not program_guid:
         return ""
@@ -232,7 +288,7 @@ def recording_json(request: Request, rec) -> dict:
         "position": round(rec["position"] or 0, 1),
         "playable": view["segments"] > 0 or state in ("in_plex",),
         # The master playlist, which tells a player the captions are there.
-        "playlist": f"{_base(request)}/hls/{rec['uid']}/master.m3u8",
+        "playlist": _playlist_url(request, rec["uid"]),
         "error": rec["error"] if state == "failed" else None,
         # Sports overtime: how long a game ran past its padding, or why it
         # was not followed.
@@ -666,6 +722,34 @@ def tv_recordings(request: Request):
             "recorder_available": recorder.available()}
 
 
+@router.get("/api/tv/schedule")
+def tv_schedule(request: Request, offset: int = 0, limit: int = 40,
+                start: int = 0, end: int = 0):
+    """The whole schedule the web page's Agenda and Calendar draw: bookings
+    and failed ones, in pages, nearest to now outward, or inside a window of
+    time for a month. The same rows as /api/schedule, with the channel shaped
+    the way the apps read it."""
+    limit = max(1, min(limit, 1000))
+    rows = pass_routes._schedule_rows(limit=limit + 1, offset=offset,
+                                      start=start or None, end=end or None)
+    more = len(rows) > limit
+    rows = rows[:limit]
+    titles = {c["vcn"]: c["title"] for c in db.query("SELECT vcn, title FROM channels")}
+    out = []
+    for r in rows:
+        r = dict(r)
+        r["channel"] = _channel(request, r["vcn"], titles.get(r["vcn"], ""))
+        out.append(r)
+    return {"ok": True, "rows": out, "more": more}
+
+
+@router.get("/api/tv/expectations")
+def tv_expectations():
+    """What every pass is still waiting for. The date text is made here,
+    at the precision the guide gave, so a client never invents a day."""
+    return pass_routes.api_expectations()
+
+
 # Padding a television offers. The same steps as the web panel.
 PAD_START = [0, 1, 2, 5, 10, 15, 30]
 PAD_END = [0, 5, 15, 30, 45, 60, 90, 120, 180]
@@ -1022,8 +1106,23 @@ def playlist(uid: str, start: str = ""):
                         headers={"Cache-Control": "no-store"})
 
 
+@router.get("/hlsk/{token}/{uid}/master.m3u8")
+def master_playlist_k(token: str, uid: str, start: str = ""):
+    return master_playlist(uid, start)
+
+
+@router.get("/hlsk/{token}/{uid}/index.m3u8")
+def playlist_k(token: str, uid: str, start: str = ""):
+    return playlist(uid, start)
+
+
+@router.get("/hlsk/{token}/{uid}/{segment}")
+def segment_k(token: str, uid: str, segment: str):
+    return segment_(uid, segment)
+
+
 @router.get("/hls/{uid}/{segment}")
-def segment(uid: str, segment: str):
+def segment_(uid: str, segment: str):
     if not _UID.match(uid) or not _SEGMENT.match(segment):
         return Response(status_code=404)
     path = os.path.join(recorder.view_dir(uid), segment)

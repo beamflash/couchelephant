@@ -125,6 +125,9 @@ async def _auth_gate(request: Request, call_next):
         return await call_next(request)
     if _device_may(path) and tv.device_for(request):
         return await call_next(request)
+    # A video address with its own pass, for a TV that fetches it by itself.
+    if path.startswith("/hlsk/") and tv.stream_path_ok(path):
+        return await call_next(request)
     user = current_user(request)
     if user:
         if _admin_only(path, request.method) and user.get("role") != "admin":
