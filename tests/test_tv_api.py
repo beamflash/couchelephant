@@ -795,3 +795,49 @@ def test_the_schedule_and_what_is_awaited_are_open_to_a_television(client, tuner
     # No failure recorded for an airing nobody tried: the web's own answer.
     assert client.get("/api/tv/schedule/failure?airing_id=nope").status_code == 404
     assert client.post("/api/tv/schedule/retry", data={"airing_id": "nope"}).status_code in (400, 404)
+
+
+def test_the_pass_secret_is_made_once_even_when_asked_at_the_same_time(client, tuner):
+    import threading
+    path = os.path.join(os.path.dirname(db.DB_PATH), "stream.secret")
+    if os.path.exists(path):
+        os.unlink(path)
+    tv_routes._secret_cache.clear()
+    got = []
+
+    def ask():
+        tv_routes._secret_cache.clear()      # as if each were a fresh process
+        got.append(tv_routes._stream_secret())
+    threads = [threading.Thread(target=ask) for _ in range(12)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    with open(path, "rb") as f:
+        assert len(set(got)) == 1 and got[0] == f.read()
+    assert oct(os.stat(path).st_mode & 0o777) == "0o600"
+    assert not [n for n in os.listdir(os.path.dirname(path)) if n.endswith(".tmp")]
+
+
+def test_an_unreadable_pass_secret_is_a_handled_error_not_a_500(client, tuner):
+    now = int(time.time())
+    rec_id = recorder.book(_airing("a1", "g1", "5.1", now - 60))
+    db.set_setting("auth_mode", "local")
+    admin = auth.create_user("owner", "a-good-password")
+    tv = _pair_signed_in(client, admin)
+    client.cookies.clear()
+    path = os.path.join(os.path.dirname(db.DB_PATH), "stream.secret")
+    if os.path.exists(path):
+        os.unlink(path)
+    tv_routes._secret_cache.clear()
+    os.makedirs(path)                       # a folder where the file should be
+    try:
+        got = client.get(f"/api/tv/recordings/{rec_id}/stream", headers=tv)
+        assert got.status_code == 503 and "AirPlay" in got.json()["error"]
+        dev = db.one("SELECT id, key_hash FROM tv_devices")
+        exp = int(time.time()) + 600
+        assert client.get(f"/hlsk/{dev['id']}.{exp}.{'0' * 32}/{'0' * 32}/master.m3u8",
+                          follow_redirects=False).status_code in (303, 401)
+    finally:
+        os.rmdir(path)
+        tv_routes._secret_cache.clear()

@@ -8,6 +8,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import logging
 import os
 import re
 import secrets
@@ -30,6 +31,7 @@ from . import record
 from ._shared import VERSION, _plex, current_user, page
 
 router = APIRouter()
+log = logging.getLogger("couchelephant")
 
 _SEGMENT = re.compile(r"^seg\d{5}\.ts$")
 _UID = re.compile(r"^[0-9a-f]{32}$")
@@ -76,22 +78,49 @@ STREAM_PASS_SECONDS = 24 * 3600
 _secret_cache: dict = {}
 
 
+class StreamSecretError(Exception):
+    """The signing secret cannot be read or made."""
+
+
 def _stream_secret() -> bytes:
     path = os.path.join(os.path.dirname(db.DB_PATH), "stream.secret")
-    if _secret_cache.get("path") != path:
-        try:
-            with open(path, "rb") as f:
-                key = f.read()
-        except FileNotFoundError:
-            key = b""
+    if _secret_cache.get("path") == path:
+        return _secret_cache["key"]
+    try:
+        key = _read_secret(path)
         if len(key) < 32:
-            key = secrets.token_bytes(32)
+            # Made under a temporary name, then linked into place: the link
+            # fails if another request got there first, and then everybody
+            # reads that one file back and agrees on one key.
             os.makedirs(os.path.dirname(path), exist_ok=True)
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            with os.fdopen(fd, "wb") as f:
-                f.write(key)
-        _secret_cache.update(path=path, key=key)
-    return _secret_cache["key"]
+            tmp = f"{path}.{secrets.token_hex(6)}.tmp"
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            try:
+                with os.fdopen(fd, "wb") as f:
+                    f.write(secrets.token_bytes(32))
+                try:
+                    os.link(tmp, path)
+                except FileExistsError:
+                    pass
+            finally:
+                os.unlink(tmp)
+            key = _read_secret(path)
+            if len(key) < 32:
+                raise OSError("the secret file is too short")
+    except OSError as e:
+        log.error("The video pass secret %s cannot be read or made: %s. "
+                  "AirPlay video is off until it can.", path, e)
+        raise StreamSecretError(str(e)) from e
+    _secret_cache.update(path=path, key=key)
+    return key
+
+
+def _read_secret(path: str) -> bytes:
+    try:
+        with open(path, "rb") as f:
+            return f.read()
+    except FileNotFoundError:
+        return b""
 
 
 def _stream_sig(dev_id: int, key_hash: str, uid: str, exp: int) -> str:
@@ -114,8 +143,12 @@ def stream_pass_ok(token: str, uid: str) -> bool:
         return False
     row = db.one("SELECT key_hash FROM tv_devices WHERE id = ? AND approved_at IS NOT NULL",
                  (dev_id,))
-    return bool(row and row["key_hash"] and hmac.compare_digest(
-        sig, _stream_sig(dev_id, row["key_hash"], uid, exp)))
+    if not (row and row["key_hash"]):
+        return False
+    try:
+        return hmac.compare_digest(sig, _stream_sig(dev_id, row["key_hash"], uid, exp))
+    except StreamSecretError:
+        return False        # already logged; no pass can be checked, so none opens
 
 
 _HLSK = re.compile(r"^/hlsk/([0-9]+\.[0-9]+\.[0-9a-f]{32})/([0-9a-f]{32})/[^/]+$")
@@ -473,7 +506,13 @@ def recording_stream(request: Request, rec_id: int):
     if auth.mode() != "none":
         dev = device_for(request)
         if dev and dev["key_hash"]:
-            url = f"{_base(request)}/hlsk/{stream_pass(dev, uid)}/{uid}/master.m3u8"
+            try:
+                url = f"{_base(request)}/hlsk/{stream_pass(dev, uid)}/{uid}/master.m3u8"
+            except StreamSecretError:
+                return JSONResponse({"ok": False, "error":
+                                     "AirPlay video is not available: the server cannot "
+                                     "read its video pass secret. See the server log."},
+                                    status_code=503)
     return {"ok": True, "playlist": url}
 
 

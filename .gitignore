@@ -7,3 +7,6 @@ __pycache__/
 .pytest_cache/
 .venv/
 .ruff_cache/
+
+# The compose file mounts ./data here: the database and the video pass secret.
+data/
