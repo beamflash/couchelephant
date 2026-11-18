@@ -1,5 +1,38 @@
 # Changelog
 
+## 1.5.20 - 2026-11-17
+
+### Added
+
+- **Background play on the iPhone and iPad.** Leaving the app while
+  something plays no longer stops it. Swipe Home or change app and the video
+  floats in Picture in Picture; lock the screen and the sound goes on, with
+  the title, the programme, its picture and play, pause and skip buttons on
+  the lock screen and in Control Center. Live TV keeps its tuner while it
+  plays this way. A live channel you paused is still held for the pause limit,
+  as before. Settings has a new Background play switch, on by default, for
+  this device only. Off, leaving the app stops things as it always did, and
+  live TV gives its tuner back at once. The Apple TV is unchanged.
+- **AirPlay to a TV.** The video, not just the sound, can be sent to an Apple
+  TV or an AirPlay TV from the player's AirPlay button, for recordings and for
+  live TV. It plays on when the phone is locked or the app is put away. With
+  sign-in on, the playlist address a paired device is given now carries its
+  own pass, because a TV that fetches the stream itself cannot send the
+  device's key. The pass is good for 24 hours for one recording and stops
+  working when the device is removed.
+- **Swipe down opens the guide** over live TV on the iPhone and iPad, as
+  swipe up and the Guide button already did.
+- **The logo has its tagline.** The apps draw the elephant with the name and
+  "A CouchElephant never forgets." under it, the way the web header does, on
+  the iPhone, iPad and Apple TV.
+- **Agenda and Calendar in the apps.** Recordings, Scheduled has the web
+  page's two views and its switch on the Apple TV, iPhone and iPad. The
+  Agenda lists every booking, soonest first, a page at a time, with failed
+  bookings shown in place. The Calendar is a month with a day's recordings in
+  its cells and its list under the grid (on the iPhone the cells show a
+  count and dots), previous and next month, Today, and what is still awaited
+  with no day under the month. Press a recording to open its details.
+
 ## 1.5.19 - 2026-11-17
 
 ### Added
