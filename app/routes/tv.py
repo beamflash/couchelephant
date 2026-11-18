@@ -61,22 +61,47 @@ def device_for(request: Request):
 #
 # AirPlay video has the receiving TV fetch the stream itself, and it has no
 # way to send the Authorization header the phone sends. So with sign-in on, a
-# paired device is given a playlist address with a pass in its path
-# (/hlsk/<pass>/<uid>/master.m3u8). The segments are named relative to the
-# playlist, so they carry the pass too. The pass is made from the device's
-# stored key hash, so it can be checked without storing anything, and it stops
-# working when the device is deleted or paired again.
+# paired device that asks to play is given a playlist address with a pass in
+# its path (/hlsk/<pass>/<uid>/master.m3u8). The segments are named relative
+# to the playlist, so they carry the pass too.
+#
+# The pass is signed with a random secret that lives in its own file next to
+# the database, never inside it, so a copy of the database or a backup cannot
+# mint passes. The device's id and stored key hash are in the signed text. It
+# stops working when the device is deleted, when the device gets a new key, or
+# after 24 hours. Pairing again makes a NEW device and leaves the old one (and
+# its passes) alone until an administrator deletes it.
 
 STREAM_PASS_SECONDS = 24 * 3600
+_secret_cache: dict = {}
 
 
-def _stream_sig(key_hash: str, uid: str, exp: int) -> str:
-    return hmac.new(key_hash.encode(), f"{uid}.{exp}".encode(), "sha256").hexdigest()[:32]
+def _stream_secret() -> bytes:
+    path = os.path.join(os.path.dirname(db.DB_PATH), "stream.secret")
+    if _secret_cache.get("path") != path:
+        try:
+            with open(path, "rb") as f:
+                key = f.read()
+        except FileNotFoundError:
+            key = b""
+        if len(key) < 32:
+            key = secrets.token_bytes(32)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "wb") as f:
+                f.write(key)
+        _secret_cache.update(path=path, key=key)
+    return _secret_cache["key"]
+
+
+def _stream_sig(dev_id: int, key_hash: str, uid: str, exp: int) -> str:
+    text = f"{dev_id}.{key_hash}.{uid}.{exp}".encode()
+    return hmac.new(_stream_secret(), text, "sha256").hexdigest()[:32]
 
 
 def stream_pass(device, uid: str) -> str:
     exp = int(time.time()) + STREAM_PASS_SECONDS
-    return f"{device['id']}.{exp}.{_stream_sig(device['key_hash'], uid, exp)}"
+    return f"{device['id']}.{exp}.{_stream_sig(device['id'], device['key_hash'], uid, exp)}"
 
 
 def stream_pass_ok(token: str, uid: str) -> bool:
@@ -89,8 +114,8 @@ def stream_pass_ok(token: str, uid: str) -> bool:
         return False
     row = db.one("SELECT key_hash FROM tv_devices WHERE id = ? AND approved_at IS NOT NULL",
                  (dev_id,))
-    return bool(row and row["key_hash"]
-                and hmac.compare_digest(sig, _stream_sig(row["key_hash"], uid, exp)))
+    return bool(row and row["key_hash"] and hmac.compare_digest(
+        sig, _stream_sig(dev_id, row["key_hash"], uid, exp)))
 
 
 _HLSK = re.compile(r"^/hlsk/([0-9]+\.[0-9]+\.[0-9a-f]{32})/([0-9a-f]{32})/[^/]+$")
@@ -212,16 +237,6 @@ def _base(request: Request) -> str:
     return str(request.base_url).rstrip("/")
 
 
-def _playlist_url(request: Request, uid: str) -> str:
-    """The master playlist. For a paired device with sign-in on it carries
-    its own pass, so a TV that fetches it over AirPlay can open it."""
-    if auth.mode() != "none":
-        dev = device_for(request)
-        if dev and dev["key_hash"]:
-            return f"{_base(request)}/hlsk/{stream_pass(dev, uid)}/{uid}/master.m3u8"
-    return f"{_base(request)}/hls/{uid}/master.m3u8"
-
-
 def _art(program_guid):
     if not program_guid:
         return ""
@@ -288,7 +303,7 @@ def recording_json(request: Request, rec) -> dict:
         "position": round(rec["position"] or 0, 1),
         "playable": view["segments"] > 0 or state in ("in_plex",),
         # The master playlist, which tells a player the captions are there.
-        "playlist": _playlist_url(request, rec["uid"]),
+        "playlist": f"{_base(request)}/hls/{rec['uid']}/master.m3u8",
         "error": rec["error"] if state == "failed" else None,
         # Sports overtime: how long a game ran past its padding, or why it
         # was not followed.
@@ -442,6 +457,24 @@ def recording(request: Request, rec_id: int):
     if rec["state"] in ("finished", "moving", "in_plex"):
         recorder.ensure_view(rec, rec["plex_path"] if rec["state"] == "in_plex" else None)
     return {"ok": True, "recording": recording_json(request, rec)}
+
+
+@router.get("/api/tv/recordings/{rec_id}/stream")
+def recording_stream(request: Request, rec_id: int):
+    """The playlist address to play this recording from, asked for when play
+    starts. With sign-in on and a paired device it carries a pass (see above),
+    so a TV that fetches the stream over AirPlay can open it."""
+    rec = recorder.get(rec_id)
+    if not rec:
+        return JSONResponse({"ok": False, "error": "That recording is gone."},
+                            status_code=404)
+    uid = rec["uid"]
+    url = f"{_base(request)}/hls/{uid}/master.m3u8"
+    if auth.mode() != "none":
+        dev = device_for(request)
+        if dev and dev["key_hash"]:
+            url = f"{_base(request)}/hlsk/{stream_pass(dev, uid)}/{uid}/master.m3u8"
+    return {"ok": True, "playlist": url}
 
 
 @router.get("/api/tv/recordings/{rec_id}/breaks")
@@ -741,6 +774,18 @@ def tv_schedule(request: Request, offset: int = 0, limit: int = 40,
         r["channel"] = _channel(request, r["vcn"], titles.get(r["vcn"], ""))
         out.append(r)
     return {"ok": True, "rows": out, "more": more}
+
+
+@router.get("/api/tv/schedule/failure")
+def tv_schedule_failure(airing_id: str = ""):
+    """What the web's failure panel shows for a booking Plex refused."""
+    return pass_routes.api_schedule_failure(airing_id=airing_id)
+
+
+@router.post("/api/tv/schedule/retry")
+async def tv_schedule_retry(airing_id: str = Form(...)):
+    """Try that booking again, as the web's Try again button does."""
+    return await pass_routes.api_schedule_retry(airing_id=airing_id)
 
 
 @router.get("/api/tv/expectations")

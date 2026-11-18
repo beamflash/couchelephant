@@ -1,9 +1,11 @@
 """The choice of recorder in the web app's own API, and what a television
 client reads: the lists, the video, and how it is let in."""
+import hmac
 import os
 import time
 
 from app import auth, db, recorder
+from app.routes import tv as tv_routes
 from tests import fake_plex
 from tests.test_recorder import _airing, _record, _until
 
@@ -706,7 +708,7 @@ def test_the_plus_button_follows_a_team_from_the_catalogue(client, synced, tuner
 
 def test_a_paired_devices_playlist_plays_with_no_headers_for_airplay(client, tuner):
     """A TV that gets the stream over AirPlay sends no Authorization header,
-    so the playlist address carries its own pass."""
+    so the playlist address asked for at play time carries its own pass."""
     now = int(time.time())
     rec_id = recorder.book(_airing("a1", "g1", "5.1", now - 60))
     recorder.tick()
@@ -717,23 +719,57 @@ def test_a_paired_devices_playlist_plays_with_no_headers_for_airplay(client, tun
     db.set_setting("auth_mode", "local")
     admin = auth.create_user("owner", "a-good-password")
     tv = _pair_signed_in(client, admin)
+    # The list carries the plain address; the pass comes when play starts.
     card = client.get("/api/tv/home", headers=tv).json()["live_now"][0]
-    assert "/hlsk/" in card["playlist"]
-    master = card["playlist"].replace("http://testserver", "")
-
+    assert "/hlsk/" not in card["playlist"]
+    # An unpaired client gets nothing, from this route or the new ones.
     client.cookies.clear()
+    assert client.get(f"/api/tv/recordings/{rec_id}/stream").status_code == 401
+    assert client.get("/api/tv/schedule").status_code == 401
+    assert client.get("/api/tv/expectations").status_code == 401
+    got = client.get(f"/api/tv/recordings/{rec_id}/stream", headers=tv).json()
+    assert "/hlsk/" in got["playlist"]
+    master = got["playlist"].replace("http://testserver", "")
+
     assert client.get(master).status_code == 200            # no headers at all
     base = master.rsplit("/", 1)[0]
     assert "seg00000.ts" in client.get(base + "/index.m3u8").text
     assert client.get(base + "/seg00000.ts").status_code == 200
-    # Another recording's address with this pass is refused, and so is a bad pass.
-    other = "0" * 32
+
     def refused(path):
         return client.get(path, follow_redirects=False).status_code in (303, 401)
-    assert refused(base.rsplit("/", 1)[0] + f"/{other}/master.m3u8")
+    # Another recording with this pass, a changed pass, and the plain address.
+    assert refused(base.rsplit("/", 1)[0] + f"/{'0' * 32}/master.m3u8")
     assert refused(master.replace("/hlsk/", "/hlsk/8."))
-    # The plain address still wants the header.
     assert refused(f"/hls/{uid}/master.m3u8")
+    # An old pass signed the way 1.5.20 first did (with the stored key hash
+    # alone) fails closed.
+    dev = db.one("SELECT id, key_hash FROM tv_devices")
+    exp = int(time.time()) + 3600
+    old = hmac.new(dev["key_hash"].encode(), f"{uid}.{exp}".encode(),
+                   "sha256").hexdigest()[:32]
+    assert refused(f"/hlsk/{dev['id']}.{exp}.{old}/{uid}/master.m3u8")
+    # An expired pass, correctly signed, is refused.
+    past = int(time.time()) - 5
+    sig = tv_routes._stream_sig(dev["id"], dev["key_hash"], uid, past)
+    assert refused(f"/hlsk/{dev['id']}.{past}.{sig}/{uid}/master.m3u8")
+    # A device given a new key, then a deleted device, loses its passes.
+    with db.tx() as c:
+        c.execute("UPDATE tv_devices SET key_hash = 'rekeyed' WHERE id = ?", (dev["id"],))
+    assert refused(master)
+    with db.tx() as c:
+        c.execute("UPDATE tv_devices SET key_hash = ? WHERE id = ?",
+                  (dev["key_hash"], dev["id"]))
+    assert client.get(master).status_code == 200
+    with db.tx() as c:
+        c.execute("DELETE FROM tv_devices WHERE id = ?", (dev["id"],))
+    assert refused(master)
+
+
+def test_the_access_log_hides_a_video_pass():
+    from app.web import hide_pass
+    assert hide_pass("/hlsk/3.1795.abcdef/aa/seg00001.ts") == "/hlsk/-/aa/seg00001.ts"
+    assert hide_pass("/hls/aa/seg00001.ts") == "/hls/aa/seg00001.ts"
 
 
 def _pair_signed_in(client, admin):
@@ -756,3 +792,6 @@ def test_the_schedule_and_what_is_awaited_are_open_to_a_television(client, tuner
     # A window, as a month asks for it.
     assert client.get(f"/api/tv/schedule?start={now + 7200}&end={now + 9000}").json()["rows"] == []
     assert client.get("/api/tv/expectations").json()["ok"] is True
+    # No failure recorded for an airing nobody tried: the web's own answer.
+    assert client.get("/api/tv/schedule/failure?airing_id=nope").status_code == 404
+    assert client.post("/api/tv/schedule/retry", data={"airing_id": "nope"}).status_code in (400, 404)

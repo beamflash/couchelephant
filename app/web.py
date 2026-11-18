@@ -2,6 +2,7 @@
 import asyncio
 import logging
 import os
+import re
 import time
 import urllib.parse
 
@@ -29,6 +30,24 @@ from .routes._shared import ASSET_V, BASE, VERSION, current_user  # noqa: F401
 from .routes.account import _configured
 
 log = logging.getLogger("couchelephant")
+
+
+class _HidePass(logging.Filter):
+    """The access log must not hold a video pass: it is a 24 hour credential
+    for one recording. /hlsk/<pass>/... is written as /hlsk/-/..."""
+
+    def filter(self, record):
+        args = record.args
+        if isinstance(args, tuple) and len(args) >= 3 and isinstance(args[2], str):
+            record.args = args[:2] + (hide_pass(args[2]),) + args[3:]
+        return True
+
+
+def hide_pass(text: str) -> str:
+    return re.sub(r"/hlsk/[^/\s]+/", "/hlsk/-/", text)
+
+
+logging.getLogger("uvicorn.access").addFilter(_HidePass())
 
 app = FastAPI(title="CouchElephant", docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=os.path.join(BASE, "static")), name="static")
