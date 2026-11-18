@@ -841,3 +841,77 @@ def test_an_unreadable_pass_secret_is_a_handled_error_not_a_500(client, tuner):
     finally:
         os.rmdir(path)
         tv_routes._secret_cache.clear()
+
+
+# ---------- "Record every episode" with the web's options, from an app ----------
+
+def _series_airing():
+    return db.one("SELECT a.id FROM airings a JOIN programs p ON p.guid = a.program_guid "
+                  "WHERE a.drm = 0 AND (p.teams IS NULL OR p.teams IN ('', '[]')) "
+                  "AND p.grandparent_title IS NOT NULL AND p.grandparent_title != '' "
+                  "LIMIT 1")["id"]
+
+
+def _game():
+    """A broadcast with a team in it, and that team."""
+    for r in db.query("SELECT a.id, p.teams FROM airings a "
+                      "JOIN programs p ON p.guid = a.program_guid WHERE a.drm = 0"):
+        teams = [t for t in db.unjs(r["teams"]) or [] if t.get("name")]
+        if teams:
+            t = db.one("SELECT id, name FROM teams WHERE name = ?", (teams[0]["name"],))
+            if t:
+                return r["id"], t
+    raise AssertionError("the synced guide has no game with a known team")
+
+
+def test_record_every_episode_offers_plex_s_recurring_choices_first(client, synced, tuner):
+    d = client.get("/api/tv/record/options",
+                   params={"airing_id": _series_airing(), "scope": "series"}).json()
+    assert d["ok"] is True, d
+    assert d["templates"] and all(not t["one_shot"] for t in d["templates"])
+    picked = [t for t in d["templates"] if t["index"] == d["pick"]][0]
+    assert picked["title"] == "All Episodes"
+    ids = [s["id"] for s in picked["settings"]]
+    assert "minVideoQuality" in ids and "oneShot" not in ids
+    assert d["recorder"] == {"available": True, "default": "couchelephant"}
+    assert d["networks"] and d["channels"]
+
+
+def test_record_every_game_picks_the_team_s_rule_not_the_league_s(client, synced, tuner):
+    aid, team = _game()
+    d = client.get("/api/tv/record/options",
+                   params={"airing_id": aid, "scope": "team",
+                           "team_id": str(team["id"])}).json()
+    assert d["ok"] is True, d
+    picked = [t for t in d["templates"] if t["index"] == d["pick"]][0]
+    assert team["name"] in picked["title"]
+
+
+def test_record_all_keeps_the_chosen_settings_and_sources(client, synced, tuner):
+    aid = _series_airing()
+    d = client.get("/api/tv/record/options",
+                   params={"airing_id": aid, "scope": "series"}).json()
+    net = d["networks"][0]["name"]
+    r = client.post("/api/tv/record/all", data={
+        "airing_id": aid, "template": str(d["pick"]),
+        "settings": '{"startOffsetMinutes": "5", "endOffsetMinutes": "30"}',
+        "networks": f'["{net}"]', "channels": "[]", "recorder": "couchelephant"}).json()
+    assert r["ok"] is True, r
+    p = db.one("SELECT * FROM passes")
+    assert p["kind"] == "series" and p["recorder"] == "couchelephant"
+    assert db.unjs(p["networks"]) == [net]
+    prefs = db.unjs(p["prefs"])
+    assert (prefs["startOffsetMinutes"], prefs["endOffsetMinutes"]) == ("5", "30")
+    assert fake_plex.STATE.created == [], "CouchElephant keeps the rule"
+
+
+def test_record_all_with_plex_and_no_limit_is_plex_s_own_rule(client, synced, tuner):
+    aid = _series_airing()
+    d = client.get("/api/tv/record/options",
+                   params={"airing_id": aid, "scope": "series"}).json()
+    r = client.post("/api/tv/record/all", data={
+        "airing_id": aid, "template": str(d["pick"]), "settings": "{}",
+        "recorder": "plex"}).json()
+    assert r["ok"] is True, r
+    assert fake_plex.STATE.created, "Plex was asked to follow it"
+    assert db.one("SELECT COUNT(*) c FROM passes")["c"] == 0

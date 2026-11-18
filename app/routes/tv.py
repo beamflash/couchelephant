@@ -738,6 +738,58 @@ def tv_record(airing_id: str = Form(...), scope: str = Form("one"),
     return {"ok": True, "message": f"Following {label}. {made} set to record so far."}
 
 
+@router.get("/api/tv/record/options")
+async def tv_record_options(airing_id: str, scope: str = "series", team_id: str = ""):
+    """What "Record every episode" or "Record every <team> game" can be set
+    to, before the pass is made: the web's options step, for an app.
+
+    The same answer as the web's `/api/record/options`, so the choices are
+    Plex's own and never a copy, with only the recurring choices left in,
+    because the person has already said they want all of them. `pick` is the
+    one they pressed: the team's own rule, or the series rule.
+    """
+    got = await record.api_record_options(airing_id)
+    body = json.loads(got.body)
+    if got.status_code != 200 or not body.get("ok", True) or "templates" not in body:
+        body.setdefault("ok", False)
+        return JSONResponse(body, status_code=got.status_code)
+    recurring = [t for t in body["templates"] if not t["one_shot"]]
+    if not recurring:
+        return JSONResponse({"ok": False, "error":
+                             "Plex offers no way to record every one of these."},
+                            status_code=400)
+    team = db.one("SELECT name FROM teams WHERE id = ?", (team_id or 0,)) \
+        if scope == "team" else None
+    teams = [t.get("name") for t in db.unjs(record._airing_row(airing_id)["teams"]) or []
+             if t.get("name")]
+    if team:
+        named = [t for t in recurring if team["name"] in (t["title"] or "")]
+    else:
+        # The series rule is the recurring one that names no team. A game's
+        # league rule names none either, and comes before the teams, so it
+        # wins only where there is no series rule at all.
+        named = [t for t in recurring if not any(n in (t["title"] or "") for n in teams)]
+    body["templates"] = recurring
+    body["pick"] = (named or recurring)[0]["index"]
+    # A television plays what CouchElephant records while it records, so that
+    # is the default here wherever it can run, as it always was for the apps.
+    if body["recorder"]["available"]:
+        body["recorder"]["default"] = "couchelephant"
+    return body
+
+
+@router.post("/api/tv/record/all")
+async def tv_record_all(airing_id: str = Form(...), template: int = Form(...),
+                        settings: str = Form("{}"), networks: str = Form("[]"),
+                        channels: str = Form("[]"),
+                        recorder_choice: str = Form("couchelephant", alias="recorder")):
+    """Make the pass with the options chosen in the app, exactly as the web's
+    Schedule button does: the same route, so the two cannot drift."""
+    return await record.api_record(airing_id=airing_id, template=template,
+                                   settings=settings, networks=networks,
+                                   channels=channels, recorder_choice=recorder_choice)
+
+
 @router.post("/api/tv/record/cancel")
 async def tv_record_cancel(airing_id: str = Form(...)):
     """Cancel one booking, whichever recorder has it."""

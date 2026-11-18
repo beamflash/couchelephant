@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.5.22 - 2026-11-18
+
+### Changed
+
+- **Record every episode asks how first, in the apps as on the web.** On the
+  Apple TV, iPhone and iPad, Record every episode and Record every <team>
+  game no longer make the pass at once with no say. They open the same
+  options the web shows before its Schedule button: who records it,
+  networks and channels to limit it to, and Plex's own settings for the
+  rule (resolution, replacing lower resolution, partial airings, minutes
+  before and after, and whatever else Plex offers), read from Plex. Record
+  all makes the pass through the web's own code, and the answer shows on
+  the same screen with Done to close it.
+
 ## 1.5.21 - 2026-11-18
 
 ### Fixed
