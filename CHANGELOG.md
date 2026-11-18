@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.5.21 - 2026-11-18
+
+### Fixed
+
+- **The player's buttons no longer cover the volume.** On the iPhone turned
+  sideways, the i, Guide and Live buttons sat over the player's volume
+  slider. They now sit under the player's top row, upright and turned, on
+  the iPhone and iPad. A clicking test checks that none of our buttons
+  touches one of the player's own.
+
 ## 1.5.20 - 2026-11-17
 
 ### Added
