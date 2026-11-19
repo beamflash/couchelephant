@@ -18,7 +18,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 
 
-TRIES = 3
+TRIES = 5
 
 
 def _download(url: str, sha256: str, target: Path) -> None:
@@ -35,7 +35,7 @@ def _download(url: str, sha256: str, target: Path) -> None:
             if attempt == TRIES:
                 raise
             print(f"download failed ({err!r}), try {attempt + 1} of {TRIES}: {url}", file=sys.stderr)
-            time.sleep(5 * attempt)
+            time.sleep(15 * attempt)
     if digest.hexdigest() != sha256:
         raise SystemExit(f"hash mismatch for {url}\n  want {sha256}\n  got  {digest.hexdigest()}")
 

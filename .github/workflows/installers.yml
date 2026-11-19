@@ -31,7 +31,16 @@ jobs:
       - name: Install build requirements
         run: pip install -r requirements.txt -r requirements-tray.txt "pyinstaller==6.*"
 
+      # The comskip host is slow from some runners; keep what was fetched once.
+      - name: Cache the fetched programs
+        id: tools
+        uses: actions/cache@v5
+        with:
+          path: packaging/tools/windows-x64
+          key: tools-windows-x64-${{ hashFiles('packaging/tools.json') }}
+
       - name: Fetch ffmpeg and comskip
+        if: steps.tools.outputs.cache-hit != 'true'
         run: python packaging/fetch_tools.py windows x64 packaging/tools/windows-x64
 
       - name: Freeze the server
