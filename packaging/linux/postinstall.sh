@@ -23,8 +23,15 @@ if ! getent passwd couchelephant >/dev/null; then
         --shell "$nologin" couchelephant
 fi
 
+# Only the folders themselves are re-owned each time. The recordings folder
+# may be a mount or a link to the user's own storage, so never walk into it.
+new_data=0; new_rec=0
+[ -d "$DATA" ] || new_data=1
+[ -e "$DATA/recordings" ] || new_rec=1
 mkdir -p "$DATA/recordings"
-chown -R couchelephant:couchelephant "$DATA"
+if [ "$new_data" = 1 ]; then chown -R couchelephant:couchelephant "$DATA"; fi
+if [ "$new_rec" = 1 ]; then chown -R couchelephant:couchelephant "$DATA/recordings"; fi
+chown couchelephant:couchelephant "$DATA" "$DATA/recordings"
 
 # Keep the port from last time unless something else has taken it.
 port=""
@@ -36,7 +43,12 @@ if [ -z "$port" ] || port_busy "$port"; then
     while port_busy "$port"; do
         port=$((port + 1))
     done
-    echo "COUCHELEPHANT_PORT=$port" > "$ENVFILE"
+    # Touch only our own line; the user may have set other variables here.
+    if [ -f "$ENVFILE" ] && grep -q '^COUCHELEPHANT_PORT=' "$ENVFILE"; then
+        sed -i "s/^COUCHELEPHANT_PORT=.*/COUCHELEPHANT_PORT=$port/" "$ENVFILE"
+    else
+        echo "COUCHELEPHANT_PORT=$port" >> "$ENVFILE"
+    fi
     chmod 644 "$ENVFILE"
 fi
 

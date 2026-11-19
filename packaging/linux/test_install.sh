@@ -84,17 +84,22 @@ if [ "$inside" = 1 ]; then
     sqlite3 /var/lib/couchelephant/couchelephant.db \
         "INSERT OR REPLACE INTO settings (key, value) VALUES ('installer_test', 'kept')"
     stop_service
+    # A root-owned file under recordings must keep its owner over the upgrade.
+    touch /var/lib/couchelephant/recordings/keep.ts
     COUCHELEPHANT_RELEASES_URL=$feed_new sh /test/install.sh >/tmp/install2.log 2>&1 \
         || { cat /tmp/install2.log; fail "upgrade failed"; }
     got=$(sqlite3 /var/lib/couchelephant/couchelephant.db \
         "SELECT value FROM settings WHERE key = 'installer_test'")
     [ "$got" = kept ] || fail "setting lost over the upgrade (got '$got')"
     grep -q "^COUCHELEPHANT_PORT=8710$" /etc/default/couchelephant || fail "port changed on upgrade"
+    [ "$(stat -c %U /var/lib/couchelephant/recordings/keep.ts)" = root ] \
+        || fail "upgrade re-owned a file inside recordings"
     start_service
     stop_service
 
     # 3. Port 8710 taken: the service must land on 8711.
     remove_package
+    echo "COUCHELEPHANT_RECORDINGS=/srv/rec" >> /etc/default/couchelephant
     python3 -m http.server 8710 >/dev/null 2>&1 &
     blocker=$!
     sleep 1
@@ -102,6 +107,8 @@ if [ "$inside" = 1 ]; then
         || { cat /tmp/install3.log; fail "install with port taken failed"; }
     grep -q "^COUCHELEPHANT_PORT=8711$" /etc/default/couchelephant \
         || fail "port is not 8711: $(cat /etc/default/couchelephant)"
+    grep -q "^COUCHELEPHANT_RECORDINGS=/srv/rec$" /etc/default/couchelephant \
+        || fail "the user's own line was lost from /etc/default/couchelephant"
     start_service
     curl -fs localhost:8711/api/tv/hello >/dev/null || fail "no hello on 8711"
     stop_service
