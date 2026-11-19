@@ -27,13 +27,16 @@ function Hello($port) {
 }
 
 function Install-It {
-    $p = Start-Process $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=$env:TEMP\ce-setup.log" -Wait -PassThru
+    # Not -Wait: that waits for the tray the installer starts, which never ends.
+    $p = Start-Process $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=$env:TEMP\ce-setup.log" -PassThru
+    if (-not $p.WaitForExit(300000)) { throw 'installer did not finish in 5 minutes' }
     Check ($p.ExitCode -eq 0) 'installer exits 0'
 }
 
 function Uninstall-It($extra) {
     $args = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') + $extra
-    Start-Process (Join-Path $app 'unins000.exe') -ArgumentList $args -Wait
+    $p = Start-Process (Join-Path $app 'unins000.exe') -ArgumentList $args -PassThru
+    $null = $p.WaitForExit(60000)
     # The uninstaller hands off to a temporary copy, so wait for it to finish.
     Wait-Until 'uninstall to finish' { -not (Test-Path (Join-Path $app 'unins000.exe')) }
     Wait-Until 'service to go' { -not (Get-Service CouchElephant -ErrorAction SilentlyContinue) }
