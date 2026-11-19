@@ -75,7 +75,13 @@ while IFS= read -r -d '' f; do
     [ "$top" = 13.0 ] || { echo "BAD: $f needs macOS $v, above 13.0"; bad=1; }
   done
 done < <(find "$app" -type f -print0)
-# All of them are listed above before this stops.
+# All of them are listed above before this stops. Say who loads each, to find where it came from.
+if [ "$bad" = 1 ]; then
+  while IFS= read -r -d '' f; do
+    file -b "$f" | grep -q 'Mach-O' || continue
+    otool -L "$f" 2>/dev/null | grep -E 'libcrypto|libssl|/usr/local|/opt/homebrew' | sed "s|^|  $(basename "$f") loads: |" || true
+  done < <(find "$app" -type f -print0)
+fi
 [ "$bad" = 0 ] || { echo "FAILED: the app holds programs that will not run on macOS 13 or that need Homebrew"; exit 1; }
 [ "$checked" -gt 20 ] || { echo "FAILED: found only $checked Mach-O files, the check did not look"; exit 1; }
 echo "ok: $checked Mach-O files, none from Homebrew, none above macOS 13.0"
