@@ -9,6 +9,12 @@
   <workingdirectory>%ProgramData%\CouchElephant</workingdirectory>
   <env name="COUCHELEPHANT_PORT" value="@PORT@" />
   <env name="COUCHELEPHANT_DATA" value="%ProgramData%\CouchElephant" />
+  <!-- Not LocalSystem: this is a LAN-facing server. -->
+  <serviceaccount>
+    <domain>NT AUTHORITY</domain>
+    <user>LocalService</user>
+    <allowservicelogon>true</allowservicelogon>
+  </serviceaccount>
   <startmode>Automatic</startmode>
   <onfailure action="restart" delay="5 sec" />
   <onfailure action="restart" delay="30 sec" />

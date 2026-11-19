@@ -55,6 +55,21 @@ begin
   Result := Code;
 end;
 
+procedure MustSucceed(const Verb: String);
+var
+  Code: Integer;
+begin
+  Code := Service(Verb);
+  if Code <> 0 then
+  begin
+    Log('CouchElephant service "' + Verb + '" failed with ' + IntToStr(Code));
+    SuppressibleMsgBox('The CouchElephant service could not be set up (' + Verb + ' returned '
+      + IntToStr(Code) + '). See the setup log and C:\ProgramData\CouchElephant\logs.',
+      mbCriticalError, MB_OK, IDOK);
+    Abort;
+  end;
+end;
+
 procedure RunCmd(const Args: String; var Code: Integer);
 begin
   if not Exec(ExpandConstant('{cmd}'), '/C ' + Args, '', SW_HIDE, ewWaitUntilTerminated, Code) then
@@ -116,8 +131,30 @@ begin
   RunCmd('netsh advfirewall firewall delete rule name="CouchElephant"', Code);
   RunCmd('netsh advfirewall firewall add rule name="CouchElephant" dir=in action=allow protocol=TCP localport='
     + IntToStr(ChosenPort) + ' profile=private', Code);
-  Service('install');
-  Service('start');
+  { Only the data folder holds secrets. Administrators and SYSTEM keep full
+    control, the service account may modify, nobody else may even read. }
+  RunCmd('icacls "' + ExpandConstant('{commonappdata}\CouchElephant') + '" /inheritance:r'
+    + ' /grant:r *S-1-5-32-544:(OI)(CI)F *S-1-5-18:(OI)(CI)F *S-1-5-19:(OI)(CI)M', Code);
+  if Code <> 0 then
+  begin
+    SuppressibleMsgBox('Could not restrict access to the CouchElephant data folder.', mbCriticalError, MB_OK, IDOK);
+    Abort;
+  end;
+  { A first install registers the service; an upgrade keeps it, refreshes the
+    account and the config that was just rewritten, and starts it again. }
+  RunCmd('sc query CouchElephant', Code);
+  if Code = 0 then
+  begin
+    RunCmd('sc config CouchElephant obj= "NT AUTHORITY\LocalService"', Code);
+    if Code <> 0 then
+    begin
+      SuppressibleMsgBox('Could not update the CouchElephant service account.', mbCriticalError, MB_OK, IDOK);
+      Abort;
+    end;
+  end
+  else
+    MustSucceed('install');
+  MustSucceed('start');
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);

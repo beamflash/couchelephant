@@ -19,10 +19,17 @@ def _base(port: int) -> str:
     return f"http://localhost:{port}"
 
 
-def is_paused(port: int) -> bool:
+def pause_state(port: int) -> str:
+    """"running", "paused", or "locked" when sign-in is on and the tray has no session."""
     import json
-    with urllib.request.urlopen(_base(port) + "/api/recorder/status", timeout=TIMEOUT) as r:
-        return bool(json.load(r).get("paused"))
+    import urllib.error
+    try:
+        with urllib.request.urlopen(_base(port) + "/api/recorder/status", timeout=TIMEOUT) as r:
+            return "paused" if json.load(r).get("paused") else "running"
+    except urllib.error.HTTPError as err:
+        if err.code == 401:
+            return "locked"
+        raise
 
 
 def set_paused(port: int, on: bool) -> None:
@@ -36,11 +43,18 @@ def quit_tray() -> None:
         _icon.stop()
 
 
-def build_menu(port: int, paused: bool = False) -> list[tuple[str, Callable[[], None]]]:
+def build_menu(port: int, state: str = "running") -> list[tuple[str, Callable[[], None]]]:
+    if state == "locked":
+        # Signed-in installs: the tray cannot log in, so hand over to the browser.
+        pause = ("Pause recordings in Settings",
+                 lambda: webbrowser.open(f"http://localhost:{port}/settings"))
+    elif state == "paused":
+        pause = ("Resume recordings", lambda: set_paused(port, False))
+    else:
+        pause = ("Pause recordings", lambda: set_paused(port, True))
     return [
         ("Open", lambda: webbrowser.open(f"http://localhost:{port}/")),
-        ("Resume recordings" if paused else "Pause recordings",
-         lambda: set_paused(port, not paused)),
+        pause,
         ("Quit", quit_tray),
     ]
 
@@ -69,10 +83,10 @@ def run(port: int | None = None) -> None:
 
     def items():
         try:
-            paused = is_paused(port)
+            state = pause_state(port)
         except Exception:
-            paused = False
-        for label, action in build_menu(port, paused):
+            state = "running"
+        for label, action in build_menu(port, state):
             yield pystray.MenuItem(label, wrap(action), default=(label == "Open"))
 
     _icon = pystray.Icon("CouchElephant", _image(), "CouchElephant", pystray.Menu(items))
