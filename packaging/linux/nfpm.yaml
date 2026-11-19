@@ -1,0 +1,23 @@
+# Built by build_packages.sh, which fills in @SRC@ (the PyInstaller folder)
+# and the VERSION and ARCH variables.
+name: couchelephant
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+section: video
+maintainer: CouchElephant <noreply@users.noreply.github.com>
+description: |
+  CouchElephant, a TV guide and recorder front end for Plex.
+homepage: https://github.com/datbird/couchelephant
+license: MIT
+contents:
+  - src: @SRC@
+    dst: /opt/couchelephant
+    type: tree
+  - src: packaging/linux/couchelephant.service
+    dst: /usr/lib/systemd/system/couchelephant.service
+    file_info:
+      mode: 0644
+scripts:
+  postinstall: packaging/linux/postinstall.sh
+  preremove: packaging/linux/preremove.sh

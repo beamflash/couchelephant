@@ -1,0 +1,18 @@
+[Unit]
+Description=CouchElephant
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=couchelephant
+Group=couchelephant
+WorkingDirectory=/var/lib/couchelephant
+Environment=COUCHELEPHANT_DATA=/var/lib/couchelephant
+# The install script writes COUCHELEPHANT_PORT here.
+EnvironmentFile=-/etc/default/couchelephant
+ExecStart=/opt/couchelephant/couchelephant --no-open
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
