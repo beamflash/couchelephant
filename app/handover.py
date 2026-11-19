@@ -18,12 +18,14 @@ import zoneinfo
 
 import httpx
 
-from . import db, recorder
+from . import db, paths, recorder
 from .plex import Plex, PlexError
 
 log = logging.getLogger("couchelephant.handover")
 
-LIB_DIR = os.environ.get("COUCHELEPHANT_LIBRARY", "/library")
+# None on a native install: the configured folders are absolute paths.
+_lib = paths.library_dir()
+LIB_DIR = str(_lib) if _lib else None
 # A handover that failed is tried again after this long.
 RETRY_SECONDS = 600
 # How long one attempt waits for Plex to list the file it was asked to scan.
@@ -46,7 +48,7 @@ def _kind(rec) -> str:
 
 def why_unavailable(rec=None) -> str | None:
     """None when a recording can be handed over, or what is missing."""
-    if not os.path.isdir(LIB_DIR):
+    if LIB_DIR and not os.path.isdir(LIB_DIR):
         return (f"There is no {LIB_DIR} folder. Mount the Plex library there to "
                 "have recordings moved into Plex.")
     kinds = [_kind(rec)] if rec is not None else ["shows"]
@@ -160,7 +162,7 @@ def hand_over(rec) -> None:
     k = _kind(rec)
     folder = db.get_setting(f"recorder_{k}_folder").strip().strip("/")
     section = db.get_setting(f"recorder_{k}_section").strip()
-    root = os.path.join(LIB_DIR, folder)
+    root = os.path.join(LIB_DIR or "", folder)
     src = recorder.broadcast_path(rec["uid"])
     if not os.path.exists(src):
         raise HandoverError("The recorded file is missing.")
@@ -317,7 +319,7 @@ def tidy(now: int | None = None) -> None:
             continue
         if rec["plex_path"] and os.path.exists(rec["plex_path"]):
             shutil.rmtree(recorder.view_dir(rec["uid"]), ignore_errors=True)
-        elif os.path.isdir(LIB_DIR):
+        elif LIB_DIR and os.path.isdir(LIB_DIR):
             # Deleted in Plex. The library is mounted and the file is not in
             # it, so there is nothing left to list or to play.
             shutil.rmtree(recorder.rec_dir(rec["uid"]), ignore_errors=True)

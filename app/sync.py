@@ -3,10 +3,10 @@ import os
 import time
 import traceback
 
-from . import db, expectations, health, notify, passes, teamcat, verify
+from . import db, expectations, health, notify, passes, paths, teamcat, verify
 from .plex import Plex, PlexError, discover, is_starting
 
-LOGO_DIR = os.environ.get("COUCHELEPHANT_LOGOS", "/data/logos")
+LOGO_DIR = paths.logos_dir()
 
 # How long a sync waits for a Plex that is coming up, and how often it looks.
 #

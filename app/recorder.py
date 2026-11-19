@@ -22,12 +22,12 @@ import uuid
 
 import httpx
 
-from . import db, tuner
+from . import db, paths, tuner
 
 log = logging.getLogger("couchelephant.recorder")
 
-REC_DIR = os.environ.get("COUCHELEPHANT_RECORDINGS", "/recordings")
-FFMPEG = os.environ.get("COUCHELEPHANT_FFMPEG", "ffmpeg")
+REC_DIR = str(paths.recordings_dir())
+FFMPEG = paths.tool("ffmpeg")
 VAAPI_DEVICE = "/dev/dri/renderD128"
 SEGMENT_SECONDS = 4
 # The shortest a live session nobody keeps alive is held, before its tuner is
@@ -135,7 +135,7 @@ VAAPI_CAPTIONS_ONCE = (
     "[x]select=not(mod(n\\,2))[first];"
     "[y]select=mod(n\\,2),sidedata=mode=delete:type=A53_CC[second];"
     "[first][second]interleave[v]")
-FFPROBE = os.environ.get("COUCHELEPHANT_FFPROBE", "ffprobe")
+FFPROBE = paths.tool("ffprobe")
 # How much of the broadcast to have before asking whether it is interlaced.
 PROBE_BYTES = 1024 * 1024
 PROBE_WAIT_SECONDS = 5

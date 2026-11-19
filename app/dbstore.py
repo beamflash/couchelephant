@@ -35,7 +35,7 @@ import hashlib
 import json
 import os
 
-from . import auth, db
+from . import auth, db, paths
 
 # ---------------------------------------------------------------- the stores
 #
@@ -180,7 +180,7 @@ def read(name: str, include_secrets: bool = False) -> dict[str, dict]:
 
 
 def _logo_dir():
-    return os.environ.get("COUCHELEPHANT_LOGOS", "/data/logos")
+    return paths.logos_dir()
 
 
 def _key(spec, rec):

@@ -21,7 +21,7 @@ import sqlite3
 import time
 import zipfile
 
-from . import db, portable
+from . import db, paths, portable
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS backup_jobs (
@@ -111,10 +111,7 @@ def delete_job(job_id: int) -> None:
 # ---------------------------------------------------------------- running
 
 def _db_paths():
-    main = os.environ.get("COUCHELEPHANT_DB", "/data/couchelephant.db")
-    auth_db = os.environ.get("COUCHELEPHANT_AUTH_DB",
-                             os.path.join(os.path.dirname(main), "auth.db"))
-    return {"couchelephant.db": main, "auth.db": auth_db}
+    return {"couchelephant.db": paths.db_path(), "auth.db": paths.auth_db_path()}
 
 
 def _consistent_copy(path):

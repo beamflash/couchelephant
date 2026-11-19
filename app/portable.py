@@ -21,7 +21,7 @@ import os
 import time
 import zipfile
 
-from . import db, dbstore
+from . import db, dbstore, paths
 
 FORMAT = 1
 MANIFEST = "couchelephant.json"
@@ -33,7 +33,7 @@ class ImportError_(ValueError):
 
 
 def _logo_dir():
-    return os.environ.get("COUCHELEPHANT_LOGOS", "/data/logos")
+    return paths.logos_dir()
 
 
 def export_bytes(include_secrets: bool = False, version: str = "", note: str = "") -> bytes:

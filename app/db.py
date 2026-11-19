@@ -11,9 +11,9 @@ import threading
 import uuid
 from contextlib import contextmanager
 
-from . import teamcat
+from . import paths, teamcat
 
-DB_PATH = os.environ.get("COUCHELEPHANT_DB", "/data/couchelephant.db")
+DB_PATH = paths.db_path()
 _local = threading.local()
 
 SCHEMA = """

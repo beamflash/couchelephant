@@ -25,8 +25,8 @@ import time
 
 from . import db
 
-DB_PATH = os.environ.get("COUCHELEPHANT_AUTH_DB",
-                         os.path.join(os.path.dirname(db.DB_PATH), "auth.db"))
+DB_PATH = (os.environ.get("COUCHELEPHANT_AUTH_DB")
+           or os.path.join(os.path.dirname(db.DB_PATH), "auth.db"))
 
 SESSION_TTL = 30 * 24 * 3600
 SESSION_COOKIE = "ce_session"

@@ -27,11 +27,11 @@ import subprocess
 import threading
 import time
 
-from . import db, recorder
+from . import db, paths, recorder
 
 log = logging.getLogger("couchelephant.adskip")
 
-COMSKIP = os.environ.get("COUCHELEPHANT_COMSKIP", "comskip")
+COMSKIP = paths.tool("comskip")
 # A break must have ended this long before the point a live scan has reached
 # before a player is shown it.
 LIVE_SETTLE_SECONDS = 60
