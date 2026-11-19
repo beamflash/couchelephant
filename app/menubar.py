@@ -73,8 +73,8 @@ def build_menu(port: int) -> list[tuple[str, Callable[[], None]]]:
 
 
 def _icon_path() -> str:
-    base = getattr(sys, "_MEIPASS", None) or os.path.dirname(__file__)
-    return os.path.join(base, "static", "icon-64.png")
+    # The spec ships app/static, so this is the same place frozen or not.
+    return os.path.join(os.path.dirname(__file__), "static", "icon-64.png")
 
 
 def run(port: int | None = None) -> None:
