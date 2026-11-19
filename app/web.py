@@ -22,10 +22,12 @@ from . import (
     recorder,
     sync,
     tuner,
+    updates,
 )
 from .plex import Plex
 from .routes import account, data, guide, notices, record, settings, tv, tv_settings
 from .routes import passes as pass_routes
+from .routes import update as update_routes
 from .routes._shared import ASSET_V, BASE, VERSION, current_user  # noqa: F401
 from .routes.account import _configured
 
@@ -64,7 +66,7 @@ _OPEN_PREFIX = ("/static/",)
 # accounts, artwork, and anything that copies or replaces the database. They
 # keep the guide, the schedule and the passes, which is what the app is for.
 _ADMIN_PREFIX = ("/settings", "/api/backups", "/api/backingstore", "/api/import",
-                 "/api/export", "/api/tv/devices")
+                 "/api/export", "/api/tv/devices", "/api/update/apply")
 
 
 def _device_may(path):
@@ -177,6 +179,7 @@ async def startup():
         return
     asyncio.create_task(sync_loop())
     asyncio.create_task(backup_loop())
+    asyncio.create_task(updates.update_loop())
     asyncio.create_task(backingstore_loop())
     asyncio.create_task(recorder_loop())
     asyncio.create_task(outside_loop())
@@ -302,5 +305,6 @@ def healthz():
     })
 
 
-for r in (account, data, guide, notices, record, pass_routes, settings, tv, tv_settings):
+for r in (account, data, guide, notices, record, pass_routes, settings, tv, tv_settings,
+          update_routes):
     app.include_router(r.router)

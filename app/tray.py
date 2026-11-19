@@ -10,7 +10,7 @@ import urllib.request
 import webbrowser
 from collections.abc import Callable
 
-from . import paths
+from . import paths, updates
 
 TIMEOUT = 5
 
@@ -43,7 +43,15 @@ def quit_tray() -> None:
         _icon.stop()
 
 
-def build_menu(port: int, state: str = "running") -> list[tuple[str, Callable[[], None]]]:
+def apply_update(port: int) -> None:
+    # Same rule as pausing: with sign-in on the tray has no session, so the
+    # browser's Settings is where an administrator confirms.
+    if not updates.local_apply(port):
+        webbrowser.open(f"http://localhost:{port}/settings")
+
+
+def build_menu(port: int, state: str = "running",
+               update: str | None = None) -> list[tuple[str, Callable[[], None]]]:
     if state == "locked":
         # Signed-in installs: the tray cannot log in, so hand over to the browser.
         pause = ("Pause recordings in Settings",
@@ -52,11 +60,14 @@ def build_menu(port: int, state: str = "running") -> list[tuple[str, Callable[[]
         pause = ("Resume recordings", lambda: set_paused(port, False))
     else:
         pause = ("Pause recordings", lambda: set_paused(port, True))
-    return [
+    menu = [
         ("Open", lambda: webbrowser.open(f"http://localhost:{port}/")),
         pause,
-        ("Quit", quit_tray),
     ]
+    if update:
+        menu.append((f"Update to {update}", lambda: apply_update(port)))
+    menu.append(("Quit", quit_tray))
+    return menu
 
 
 _icon = None
@@ -86,7 +97,7 @@ def run(port: int | None = None) -> None:
             state = pause_state(port)
         except Exception:
             state = "running"
-        for label, action in build_menu(port, state):
+        for label, action in build_menu(port, state, updates.local_update(port)):
             yield pystray.MenuItem(label, wrap(action), default=(label == "Open"))
 
     _icon = pystray.Icon("CouchElephant", _image(), "CouchElephant", pystray.Menu(items))

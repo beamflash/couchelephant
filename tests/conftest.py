@@ -21,6 +21,8 @@ os.environ["COUCHELEPHANT_FFMPEG"] = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "fake_ffmpeg.py")
 # No comskip unless a test brings its stand-in, so a comskip installed on the
 # machine running the suite is never started by it.
+# Updates off unless a test brings a fake feed; never the real GitHub.
+os.environ["COUCHELEPHANT_RELEASES_URL"] = ""
 os.environ["COUCHELEPHANT_COMSKIP"] = os.path.join(_ROOT, "no-comskip")
 
 from tests import fake_plex, fake_tuner, isolation  # noqa: E402

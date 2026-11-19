@@ -15,7 +15,7 @@ import webbrowser
 from collections.abc import Callable
 from pathlib import Path
 
-from . import paths
+from . import paths, updates
 from .__main__ import main as serve  # this form is the one PyInstaller can see
 from .__main__ import stop as stop_serving
 
@@ -137,12 +137,21 @@ def toggle_login() -> None:
     set_login(not login_enabled())
 
 
-def build_menu(port: int) -> list[tuple[str, Callable[[], None]]]:
-    return [
+def apply_update(port: int) -> None:
+    # With sign-in on there is no session here, so an administrator confirms in Settings.
+    if not updates.local_apply(port):
+        webbrowser.open(f"http://localhost:{port}/settings")
+
+
+def build_menu(port: int, update: str | None = None) -> list[tuple[str, Callable[[], None]]]:
+    menu = [
         ("Open", lambda: webbrowser.open(f"http://localhost:{port}/")),
         ("Start at login", toggle_login),
-        ("Quit", quit_app),
     ]
+    if update:
+        menu.append((f"Update to {update}", lambda: apply_update(port)))
+    menu.append(("Quit", quit_app))
+    return menu
 
 
 def _icon_path() -> str:
@@ -168,13 +177,36 @@ def run(port: int | None = None) -> None:
             rumps.alert("Start at login", str(err))
         item.state = login_enabled()
 
-    for label, action in build_menu(started.port):
-        if label == "Start at login":
+    def apply_in_background(_item):
+        def go():
+            try:
+                apply_update(started.port)
+            except Exception as err:
+                rumps.alert("Update", str(err))
+        threading.Thread(target=go, daemon=True).start()
+
+    for label, action in build_menu(started.port, updates.local_update(started.port)):
+        if label.startswith("Update to"):
+            item = rumps.MenuItem(label, callback=apply_in_background)
+        elif label == "Start at login":
             item = rumps.MenuItem(label, callback=login_toggle)
             item.state = login_enabled()
         else:
             item = rumps.MenuItem(label, callback=lambda _i, action=action: action())
         app.menu.add(item)
+
+    def look_for_update(_timer):
+        # The feed is read a few seconds after start and then daily, so the
+        # first menu has nothing to offer yet.
+        version = updates.local_update(started.port)
+        label = f"Update to {version}" if version else None
+        for key in [k for k in app.menu.keys() if str(k).startswith("Update to")]:
+            if key != label:
+                del app.menu[key]
+        if label and label not in app.menu:
+            app.menu.insert_before("Quit", rumps.MenuItem(label, callback=apply_in_background))
+
+    rumps.Timer(look_for_update, 600).start()
     app.run()
 
 
