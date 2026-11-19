@@ -20,6 +20,20 @@ on:
   workflow_dispatch:
   # Release calls this on a version tag.
   workflow_call:
+    secrets:
+      MACOS_DEVID_P12:
+        required: false
+      MACOS_DEVID_P12_PASSWORD:
+        required: false
+      ASC_KEY_ID:
+        required: false
+      ASC_ISSUER:
+        required: false
+      ASC_KEY_P8:
+        required: false
+
+permissions:
+  contents: read
 
 env:
   WINSW_VERSION: v2.12.0
@@ -44,7 +58,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: packaging/tools/windows-x64
-          key: tools-windows-x64-${{ hashFiles('packaging/tools.json') }}
+          key: tools-windows-x64-${{ hashFiles('packaging/tools.json', 'packaging/fetch_tools.py') }}
 
       - name: Fetch ffmpeg and comskip
         if: steps.tools.outputs.cache-hit != 'true'
@@ -114,7 +128,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: packaging/tools/linux-${{ matrix.arch }}
-          key: tools-linux-${{ matrix.arch }}-${{ hashFiles('packaging/tools.json', 'packaging/build_comskip.sh', 'packaging/linux/build_in_rocky.sh') }}
+          key: tools-linux-${{ matrix.arch }}-${{ hashFiles('packaging/tools.json', 'packaging/build_comskip.sh', 'packaging/linux/build_in_rocky.sh', 'packaging/fetch_tools.py') }}
 
       - name: Fetch ffmpeg
         if: steps.tools.outputs.cache-hit != 'true'

@@ -87,10 +87,20 @@ end;
 
 procedure StopOldInstall;
 var
-  Code: Integer;
+  Code, I: Integer;
 begin
   if FileExists(ExpandConstant('{app}\CouchElephantService.exe')) then
     Service('stop');
+  { The service can report stopped while its server process is still shutting
+    down and holding the port and the database. Wait for the process itself,
+    then end whatever is left, so the new one starts clean. }
+  for I := 1 to 30 do
+  begin
+    RunCmd('tasklist /FI "IMAGENAME eq couchelephant.exe" | find /I "couchelephant.exe"', Code);
+    if Code <> 0 then Break;
+    Sleep(1000);
+  end;
+  RunCmd('taskkill /F /T /IM couchelephant.exe', Code);
   RunCmd('taskkill /F /IM CouchElephantTray.exe', Code);
 end;
 

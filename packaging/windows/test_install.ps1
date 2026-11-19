@@ -104,7 +104,18 @@ try {
     Write-Host 'install test ok'
 } catch {
     Write-Host $_
+    # What a timeout needs to be explained: who runs, who holds the port, what the server said.
+    Write-Host '--- service'
+    Get-CimInstance Win32_Service -Filter "Name='CouchElephant'" | Format-List Name, State, ProcessId, StartName | Out-String | Write-Host
+    Write-Host '--- couchelephant processes'
+    Get-CimInstance Win32_Process -Filter "Name='couchelephant.exe' or Name='CouchElephantService.exe'" |
+        Select-Object ProcessId, ParentProcessId, Name, CreationDate | Format-Table | Out-String | Write-Host
+    Write-Host '--- listeners on 8710-8711'
+    Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.LocalPort -in 8710, 8711 } |
+        ForEach-Object { "$($_.LocalPort) pid $($_.OwningProcess) $((Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue).ProcessName)" } | Write-Host
+    Write-Host '--- who holds the database'
+    Get-Process | Where-Object { $_.Path -and $_.Path -like "$app*" } | ForEach-Object { "$($_.Id) $($_.Path)" } | Write-Host
     if (Test-Path "$env:TEMP\ce-setup.log") { Get-Content "$env:TEMP\ce-setup.log" -Tail 60 }
-    if (Test-Path (Join-Path $data 'logs')) { Get-ChildItem (Join-Path $data 'logs') | ForEach-Object { "--- $_"; Get-Content $_.FullName -Tail 40 } }
+    if (Test-Path (Join-Path $data 'logs')) { Get-ChildItem (Join-Path $data 'logs') | ForEach-Object { "--- $_"; Get-Content $_.FullName -Tail 80 } }
     exit 1
 }
