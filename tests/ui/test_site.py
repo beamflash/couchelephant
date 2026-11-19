@@ -6,8 +6,6 @@ open the file directly and answer that one request with a fixture.
 import json
 from pathlib import Path
 
-import pytest
-
 PAGE = (Path(__file__).resolve().parents[2] / "site" / "index.html").as_uri()
 BASE = "https://github.com/datbird/couchelephant/releases/download/v9.9.9/"
 
@@ -40,7 +38,7 @@ def open_site(browser, ua, release=FULL, arch=None, status=200):
         # Chrome reports the processor through this hint; the user agent cannot.
         ctx.add_init_script(
             "Object.defineProperty(navigator,'userAgentData',{value:{"
-            "getHighEntropyValues:()=>Promise.resolve({architecture:%s})}})" % json.dumps(arch))
+            f"getHighEntropyValues:()=>Promise.resolve({{architecture:{json.dumps(arch)}}})}}}})")
     ctx.route("https://api.github.com/**", lambda r: r.fulfill(
         status=status, content_type="application/json", body=json.dumps(release)))
     page = ctx.new_page()
