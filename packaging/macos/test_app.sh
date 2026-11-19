@@ -54,7 +54,10 @@ fi
 echo "ok: bundled comskip starts"
 
 # Something else on the port would answer for the app and hide a dead build.
-if lsof -nP -iTCP:$port -sTCP:LISTEN >/dev/null 2>&1; then
+# curl exits 7 only when nothing accepts the connection; anything else means it is taken.
+rc=0
+curl -s -o /dev/null --max-time 3 "http://localhost:$port/" || rc=$?
+if [ "$rc" != 7 ]; then
   echo "FAILED: port $port is already in use before the app started"; exit 1
 fi
 "$app/Contents/MacOS/CouchElephant" >"$work/app.log" 2>&1 &
