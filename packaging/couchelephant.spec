@@ -47,6 +47,8 @@ exe = EXE(
     exclude_binaries=True,
     contents_directory=".",           # so bin/ sits beside the executable
     name="couchelephant",
-    console=sys.platform != "win32",   # the Windows service has no console to show
+    # A console build on Windows too: a windowed exe has no stdout or stderr,
+    # which uvicorn's logging trips over, and the service wrapper logs the output.
+    console=True,
 )
 coll = COLLECT(exe, a.binaries, a.datas, name="couchelephant")
