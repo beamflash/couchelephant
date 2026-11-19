@@ -1,5 +1,6 @@
 """Pressing record: the options panel, the ownership bar, and the result."""
 from tests import fake_plex
+from tests.ui.helpers import open_plex_settings
 
 
 def _open_options(page, title="Chiefs"):
@@ -13,6 +14,7 @@ def _open_options(page, title="Chiefs"):
 
 def test_the_options_panel_shows_plexs_own_settings(page):
     _open_options(page)
+    open_plex_settings(page)
     text = page.locator("#ovlbox").inner_text()
     assert "Resolution" in text
     assert "Minutes before start" in text
@@ -46,35 +48,57 @@ def test_the_bar_says_plex_until_you_limit_the_sources(page):
     # A single broadcast is already pinned to one channel, so the limit only
     # means anything on the rule that keeps matching.
     page.check('input[name=tpl][value="1"]')
-    page.wait_for_selector("#multibtn:not([disabled])")
-    page.click("#multibtn")
-    page.wait_for_selector("#multibody .multirow")
-    page.check('#multibody input[data-net="ABC"]')
-    page.check('#multibody input[data-net="CBS"]')
+    page.click("#sec-nets > summary")
+    page.wait_for_selector("#netbody .multirow")
+    page.check('#netbody input[data-net="ABC"]')
+    page.check('#netbody input[data-net="CBS"]')
     assert "CouchElephant schedule" in page.locator("#optbar").inner_text()
+
+
+def test_the_three_sections_start_collapsed_and_ticks_are_submitted(page):
+    _open_options(page)
+    page.check('input[name=tpl][value="1"]')
+    for key in ("plex", "nets", "chans"):
+        assert page.locator("#sec-" + key).get_attribute("open") is None, key
+    assert not page.locator('#netbody input[data-net="ABC"]').first.is_visible()
+    heads = page.locator("#ovlbox details.optsec > summary .secname").all_inner_texts()
+    assert heads == ["Plex settings", "Filter networks", "Filter channels"]
+    assert page.locator("#netsum").inner_text() == "Any"
+
+    page.click("#sec-nets > summary")
+    page.wait_for_selector("#netbody .multirow")
+    page.check('#netbody input[data-net="ABC"]')
+    assert page.locator("#netsum").inner_text() == "ABC"
+
+    sent = []
+    page.on("request", lambda r: sent.append(r.post_data or "")
+            if r.url.endswith("/api/record") else None)
+    page.click("#optgo")
+    page.wait_for_function("() => document.getElementById('optgo').textContent === 'Done'")
+    assert any("networks=%5B%22ABC%22%5D" in body for body in sent), sent
 
 
 def test_the_source_picker_takes_more_than_one_channel(page):
     _open_options(page)
     page.check('input[name=tpl][value="1"]')
-    page.click("#multibtn")
-    page.wait_for_selector("#multibody .multirow")
-    boxes = page.locator('#multibody input[type="checkbox"]')
-    assert boxes.count() >= 6, "four channels and their networks"
-    page.check('#multibody input[data-ch="9.1"]')
-    page.check('#multibody input[data-ch="5.1"]')
-    summary = page.locator("#multisum").inner_text()
+    page.click("#sec-chans > summary")
+    page.wait_for_selector("#chbody .multirow")
+    boxes = page.locator('#chbody input[type="checkbox"]')
+    assert boxes.count() >= 4, "four channels"
+    page.check('#chbody input[data-ch="9.1"]')
+    page.check('#chbody input[data-ch="5.1"]')
+    summary = page.locator("#chsum").inner_text()
     assert "9.1" in summary and "5.1" in summary
 
 
 def test_the_source_picker_is_searchable(page):
     _open_options(page)
     page.check('input[name=tpl][value="1"]')
-    page.click("#multibtn")
-    page.wait_for_selector("#multibody .multirow")
-    before = page.locator("#multibody .multirow").count()
-    page.fill("#multiq", "ABC")
-    assert page.locator("#multibody .multirow").count() < before
+    page.click("#sec-chans > summary")
+    page.wait_for_selector("#chbody .multirow")
+    before = page.locator("#chbody .multirow").count()
+    page.fill('input[data-q="ch"]', "ABC")
+    assert page.locator("#chbody .multirow").count() < before
 
 
 def test_a_single_broadcast_says_it_is_already_pinned(page):

@@ -63,6 +63,8 @@ Recorded list.
 | `POST /api/tv/record` | Record from a television, always with CouchElephant's recorder. `airing_id`, and `scope`: `one`, `series`, or `team` with `team_id` |
 | `GET /api/tv/record/options` | What "Record every episode" or "Record every <team> game" can be set to before the pass is made. `airing_id`, `scope` (`series` or `team`), `team_id`. The web's `/api/record/options` answer with only Plex's recurring choices left, `pick` (the index of the one asked for), and the recorder default `couchelephant` wherever it can run |
 | `POST /api/tv/record/all` | Make that pass with the chosen options, through the web's own `/api/record`. `airing_id`, `template` (an index from the options), `settings` (JSON), `networks` and `channels` (JSON lists), `recorder` |
+| `GET /api/tv/passes/options` | The same options for a new pass from the + button, before it is made. `kind` (`series`, `announced` or `team`), `id`, `title`. The answer has the shape of `/api/tv/record/options` |
+| `POST /api/tv/passes/create` | Make that pass. `kind`, `id`, `title`, `template`, `settings`, `networks`, `channels`, `recorder`. A series or a team goes through the web's own `POST /api/rules` |
 | `POST /api/tv/record/cancel` | Cancel one booking, with either recorder. `airing_id` |
 | `GET /api/tv/recordings` | `upcoming`: what is set to record, each with `booked_by` and `recorder`. `recorded`: everything recorded, each with `group` and `category` (`sports`, `tv`, `movies`). `passes`: every pass and Plex rule, each with `tab` (`sports` or `season`) |
 | `POST /api/tv/passes/{id}` | Change a pass from a television. Any of `recorder`, `enabled`, `networks` (JSON), `start_minutes`, `end_minutes`. Only what is sent is changed |

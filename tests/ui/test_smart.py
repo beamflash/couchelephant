@@ -1,6 +1,8 @@
 """The Smart Pass panel: the two choices, the builder, and the guard."""
 import pytest
 
+from tests.ui.helpers import open_plex_settings
+
 
 @pytest.fixture
 def add(page):
@@ -266,6 +268,7 @@ def _ready_filter(page):
 def test_a_smart_pass_offers_plexs_own_settings(add):
     """Padding above all. A game that runs long is cut off without it."""
     _ready_filter(add)
+    open_plex_settings(add)
     add.wait_for_selector('[data-set="endOffsetMinutes"]', timeout=20000)
     ids = add.eval_on_selector_all("[data-set]", "els => els.map(e => e.dataset.set)")
     assert "startOffsetMinutes" in ids
@@ -277,6 +280,7 @@ def test_a_smart_pass_offers_plexs_own_settings(add):
 
 def test_it_does_not_offer_what_a_pass_cannot_honour(add):
     _ready_filter(add)
+    open_plex_settings(add)
     add.wait_for_selector('[data-set="endOffsetMinutes"]', timeout=20000)
     ids = add.eval_on_selector_all("[data-set]", "els => els.map(e => e.dataset.set)")
     for gone in ("onlyNewAirings", "lineupChannel", "startTimeslot", "oneShot"):
@@ -303,6 +307,7 @@ def test_a_sports_filter_arrives_with_padding_filled_in(add, monkeypatch):
 def test_the_padding_you_set_is_what_gets_booked(add):
     from tests import fake_plex
     _ready_filter(add)
+    open_plex_settings(add)
     add.wait_for_selector('[data-set="endOffsetMinutes"]', timeout=20000)
     add.fill('[data-set="endOffsetMinutes"]', "45")
     add.fill("#sfname", "Football")
@@ -320,12 +325,14 @@ def test_editing_a_smart_pass_shows_the_padding_it_saved(page):
     page.click('.subtab[data-sub="season"]')
     page.wait_for_selector(".passrow", timeout=15000)
     page.click('.passrow [data-act="edit"]')
+    open_plex_settings(page)
     page.wait_for_selector('[data-set="endOffsetMinutes"]', timeout=20000)
     assert page.input_value('[data-set="endOffsetMinutes"]') == "90"
 
 
 def test_padding_shows_plexs_own_words_and_reaches_two_hours(add):
     _ready_filter(add)
+    open_plex_settings(add)
     add.wait_for_selector('[data-set="endOffsetMinutes"]', timeout=20000)
     tip = add.get_attribute('label.optrow:has([data-set="endOffsetMinutes"]) .opthelp',
                             "data-tip")
@@ -345,11 +352,12 @@ def test_an_explanation_is_a_tooltip_not_a_second_line(add):
     """Plex's summaries run to twenty lines. Inline, one row was taller than
     the panel."""
     _ready_filter(add)
+    open_plex_settings(add)
     add.wait_for_selector('[data-set="comskipMethod"]', timeout=20000)
 
-    marks = add.locator(".optgrid .opthelp")
+    marks = add.locator("#sec-plex .opthelp")
     assert marks.count() >= 4, "each Plex setting carries its explanation"
-    assert "Attempt to automatically detect" not in add.locator(".optgrid").inner_text()
+    assert "Attempt to automatically detect" not in add.locator("#sec-plex .optgrid").inner_text()
     assert add.locator(".tipbox.on").count() == 0, "and nothing is shown until asked"
 
     # The words are still there, on the mark.
@@ -360,6 +368,7 @@ def test_an_explanation_is_a_tooltip_not_a_second_line(add):
 
 def test_no_option_row_is_taller_than_a_row(add):
     _ready_filter(add)
+    open_plex_settings(add)
     add.wait_for_selector('[data-set="comskipMethod"]', timeout=20000)
     heights = add.eval_on_selector_all(
         ".optgrid .optrow:not(.wide)", "els => els.map(e => e.offsetHeight)")
@@ -369,6 +378,7 @@ def test_no_option_row_is_taller_than_a_row(add):
 
 def test_the_tooltip_appears_on_hover(add):
     _ready_filter(add)
+    open_plex_settings(add)
     add.wait_for_selector('[data-set="endOffsetMinutes"]', timeout=20000)
     assert add.locator(".tipbox.on").count() == 0
     add.locator('label.optrow:has([data-set="endOffsetMinutes"]) .opthelp').hover()
@@ -380,6 +390,7 @@ def test_the_tooltip_is_not_clipped_by_the_panel(add):
     """It was a pseudo-element inside a box that scrolls, and a scrolling
     ancestor clips its children. The words were cut off at the panel edge."""
     _ready_filter(add)
+    open_plex_settings(add)
     add.wait_for_selector('[data-set="minVideoQuality"]', timeout=20000)
     add.locator('label.optrow:has([data-set="minVideoQuality"]) .opthelp').hover()
     add.wait_for_selector(".tipbox.on", timeout=5000)
@@ -399,9 +410,12 @@ def test_the_tooltip_follows_the_row_when_the_panel_scrolls(add):
     pointing at a mark scrolls that mark into view, so the tooltip killed
     itself the moment it appeared."""
     _ready_filter(add)
+    open_plex_settings(add)
     add.wait_for_selector('[data-set="minVideoQuality"]', timeout=20000)
     mark = 'label.optrow:has([data-set="minVideoQuality"]) .opthelp'
-    add.locator(mark).hover()
+    # Focus, not hover: scrolling moves new content under a resting mouse,
+    # and the browser then reports the pointer as having left the mark.
+    add.locator(mark).focus()
     add.wait_for_selector(".tipbox.on", timeout=5000)
 
     def gap():
@@ -433,9 +447,10 @@ def test_the_record_panel_and_the_pass_panel_look_the_same(page):
 def test_no_option_label_is_truncated(add):
     """A control sized on its content squeezed the label instead of itself."""
     _ready_filter(add)
+    open_plex_settings(add)
     add.wait_for_selector('[data-set="comskipMethod"]', timeout=20000)
     clipped = add.eval_on_selector_all(
-        ".optgrid .optname",
+        "#sec-plex .optname",
         "els => els.filter(e => e.scrollWidth > e.clientWidth + 1)"
         ".map(e => e.textContent)")
     assert clipped == [], f"labels cut off: {clipped}"
@@ -445,6 +460,7 @@ def test_the_options_stay_two_columns_of_single_rows(add):
     """The complaint that produced this test: the explanations turned a tidy
     two-column grid into one long scroll."""
     _ready_filter(add)
+    open_plex_settings(add)
     add.wait_for_selector('[data-set="comskipMethod"]', timeout=20000)
     cols = add.eval_on_selector(
         ".optgrid", "e => getComputedStyle(e).gridTemplateColumns.split(' ').length")
@@ -458,6 +474,7 @@ def test_the_plex_settings_are_there_before_anything_is_chosen(add):
     """They belong to Plex, not to the filter. Waiting for a match meant an
     empty Options box for anybody still deciding what to record."""
     _filter(add)
+    open_plex_settings(add)
     add.wait_for_selector('[data-set="endOffsetMinutes"]', timeout=20000)
     ids = add.eval_on_selector_all("[data-set]", "els => els.map(e => e.dataset.set)")
     assert "startOffsetMinutes" in ids and "minVideoQuality" in ids
@@ -491,6 +508,8 @@ def test_plexs_settings_are_always_there(add, route):
         add.check('input[name=rmode][value="smart"]')
         add.check('input[name=rsub][value="filter"]')
 
+    open_plex_settings(add)
+
     add.wait_for_selector('[data-set="endOffsetMinutes"]', timeout=20000)
     ids = add.eval_on_selector_all("[data-set]", "els => els.map(e => e.dataset.set)")
     for want in ("minVideoQuality", "replaceLowerQuality", "recordPartials",
@@ -501,6 +520,7 @@ def test_plexs_settings_are_always_there(add, route):
 def test_a_sports_pass_shows_thirty_minutes_before_a_team_is_picked(add):
     add.check('input[name=rmode][value="smart"]')
     add.check('input[name=rsub][value="team"]')
+    open_plex_settings(add)
     add.wait_for_selector('[data-set="endOffsetMinutes"]', timeout=20000)
     assert add.input_value('[data-set="endOffsetMinutes"]') == "30"
     assert "Sport overruns" in add.locator("#ovlbox").inner_text()

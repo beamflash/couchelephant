@@ -1,5 +1,39 @@
 # Changelog
 
+## 1.5.23 - 2026-11-18
+
+### Changed
+
+- **The guide keeps its channels and times in view.** On the Apple TV,
+  iPhone and iPad, the channel column stays at the left and the row of
+  times stays at the top while the guide scrolls either way, in the Guide
+  tab and over live TV. The web guide already did this.
+- **The guide over live TV is about half see-through**, in the apps and on
+  the web, so the programme stays easy to follow while you browse.
+- **One layout for every season pass prompt.** Recorded by comes first.
+  Plex settings, Filter networks and Filter channels follow, each closed
+  until opened. This is the same on the web, the Apple TV, the iPhone and
+  the iPad.
+- **A new season or sports pass from the + button asks how first.** In the
+  apps, picking a series, a movie or a team opens those options before the
+  pass is made, as Record every episode does.
+- **The programme with focus in the Apple TV guide is easy to read.** Its
+  box stays dark with an amber edge, so white channel logos no longer
+  disappear into it.
+
+### Fixed
+
+- **Play/Pause on the Apple TV remote pauses live TV.** The system player
+  ignored it on a live channel. The app now pauses and resumes itself when
+  the player does not.
+- **The Apple TV Top Shelf shows your recordings.** The rows over the home
+  screen (Recording now, Recent recordings) never appeared: the extension
+  was built as an old kind of tvOS extension that stopped as it started.
+  It also no longer needs a sign-in key on a server with sign-in off.
+- **A programme the remote moves to is never left under the channel
+  column** in the Apple TV guide.
+
+
 ## 1.5.22 - 2026-11-18
 
 ### Changed

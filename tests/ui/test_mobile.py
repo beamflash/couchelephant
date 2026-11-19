@@ -48,10 +48,10 @@ def test_the_source_picker_does_not_steal_focus_on_a_touch_screen(phone):
     the moment it opens, which is the whole control."""
     phone.goto("/recordings")
     phone.tap("#addrule")
-    phone.wait_for_selector("#multibtn")
-    phone.tap("#multibtn")
-    phone.wait_for_selector("#multibody")
-    assert phone.evaluate("() => document.activeElement.id") != "multiq"
+    phone.wait_for_selector("#sec-nets")
+    phone.tap("#sec-nets > summary")
+    phone.wait_for_selector("#netbody .multirow")
+    assert phone.evaluate("() => document.activeElement.className") != "multiq"
 
 
 def test_the_agenda_row_stacks_rather_than_squeezing(phone):

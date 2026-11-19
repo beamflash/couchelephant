@@ -915,3 +915,73 @@ def test_record_all_with_plex_and_no_limit_is_plex_s_own_rule(client, synced, tu
     assert r["ok"] is True, r
     assert fake_plex.STATE.created, "Plex was asked to follow it"
     assert db.one("SELECT COUNT(*) c FROM passes")["c"] == 0
+
+
+# ---------- The + button asks how first, with the web's Add options ----------
+
+def test_a_new_series_pass_offers_the_web_s_options(client, synced, tuner):
+    tv = _pair(client)
+    d = client.get("/api/tv/passes/options", headers=tv,
+                   params={"kind": "series", "title": "Quiz Show"}).json()
+    assert d["ok"] is True, d
+    assert d["templates"] and all(not t["one_shot"] for t in d["templates"])
+    assert d["pick"] == d["templates"][0]["index"]
+    assert d["recorder"] == {"available": True, "default": "couchelephant"}
+    assert d["networks"] and d["channels"]
+
+
+def test_a_new_series_pass_keeps_the_chosen_sources_and_settings(client, synced, tuner):
+    tv = _pair(client)
+    d = client.get("/api/tv/passes/options", headers=tv,
+                   params={"kind": "series", "title": "Quiz Show"}).json()
+    net = d["networks"][0]["name"]
+    r = client.post("/api/tv/passes/create", headers=tv, data={
+        "kind": "series", "title": "Quiz Show", "template": str(d["pick"]),
+        "settings": '{"startOffsetMinutes": "5"}', "networks": f'["{net}"]',
+        "channels": "[]", "recorder": "couchelephant"}).json()
+    assert r["ok"] is True, r
+    p = db.one("SELECT * FROM passes")
+    assert p["series_title"] == "Quiz Show" and p["recorder"] == "couchelephant"
+    assert db.unjs(p["networks"]) == [net]
+    assert db.unjs(p["prefs"])["startOffsetMinutes"] == "5"
+    again = client.post("/api/tv/passes/create", headers=tv, data={
+        "kind": "series", "title": "Quiz Show", "template": str(d["pick"]),
+        "recorder": "couchelephant"})
+    assert again.status_code == 409 and "already follow" in again.json()["error"]
+
+
+def test_a_new_team_pass_from_the_catalogue_gets_sports_padding(client, synced, tuner):
+    tv = _pair(client)
+    found = client.get("/api/tv/passes/find", headers=tv,
+                       params={"q": "chiefs", "tab": "sports"}).json()["results"][0]
+    d = client.get("/api/tv/passes/options", headers=tv,
+                   params={"kind": "team", "id": found["id"],
+                           "title": found["title"]}).json()
+    assert d["ok"] is True, d
+    end = [s for t in d["templates"] for s in t["settings"]
+           if s["id"] == "endOffsetMinutes"]
+    assert end and end[0]["value"] == "30"
+    r = client.post("/api/tv/passes/create", headers=tv, data={
+        "kind": "team", "id": found["id"], "title": found["title"],
+        "template": str(d["pick"]), "recorder": "couchelephant"}).json()
+    assert r["ok"] is True, r
+    assert db.one("SELECT team_name FROM passes")["team_name"] == found["title"]
+
+
+def test_an_announced_series_pass_keeps_its_options(client, synced, tuner, monkeypatch):
+    from app.sources import tmdb, tvmaze
+    monkeypatch.setattr(tvmaze, "search", lambda q: [])
+    monkeypatch.setattr(tmdb, "search", lambda q, key="": [])
+    tv = _pair(client)
+    d = client.get("/api/tv/passes/options", headers=tv,
+                   params={"kind": "announced", "title": "Not Yet Aired"}).json()
+    assert d["ok"] is True, d
+    net = d["networks"][0]["name"]
+    r = client.post("/api/tv/passes/create", headers=tv, data={
+        "kind": "announced", "id": "tvmaze:123", "title": "Not Yet Aired",
+        "template": str(d["pick"]), "networks": f'["{net}"]',
+        "recorder": "couchelephant"}).json()
+    assert r["ok"] is True, r
+    p = db.one("SELECT * FROM passes")
+    assert p["series_title"] == "Not Yet Aired" and p["recorder"] == "couchelephant"
+    assert db.unjs(p["networks"]) == [net]

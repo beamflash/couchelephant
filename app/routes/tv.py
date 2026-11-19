@@ -1014,6 +1014,86 @@ def tv_pass_new(kind: str = Form(...), title: str = Form(""), id: str = Form("")
     return {"ok": True, "message": f"Following {label}. {booked} set to record so far."}
 
 
+@router.get("/api/tv/passes/options")
+def tv_pass_options(kind: str, id: str = "", title: str = ""):
+    """What a new pass from the + button can be set to, before it is made:
+    the web's Add panel, for an app, in the shape `/api/tv/record/options`
+    has, so the apps draw both with one screen.
+
+    The templates come from `/api/rules/options`, as the web's panel takes
+    them. Something the guide has not reached yet (an announced series, a
+    team not playing this week) gets the settings each booking will carry.
+    """
+    if kind == "series":
+        got = pass_routes.api_rule_options(kind="series", series=title)
+    elif kind == "team" and id:
+        got = pass_routes.api_rule_options(kind="team", team_id=id)
+    elif kind in ("team", "announced"):
+        got = pass_routes.api_rule_options(kind="any", ce_pass=1,
+                                           sporty=1 if kind == "team" else 0)
+    else:
+        return JSONResponse({"ok": False, "error": "Unknown kind of pass."},
+                            status_code=400)
+    body = json.loads(got.body)
+    if not body.get("ok"):
+        return JSONResponse(body, status_code=got.status_code if got.status_code != 200
+                            else 400)
+    if body.get("sporty") and kind == "team":
+        # Sport runs over, so the padding is filled in, as the web does it.
+        pad = body.get("sports_padding") or {}
+        for t in body["templates"]:
+            for s in t["settings"]:
+                if s["id"] in pad:
+                    s["value"] = str(pad[s["id"]])
+    sources = json.loads(pass_routes.api_sources().body)
+    available = recorder.available()
+    return {"ok": True, "title": title, "templates": body["templates"],
+            "pick": body["templates"][0]["index"] if body["templates"] else 0,
+            "recorder": {"available": available,
+                         "default": "couchelephant" if available else "plex"},
+            "networks": sources["networks"], "channels": sources["channels"]}
+
+
+@router.post("/api/tv/passes/create")
+async def tv_pass_create(kind: str = Form(...), id: str = Form(""), title: str = Form(""),
+                         template: int = Form(0), settings: str = Form("{}"),
+                         networks: str = Form("[]"), channels: str = Form("[]"),
+                         recorder_choice: str = Form("couchelephant", alias="recorder")):
+    """Make the pass with the options chosen in the app. A series or a team
+    goes through the web's own Add route, so the two cannot drift."""
+    title = (title or "").strip()
+    if kind in ("series", "team"):
+        return await pass_routes.api_rule_create(
+            kind=kind, team_id=id if kind == "team" else "",
+            series=title if kind == "series" else "", networks=networks,
+            channels=channels, template=template, settings=settings, filter="",
+            name="", confirm="", team=title if kind == "team" else "",
+            recorder=recorder_choice)
+    if kind != "announced":
+        return JSONResponse({"ok": False, "error": "Unknown kind of pass."},
+                            status_code=400)
+    if not title:
+        return JSONResponse({"ok": False, "error": "Pick a series."}, status_code=400)
+    who = pass_routes._who_records(recorder_choice)
+    if who == "couchelephant" and record.recorder_off():
+        return record.recorder_off()
+    # The pass with its options first, then the follow, which finds it and
+    # adds what TVmaze or TMDB expect.
+    _, label, made = await asyncio.to_thread(
+        pass_routes._make_pass, "series", None, title, db.unjs(networks, []) or [],
+        db.unjs(channels, []) or [], pass_routes._pass_prefs(db.unjs(settings, {}) or {}),
+        False, None, "", who)
+    if not made:
+        return JSONResponse({"ok": False, "error": f"You already follow {label}."},
+                            status_code=409)
+    source, _, source_id = id.partition(":")
+    got = pass_routes.api_announced_follow(source=source, source_id=source_id, title=title)
+    if not json.loads(got.body).get("ok"):
+        return got
+    return {"ok": True, "message": f"Following {label}. It records once the guide "
+                                   "carries it."}
+
+
 @router.post("/api/tv/passes/{pass_id}")
 async def tv_pass_edit(pass_id: int, recorder_choice: str = Form("", alias="recorder"),
                        enabled: str = Form(""), networks: str = Form(""),

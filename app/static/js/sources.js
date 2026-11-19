@@ -1,93 +1,101 @@
-/* The "limit to networks or channels" control.
+/* The three collapsible sections under "Recorded by" in every season pass
+   panel: Plex settings, Filter networks and Filter channels.
 
-   A dropdown that takes more than one answer. It looks like the single-choice
-   ones beside it and opens a list where every item has its own checkbox.
+   Each one is a native <details>, closed until the person opens it, with a
+   short summary on its header. The guide's record panel and the pass editor
+   both use this one component, so the panels cannot drift apart again.
 
-   This existed twice, once in the guide's record panel and once in the add
-   panel, and the copies had already drifted: only one skipped autofocus on a
-   touch screen. One component now, used by both. */
+   state.nets and state.chans are the arrays this edits in place. onChange
+   runs after every tick so the caller can repaint its verdict bar. */
 (function (w) {
   'use strict';
-  var esc = w.CE.esc, coarse = w.CE.coarse;
+  var esc = w.CE.esc;
 
-  /* state.nets and state.chans are the arrays this edits in place.
-     onChange runs after every tick, so the caller can repaint its own summary
-     and verdict. */
   function SourcePicker(state, onChange) {
     this.state = state;
     this.onChange = onChange || function () {};
     this.cache = null;
+    // Which sections are open, kept here because the panels redraw.
+    this.open = {plex: false, nets: false, chans: false};
+    this.q = {net: '', ch: ''};
+    this.nsettings = 0;
   }
 
-  SourcePicker.prototype.summary = function () {
-    var picked = this.state.nets.concat(this.state.chans);
-    return !picked.length ? 'Anywhere'
-      : picked.length <= 2 ? picked.join(', ')
-      : picked.length + ' selected';
-  };
+  function pickedText(list) {
+    return !list.length ? 'Any'
+      : list.length <= 2 ? list.join(', ')
+      : list.length + ' chosen';
+  }
 
-  /* The closed control, ready to drop into an option row. */
-  SourcePicker.prototype.html = function (disabled, why) {
-    return '<span class="multi' + (disabled ? ' na' : '') + '" id="multi">' +
-      '<button type="button" class="multibtn" id="multibtn"' +
-        (disabled ? ' disabled title="' + esc(why || '') + '"' : '') + '>' +
-        '<span id="multisum">' + esc(this.summary()) + '</span>' +
-        '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" ' +
-          'stroke="currentColor" stroke-width="2.4" stroke-linecap="round" ' +
-          'stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>' +
-      '<span class="multimenu" id="multimenu">' +
-        '<input class="multiq" id="multiq" placeholder="Search..." autocomplete="off">' +
-        '<span class="multibody" id="multibody"></span></span></span>';
+  function section(key, title, summary, body, na, why, extra) {
+    return '<details class="optsec' + (na ? ' na' : '') + '" id="sec-' + key +
+      '" data-sec="' + key + '"' + (!na && extra.open ? ' open' : '') + '>' +
+      '<summary' + (why ? ' title="' + esc(why) + '"' : '') + '>' +
+      '<span class="secname">' + esc(title) + '</span>' +
+      '<span class="secsum" id="' + (key === 'nets' ? 'net' : key === 'chans' ? 'ch' : key) + 'sum">' + esc(summary) + '</span>' +
+      '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" ' +
+        'stroke="currentColor" stroke-width="2.4" stroke-linecap="round" ' +
+        'stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></summary>' +
+      '<div class="secbody">' + body + '</div></details>';
+  }
+
+  function pickBody(kind, note) {
+    return '<div class="note">' + esc(note) + '</div>' +
+      '<input class="multiq" data-q="' + kind + '" placeholder="Search..." ' +
+        'autocomplete="off" value="">' +
+      '<div class="multibody" id="' + kind + 'body"></div>';
+  }
+
+  /* The sections, ready to drop under the Recorded by row. `settings` are
+     Plex's own rows; `na`/`why` turn the two filters off with a reason (a
+     single broadcast is already one channel at one time). */
+  SourcePicker.prototype.sections = function (settings, na, why) {
+    var h = '', self = this, st = this.state;
+    settings = settings || [];
+    this.nsettings = settings.length;
+    if (settings.length) {
+      h += section('plex', 'Plex settings',
+        settings.length + (settings.length === 1 ? ' setting' : ' settings'),
+        '<div class="optgrid">' + settings.map(w.CE.settingField).join('') + '</div>',
+        false, '', {open: this.open.plex});
+    }
+    var hint = 'Plex takes one channel. This takes as many as you like.';
+    h += section('nets', 'Filter networks', na ? 'Not needed' : pickedText(st.nets),
+      pickBody('net', hint), na, na ? why : hint, {open: this.open.nets});
+    h += section('chans', 'Filter channels', na ? 'Not needed' : pickedText(st.chans),
+      pickBody('ch', hint), na, na ? why : hint, {open: this.open.chans});
+    this.na = !!na;
+    return '<div class="optsecs">' + h + '</div>';
   };
 
   SourcePicker.prototype.paint = function () {
-    var sum = document.getElementById('multisum');
-    if (sum) sum.textContent = this.summary();
-    var btn = document.getElementById('multibtn');
-    if (btn) {
-      btn.classList.toggle('set', !!(this.state.nets.length || this.state.chans.length));
+    var st = this.state;
+    function set(id, text, on) {
+      var el = document.getElementById(id);
+      if (el) { el.textContent = text; el.classList.toggle('set', on); }
     }
-  };
-
-  /* Open upward when the panel has no room below. The menu sits in a scrolling
-     box, so a menu that overflows is clipped rather than scrolled to. Measured
-     a frame later, or it reads the empty box and never flips. */
-  SourcePicker.prototype.place = function (btn, menu) {
-    requestAnimationFrame(function () {
-      menu.classList.remove('up');
-      var panel = menu.closest('.ovlbox') || document.documentElement;
-      var room = panel.getBoundingClientRect().bottom - btn.getBoundingClientRect().bottom;
-      if (room < menu.offsetHeight + 16) menu.classList.add('up');
-    });
+    if (this.na) return;
+    set('netsum', pickedText(st.nets), !!st.nets.length);
+    set('chsum', pickedText(st.chans), !!st.chans.length);
   };
 
   SourcePicker.prototype.wire = function () {
     var self = this;
-    var btn = document.getElementById('multibtn'),
-        menu = document.getElementById('multimenu'),
-        mq = document.getElementById('multiq');
-    if (!btn || btn.disabled) return;
-
-    btn.addEventListener('click', function (e) {
-      e.preventDefault();
-      if (!menu.classList.toggle('open')) return;
-      self.load().then(function () {
+    document.querySelectorAll('details.optsec').forEach(function (d) {
+      var key = d.dataset.sec;
+      d.querySelector('summary').addEventListener('click', function (e) {
+        if (d.classList.contains('na')) e.preventDefault();
+      });
+      d.addEventListener('toggle', function () { self.open[key] = d.open; });
+    });
+    document.querySelectorAll('input.multiq').forEach(function (inp) {
+      inp.addEventListener('input', function () {
+        self.q[inp.dataset.q] = inp.value;
         self.render();
-        self.place(btn, menu);
-        if (!coarse()) mq.focus();
       });
     });
-    mq.addEventListener('input', function () {
-      self.render();
-      self.place(btn, menu);
-    });
-    // A label wraps the row, so a click inside would re-fire the button it is
-    // labelled by and close the menu on every tick.
-    menu.addEventListener('click', function (e) { e.stopPropagation(); });
-    document.addEventListener('click', function (e) {
-      var m = document.getElementById('multi');
-      if (m && !m.contains(e.target)) menu.classList.remove('open');
-    });
+    if (this.na) return;
+    this.load().then(function () { self.render(); self.paint(); });
   };
 
   SourcePicker.prototype.load = function () {
@@ -98,54 +106,50 @@
   };
 
   SourcePicker.prototype.render = function () {
-    var body = document.getElementById('multibody');
-    if (!body || !this.cache) return;
-    var st = this.state;
-    var q = ((document.getElementById('multiq') || {}).value || '').toLowerCase();
-    var h = '';
+    if (!this.cache) return;
+    var st = this.state, self = this;
 
     function item(kind, value, label, note, on) {
       return '<label class="multirow"><input type="checkbox" data-' + kind + '="' +
         esc(value) + '"' + (on ? ' checked' : '') + '><span class="mt">' + esc(label) +
         '</span>' + (note ? '<span class="mn">' + esc(note) + '</span>' : '') + '</label>';
     }
-
-    var nets = this.cache.networks.filter(function (n) {
-      return !q || n.name.toLowerCase().indexOf(q) !== -1;
-    });
-    if (nets.length) {
-      h += '<span class="multisec">Networks</span>';
-      nets.forEach(function (n) {
-        h += item('net', n.name, n.name, n.channels.join(', '),
-                  st.nets.indexOf(n.name) !== -1);
-      });
+    function fill(id, h) {
+      var el = document.getElementById(id);
+      if (el) el.innerHTML = h || '<span class="multinone">Nothing matches.</span>';
+      return el;
     }
-    var chans = this.cache.channels.filter(function (c) {
-      return !q || (c.vcn + ' ' + c.call_sign + ' ' + c.network)
-        .toLowerCase().indexOf(q) !== -1;
-    });
-    if (chans.length) {
-      h += '<span class="multisec">Channels</span>';
-      chans.forEach(function (c) {
-        h += item('ch', c.vcn, c.vcn + ' ' + c.call_sign, c.network,
-                  st.chans.indexOf(c.vcn) !== -1);
-      });
-    }
-    body.innerHTML = h || '<span class="multinone">Nothing matches.</span>';
 
-    var self = this;
+    var qn = this.q.net.toLowerCase(), qc = this.q.ch.toLowerCase(), h = '';
+    this.cache.networks.filter(function (n) {
+      return !qn || n.name.toLowerCase().indexOf(qn) !== -1;
+    }).forEach(function (n) {
+      h += item('net', n.name, n.name, n.channels.join(', '), st.nets.indexOf(n.name) !== -1);
+    });
+    var nb = fill('netbody', h);
+    h = '';
+    this.cache.channels.filter(function (c) {
+      return !qc || (c.vcn + ' ' + c.call_sign + ' ' + c.network)
+        .toLowerCase().indexOf(qc) !== -1;
+    }).forEach(function (c) {
+      h += item('ch', c.vcn, c.vcn + ' ' + c.call_sign, c.network,
+                st.chans.indexOf(c.vcn) !== -1);
+    });
+    var cb = fill('chbody', h);
+
     function flip(list, v) {
       var i = list.indexOf(v);
       if (i === -1) list.push(v); else list.splice(i, 1);
       self.paint();
       self.onChange();
     }
-    body.querySelectorAll('[data-net]').forEach(function (cb) {
-      cb.addEventListener('change', function () { flip(st.nets, cb.dataset.net); });
-    });
-    body.querySelectorAll('[data-ch]').forEach(function (cb) {
-      cb.addEventListener('change', function () { flip(st.chans, cb.dataset.ch); });
-    });
+    [[nb, '[data-net]', 'net', st.nets], [cb, '[data-ch]', 'ch', st.chans]]
+      .forEach(function (g) {
+        if (!g[0]) return;
+        g[0].querySelectorAll(g[1]).forEach(function (box) {
+          box.addEventListener('change', function () { flip(g[3], box.dataset[g[2]]); });
+        });
+      });
   };
 
   w.CE.SourcePicker = SourcePicker;

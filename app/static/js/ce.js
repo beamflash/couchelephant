@@ -199,7 +199,10 @@
 
   document.addEventListener('mouseover', function (e) {
     var mark = e.target.closest && e.target.closest('.opthelp');
-    if (mark) showTip(mark); else if (!e.target.closest('.tipbox')) hideTip();
+    if (mark) showTip(mark);
+    // A tip held open by keyboard focus is not dismissed by a pointer that
+    // happens to rest over new content after the panel scrolls.
+    else if (!e.target.closest('.tipbox') && tipFor !== document.activeElement) hideTip();
   });
   document.addEventListener('focusin', function (e) {
     var mark = e.target.closest && e.target.closest('.opthelp');

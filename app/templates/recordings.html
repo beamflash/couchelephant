@@ -604,11 +604,6 @@ window.passTab = 'sports';
     }
   }
 
-  // The option row and the Plex setting renderer are shared. See
-  // static/js/ce.js: they existed twice and had already drifted.
-  var row = CE.optRow, field = CE.settingField;
-
-
   // The Options section on its own, so Plex's settings can arrive without
   // redrawing the panel around them. Rebuilding the lot threw away whatever
   // condition the user was in the middle of choosing.
@@ -621,11 +616,9 @@ window.passTab = 'sports';
            'padding below is filled in for you. Change it if you want to; ' +
            'CouchElephant applies it to every airing this pass books.</div>';
     }
-    h += '<div class="optgrid">' + CE.recorderField(st.who) + multiField();
-    if (st.tpl && st.tpl[st.pick]) {
-      st.tpl[st.pick].settings.forEach(function (stg) { h += field(stg); });
-    }
-    h += '</div>';
+    h += '<div class="optgrid">' + CE.recorderField(st.who) + '</div>';
+    // Plex settings, Filter networks, Filter channels: shared, see sources.js.
+    h += st.picker.sections(st.tpl && st.tpl[st.pick] ? st.tpl[st.pick].settings : []);
     if (st.team && !st.team.id) {
       h += '<div class="note" style="margin-top:10px"><b>' + esc(st.team.name) +
            '</b> is not in the guide this week. CouchElephant keeps this pass ' +
@@ -655,12 +648,6 @@ window.passTab = 'sports';
       recby.addEventListener('change', function () { st.who = recby.value; paint(); });
     }
     paint();
-  }
-
-  function multiField() {
-    return row('ce', 'multibtn', 'Limit to networks or channels',
-               st.picker.html(),
-               'Plex takes one channel. This takes as many as you like.', 'wide');
   }
 
   // ---- the smart filter -------------------------------------------------

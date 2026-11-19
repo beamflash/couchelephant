@@ -470,31 +470,29 @@ dl.kv dd{margin:0}
 .optbar.ce{background:var(--accent-soft);color:var(--text);
   box-shadow:inset 3px 0 0 var(--accent)}
 
-/* A dropdown that takes more than one answer. It has to sit beside the single
-   choice ones without looking like a different kind of control, so the closed
-   state is a select: same height, same border, same chevron. */
-.multi{position:relative;flex:0 1 auto;max-width:58%}
-.multibtn{display:inline-flex;align-items:center;gap:8px;width:100%;
-  justify-content:space-between;padding:5px 8px;font-size:13px;
-  background:var(--panel2);border:1px solid var(--line);border-radius:6px;
-  color:var(--text);text-align:left}
-.multibtn span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.multibtn.set{border-color:var(--accent);color:var(--accent-ink)}
-.multibtn:disabled{opacity:.5;cursor:default}
-.multimenu{display:none;position:absolute;top:calc(100% + 5px);right:0;z-index:60;
-  width:300px;max-width:78vw;background:var(--panel);border:1px solid var(--line);
-  border-radius:8px;box-shadow:var(--shadow-lg);padding:8px}
-.multimenu.open{display:block}
-/* Opened from the last section of a panel there is no room below, and the menu
-   was cut off by the panel's own scroll edge. */
-.multimenu.up{top:auto;bottom:calc(100% + 5px)}
+/* The collapsible option sections: Plex settings, Filter networks, Filter
+   channels. Closed until opened, each with a short summary on its header. */
+.optsecs{margin-top:10px;display:flex;flex-direction:column;gap:8px}
+.optsec{border:1px solid var(--line);border-radius:8px;background:var(--panel2)}
+.optsec>summary{display:flex;align-items:center;gap:10px;padding:9px 10px;
+  cursor:pointer;list-style:none;font-size:13px;user-select:none}
+.optsec>summary::-webkit-details-marker{display:none}
+.optsec>summary svg{flex:0 0 auto;color:var(--dim);transition:transform .12s}
+.optsec[open]>summary svg{transform:rotate(180deg)}
+.optsec .secname{font-weight:600}
+.optsec .secsum{margin-left:auto;min-width:0;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;color:var(--dim);font-size:12px}
+.optsec .secsum.set{color:var(--accent-ink)}
+.optsec.na>summary{opacity:.5;cursor:default}
+.optsec[open]>summary{border-bottom:1px solid var(--line)}
+.secbody{padding:10px 8px}
+.secbody .optgrid{gap:8px 10px}
+.secbody .note{margin-bottom:8px}
 .multiq{width:100%;margin-bottom:6px;padding:6px 8px;font-size:13px}
 .multibody{display:block;max-height:250px;overflow:auto}
-.multisec{display:block;font-size:10px;text-transform:uppercase;letter-spacing:.5px;
-  color:var(--dim);padding:8px 4px 4px;position:sticky;top:0;background:var(--panel)}
 .multirow{display:flex;align-items:center;gap:9px;padding:5px 6px;border-radius:5px;
   cursor:pointer;font-size:13px}
-.multirow:hover{background:var(--panel2)}
+.multirow:hover{background:var(--panel)}
 .multirow input{width:15px;height:15px;margin:0;flex:0 0 15px;accent-color:var(--accent)}
 .multirow .mt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .multirow .mn{margin-left:auto;padding-left:10px;color:var(--dim);font-size:11px;
@@ -693,16 +691,12 @@ dl.kv dd{margin:0}
 .optrow.wide .optname{white-space:normal;overflow:visible}
 /* Allowed to shrink. Fixed at 320 it pushed the panel 2px wider than its own
    box, which is all it takes to put a scrollbar across the bottom. */
-.optrow.wide .multi{max-width:320px;flex:0 1 320px;min-width:0}
 .optgrid>*{min-width:0}
 
 @media (max-width:700px){
   .optgrid{grid-template-columns:1fr}
   .pickrow .note{display:none}
   .optbar{padding:11px 16px}
-  /* One column, so the menu can use the full width under its button. */
-  .multi{max-width:58%}
-  .multimenu{width:auto;left:0;right:0;max-width:none}
   .multibody{max-height:210px}
 }
 /* The result of pressing Record. It used to be dim grey at the bottom of a
@@ -1172,7 +1166,7 @@ footer .divider{height:5px;width:auto;display:block;margin:0 auto 12px}
 /* The guide over live TV: the guide page in a frame over the lower part of
    the picture, which plays on above it. */
 .tvpguidebox{position:absolute;left:0;right:0;bottom:0;height:60%;z-index:3;
-  border-top:2px solid var(--accent);background:var(--bg);box-shadow:0 -12px 40px rgba(0,0,0,.5)}
+  border-top:2px solid var(--accent);background:transparent;box-shadow:0 -12px 40px rgba(0,0,0,.5)}
 .tvpguidebox[hidden]{display:none}
 .tvpguidebox iframe{width:100%;height:100%;border:0;display:block}
 /* The guide page inside it: only the grid. */
@@ -1181,6 +1175,19 @@ body.guideoverlay .daybar,body.guideoverlay .filterbar,body.guideoverlay .legend
 body.guideoverlay #gstatus,body.guideoverlay footer{display:none}
 body.guideoverlay main{padding:0}
 body.guideoverlay .gridwrap{border:0;border-radius:0}
+/* Half see-through, so the picture shows behind the guide. The channel column
+   and the time row are backed more heavily so programmes scrolling under them
+   do not muddle the labels. Overlay only; the Guide page is unchanged. */
+html:has(body.guideoverlay),body.guideoverlay{background:transparent}
+body.guideoverlay .gridwrap{background:rgba(var(--bg-rgb),.55)}
+body.guideoverlay .gprog{background:rgba(var(--bg-rgb),.45);
+  -webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px)}
+body.guideoverlay .gprog:hover{background:rgba(var(--bg-rgb),.8)}
+body.guideoverlay .gprog.sched-ce,body.guideoverlay .gprog.sched-plex{
+  background-color:rgba(var(--bg-rgb),.5)}
+body.guideoverlay .gch,body.guideoverlay .gcorner,body.guideoverlay .gtimes{
+  background:rgba(var(--bg-rgb),.8)}
+body.guideoverlay .gprog .t{text-shadow:0 1px 2px rgba(0,0,0,.8)}
 .tvpmsg{position:absolute;left:0;right:0;top:50%;text-align:center;color:var(--dim);
   padding:0 20px;pointer-events:none}
 /* A channel in the guide that can be watched: it says so when pointed at. */

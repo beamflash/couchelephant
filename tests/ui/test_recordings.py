@@ -1,6 +1,8 @@
 """The Recordings page: sub-tabs, the two views, passes, and adding one."""
 import pytest
 
+from tests.ui.helpers import open_plex_settings
+
 
 @pytest.fixture
 def recordings(page):
@@ -162,6 +164,7 @@ def test_the_add_panel_offers_plexs_own_settings(recordings):
     recordings.click("#addrule")
     recordings.wait_for_selector("#rlist > *", timeout=15000)
     # There before anything is chosen, and still there after.
+    open_plex_settings(recordings)
     recordings.wait_for_selector('[data-set="minVideoQuality"]', timeout=15000)
     recordings.click("#rlist >> text=Kansas City Chiefs")
     recordings.wait_for_function(
@@ -182,9 +185,9 @@ def test_the_add_panel_bar_names_who_will_own_the_rule(recordings):
         "() => /Kansas City Chiefs/.test("
         "document.getElementById('rpick').textContent)", timeout=15000)
     assert "Plex schedule" in recordings.locator("#optbar").inner_text()
-    recordings.click("#multibtn")
-    recordings.wait_for_selector("#multibody .multirow")
-    recordings.check('#multibody input[data-net="ABC"]')
+    recordings.click("#sec-nets > summary")
+    recordings.wait_for_selector("#netbody .multirow")
+    recordings.check('#netbody input[data-net="ABC"]')
     assert "CouchElephant schedule" in recordings.locator("#optbar").inner_text()
 
 
@@ -193,6 +196,7 @@ def test_a_plain_plex_recording_can_be_booked_from_the_add_panel(recordings):
     recordings.click("#addrule")
     recordings.wait_for_selector("#rlist > *", timeout=15000)
     recordings.click("#rlist >> text=Kansas City Chiefs")
+    open_plex_settings(recordings)
     recordings.wait_for_selector('[data-set="minVideoQuality"]', timeout=15000)
     recordings.click("#rgo")
     recordings.wait_for_function(

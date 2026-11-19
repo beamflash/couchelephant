@@ -257,20 +257,7 @@
   // two systems read as one list rather than two lists the user has to join up.
   // The option row and the Plex setting renderer are shared. See
   // static/js/ce.js: they existed twice and had already drifted.
-  var row = CE.optRow, field = CE.settingField;
-
-
-  // The source limit is the shared picker, not a copy. See static/js/sources.js.
-  function multiField() {
-    var t = optState.templates[optState.pick];
-    var c = optState.picker.html(
-      t.one_shot,
-      'A single broadcast is already one channel at one time, so there is ' +
-      'nothing to narrow.');
-    return row('ce', 'multibtn', 'Limit to networks or channels', c,
-               t.one_shot ? '' : 'Plex takes one channel. This takes as many as you like.',
-               'wide');
-  }
+  
 
   // Which side owns the recording. Plex settings map onto one Plex
   // subscription; CouchElephant settings do not, so CouchElephant has to keep
@@ -331,11 +318,12 @@
            '<b>Limit to channel</b> and <b>Limit to airing time</b> to the broadcast ' +
            'you picked. That is what stops Plex choosing a repeat.</div>';
     }
-    h += '<div class="optgrid">';
-    h += CE.recorderField(optState.who);
-    h += multiField();
-    t.settings.forEach(function (st) { h += field(st); });
-    h += '</div></div>';
+    h += '<div class="optgrid">' + CE.recorderField(optState.who) + '</div>';
+    // Plex settings, Filter networks, Filter channels: shared, see sources.js.
+    h += optState.picker.sections(t.settings, t.one_shot,
+      'A single broadcast is already one channel at one time, so there is ' +
+      'nothing to narrow.');
+    h += '</div>';
 
     h += '<div class="ovlfoot">' +
          '<button class="primary" id="optgo">Schedule</button>' +
