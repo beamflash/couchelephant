@@ -13,7 +13,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from . import paths
-from .__main__ import main as serve      # this form is the one PyInstaller can see
+from .__main__ import main as serve  # this form is the one PyInstaller can see
 from .__main__ import stop as stop_serving
 
 LABEL = "app.couchelephant"
