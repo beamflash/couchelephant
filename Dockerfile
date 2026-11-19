@@ -53,7 +53,7 @@ EXPOSE 8710
 # Python asks, rather than curl: the slim image ships neither curl nor wget,
 # and adding one to answer a health check is a package to keep patched.
 HEALTHCHECK --interval=60s --timeout=5s --start-period=20s --retries=3 \
-  CMD python3 -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8710/healthz', timeout=4).status == 200 else 1)"
+  CMD python3 -c "import os,urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:%s/healthz' % os.environ.get('COUCHELEPHANT_PORT', '8710'), timeout=4).status == 200 else 1)"
 
 # One process. The sync loop runs as a FastAPI background task rather than a
 # second container, because it and the web UI share one SQLite file and

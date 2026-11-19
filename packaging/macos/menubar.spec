@@ -26,6 +26,8 @@ missing = [src for src, _ in binaries if not Path(src).is_file()]
 if missing:
     raise SystemExit("missing tools, run fetch_tools.py / build_comskip.sh first: " + ", ".join(missing))
 licences = [(str(p), "bin") for p in (root / "packaging" / "licenses").glob("LICENSE-*.txt")]
+# The source offer for ffmpeg and comskip sits next to their licences.
+licences.append((str(root / "THIRD_PARTY.md"), "bin"))
 
 a = Analysis(
     [str(root / "packaging" / "macos" / "launcher.py")],

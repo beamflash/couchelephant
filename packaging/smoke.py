@@ -82,6 +82,9 @@ def main(exe_arg: str) -> int:
             _wait_for(f"{base}/api/tv/hello", proc)
             if _get(f"{base}/static/css/app.css") != 200:
                 raise SystemExit("static files are missing from the build")
+            # Renders a time, so a build with no time zone data fails here.
+            if _get(f"{base}/welcome") != 200:
+                raise SystemExit("/welcome did not render (time zone data or templates missing)")
         finally:
             _stop(proc)
         if not (Path(data) / "couchelephant.db").is_file():

@@ -53,6 +53,31 @@ if echo "$out" | grep -qi 'Library not loaded\|dyld'; then
 fi
 echo "ok: bundled comskip starts"
 
+# Every program in the app must stand on its own and run on macOS 13. A library
+# loaded from Homebrew works on the build machine and nowhere else, and a binary
+# built for a newer macOS will not start on 13.
+minos() {
+  # The lowest macOS a Mach-O file says it runs on (every slice of a universal file).
+  otool -l "$1" 2>/dev/null | awk '
+    $1 == "cmd" { cmd = $2 }
+    cmd == "LC_BUILD_VERSION" && $1 == "minos" { print $2 }
+    cmd == "LC_VERSION_MIN_MACOSX" && $1 == "version" { print $2 }'
+}
+checked=0
+while IFS= read -r -d '' f; do
+  file -b "$f" | grep -q 'Mach-O' || continue
+  checked=$((checked + 1))
+  if otool -L "$f" 2>/dev/null | grep -E '^[[:space:]]+(/opt/homebrew|/usr/local)/'; then
+    echo "FAILED: $f loads a library from Homebrew"; exit 1
+  fi
+  for v in $(minos "$f"); do
+    top="$(printf '%s\n13.0\n' "$v" | sort -V | tail -1)"
+    [ "$top" = 13.0 ] || { echo "FAILED: $f needs macOS $v, above 13.0"; exit 1; }
+  done
+done < <(find "$app" -type f -print0)
+[ "$checked" -gt 20 ] || { echo "FAILED: found only $checked Mach-O files, the check did not look"; exit 1; }
+echo "ok: $checked Mach-O files, none from Homebrew, none above macOS 13.0"
+
 # Something else on the port would answer for the app and hide a dead build.
 # curl exits 7 only when nothing accepts the connection; anything else means it is taken.
 rc=0

@@ -29,7 +29,19 @@ env:
   DOCKERHUB_IMAGE: ${{ vars.DOCKERHUB_IMAGE }}
 
 jobs:
+  # A tag that disagrees with VERSION would ship an app that tells people the
+  # wrong version, and an updater that offers the release it already is.
+  # Manual test runs use throwaway tags and are exempt.
+  version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Tag matches VERSION
+        if: github.event_name == 'push'
+        run: scripts/check_tag_version.sh "$GITHUB_REF_NAME"
+
   test:
+    needs: version
     uses: ./.github/workflows/ci.yml
 
   # The Docker image does not wait for the installers: the image is the

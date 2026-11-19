@@ -170,6 +170,7 @@ end;
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   Code: Integer;
+  Wipe: Boolean;
 begin
   if CurUninstallStep = usUninstall then
   begin
@@ -178,6 +179,15 @@ begin
     Service('uninstall');
     RunCmd('netsh advfirewall firewall delete rule name="CouchElephant"', Code);
   end;
-  if (CurUninstallStep = usPostUninstall) and (ExpandConstant('{param:DELETEDATA|0}') = '1') then
-    DelTree(ExpandConstant('{commonappdata}\CouchElephant'), True, True, True);
+  if CurUninstallStep = usPostUninstall then
+  begin
+    Wipe := ExpandConstant('{param:DELETEDATA|0}') = '1';
+    { A person at the uninstaller is asked, default No. A silent uninstall
+      only goes by /DELETEDATA=1, as it always did. }
+    if (not Wipe) and (not UninstallSilent) then
+      Wipe := MsgBox('Remove your recordings list and settings too?', mbConfirmation,
+                     MB_YESNO or MB_DEFBUTTON2) = IDYES;
+    if Wipe then
+      DelTree(ExpandConstant('{commonappdata}\CouchElephant'), True, True, True);
+  end;
 end;

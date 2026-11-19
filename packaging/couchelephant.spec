@@ -29,6 +29,8 @@ if missing:
     raise SystemExit("missing tools, run fetch_tools.py / build_comskip.sh first: " + ", ".join(missing))
 # The licence texts live in the repo so every system ships them.
 licences = [(str(p), "bin") for p in (root / "packaging" / "licenses").glob("LICENSE-*.txt")]
+# The source offer for ffmpeg and comskip sits next to their licences.
+licences.append((str(root / "THIRD_PARTY.md"), "bin"))
 
 a = Analysis(
     [str(root / "packaging" / "launcher.py")],
