@@ -11,6 +11,12 @@ Environment=COUCHELEPHANT_DATA=/var/lib/couchelephant
 # The install script writes COUCHELEPHANT_PORT here.
 EnvironmentFile=-/etc/default/couchelephant
 ExecStart=/opt/couchelephant/couchelephant --no-open
+UMask=0027
+NoNewPrivileges=yes
+# "full" rather than "strict": backups and the move into a library folder write
+# to folders the owner picks inside the app, which no unit file can know.
+ProtectSystem=full
+PrivateTmp=yes
 Restart=on-failure
 RestartSec=5
 

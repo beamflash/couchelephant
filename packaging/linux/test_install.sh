@@ -59,7 +59,7 @@ if [ "$inside" = 1 ]; then
         apt-get update -qq >/dev/null
         apt-get install -y -qq curl ca-certificates python3 sqlite3 >/dev/null
     else
-        dnf install -y -q python3 sqlite util-linux >/dev/null
+        dnf install -y -q python3 sqlite util-linux hostname >/dev/null
     fi
 
     remove_package() {
@@ -77,6 +77,17 @@ if [ "$inside" = 1 ]; then
     grep -q "^COUCHELEPHANT_PORT=8710$" /etc/default/couchelephant || fail "port is not 8710"
     [ "$(stat -c %U /var/lib/couchelephant/recordings)" = couchelephant ] \
         || fail "recordings folder is not owned by the service user"
+    [ "$(stat -c %a /var/lib/couchelephant)" = 750 ] \
+        || fail "data folder mode is $(stat -c %a /var/lib/couchelephant), not 750"
+    for line in UMask=0027 NoNewPrivileges=yes ProtectSystem=full; do
+        cat /usr/lib/systemd/system/couchelephant.service /etc/systemd/system/couchelephant.service \
+            2>/dev/null | grep -q "^$line$" || fail "unit lacks $line"
+    done
+    for g in render video; do
+        if getent group "$g" >/dev/null; then
+            id -nG couchelephant | tr ' ' '\n' | grep -qx "$g" || fail "service user is not in group $g"
+        fi
+    done
     start_service
     curl -fs localhost:8710/api/tv/hello >/dev/null || fail "no hello on 8710"
 
@@ -97,22 +108,26 @@ if [ "$inside" = 1 ]; then
     start_service
     stop_service
 
-    # 3. Port 8710 taken: the service must land on 8711.
+    # 3. 8710 and 8711 taken: the service must land on 8712.
     remove_package
     echo "COUCHELEPHANT_RECORDINGS=/srv/rec" >> /etc/default/couchelephant
     python3 -m http.server 8710 >/dev/null 2>&1 &
     blocker=$!
+    # 8711 held on the machine's own address only: a probe of 127.0.0.1 alone misses it.
+    own=$(hostname -I | cut -d' ' -f1)
+    python3 -m http.server 8711 --bind "$own" >/dev/null 2>&1 &
+    blocker2=$!
     sleep 1
     COUCHELEPHANT_RELEASES_URL=$feed_old sh /test/install.sh >/tmp/install3.log 2>&1 \
         || { cat /tmp/install3.log; fail "install with port taken failed"; }
-    grep -q "^COUCHELEPHANT_PORT=8711$" /etc/default/couchelephant \
-        || fail "port is not 8711: $(cat /etc/default/couchelephant)"
+    grep -q "^COUCHELEPHANT_PORT=8712$" /etc/default/couchelephant \
+        || fail "port is not 8712: $(cat /etc/default/couchelephant)"
     grep -q "^COUCHELEPHANT_RECORDINGS=/srv/rec$" /etc/default/couchelephant \
         || fail "the user's own line was lost from /etc/default/couchelephant"
     start_service
-    curl -fs localhost:8711/api/tv/hello >/dev/null || fail "no hello on 8711"
+    curl -fs localhost:8712/api/tv/hello >/dev/null || fail "no hello on 8712"
     stop_service
-    kill "$blocker" 2>/dev/null || true
+    kill "$blocker" "$blocker2" 2>/dev/null || true
 
     echo "PASS [$distro ${format:-native}]"
     exit 0

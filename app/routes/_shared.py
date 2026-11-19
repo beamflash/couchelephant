@@ -8,8 +8,8 @@ import zoneinfo
 from fastapi.templating import Jinja2Templates
 
 from .. import auth, cf_access, db, health, recorder
-from ..version import VERSION
 from ..plex import Plex
+from ..version import VERSION
 
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 templates = Jinja2Templates(directory=os.path.join(BASE, "templates"))
