@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.5.24 - 2026-11-19
+
+### Changed
+
+- **The logo and tagline are at the top of every tab** on the Apple TV,
+  iPhone and iPad, above the tab's content, and the server version is no
+  longer shown on Home. Settings has an About section at the bottom with
+  the app version and the server version. On the Guide tab the logo stays
+  above the grid, because the grid scrolls both ways with its times held
+  still.
+
+### Fixed
+
+- **Watching a channel that is being recorded plays it.** Choosing the
+  channel in the Guide on the Apple TV, iPhone or iPad showed the player
+  with a spinner that never ended. A recording is ready at once, so it was
+  put on screen while the channel's own sheet was still closing, and the
+  player was shut down as that happened. Live TV was never affected,
+  because tuning takes a few seconds.
+- **Play/Pause on the Apple TV remote pauses live TV on a real remote.** A
+  real Siri Remote sends the button to the app as a playback command, not as
+  a press on the screen, so the 1.5.23 fix only worked in the simulator.
+  The app now answers the command too, and still never toggles twice.
+
 ## 1.5.23 - 2026-11-18
 
 ### Changed
