@@ -43,11 +43,8 @@ def quit_tray() -> None:
         _icon.stop()
 
 
-def apply_update(port: int) -> None:
-    # Same rule as pausing: with sign-in on the tray has no session, so the
-    # browser's Settings is where an administrator confirms.
-    if not updates.local_apply(port):
-        webbrowser.open(f"http://localhost:{port}/settings")
+def apply_update() -> None:
+    updates.apply_from_tray()
 
 
 def build_menu(port: int, state: str = "running",
@@ -65,7 +62,7 @@ def build_menu(port: int, state: str = "running",
         pause,
     ]
     if update:
-        menu.append((f"Update to {update}", lambda: apply_update(port)))
+        menu.append((f"Update to {update}", apply_update))
     menu.append(("Quit", quit_tray))
     return menu
 
@@ -88,6 +85,8 @@ def run(port: int | None = None) -> None:
         def call(icon, item):
             try:
                 action()
+            except updates.UpdateError as err:
+                icon.notify(str(err), "CouchElephant")
             except Exception as err:     # say so; a silent click looks like a hang
                 icon.notify(f"CouchElephant did not answer: {err}", "CouchElephant")
         return call
@@ -97,7 +96,7 @@ def run(port: int | None = None) -> None:
             state = pause_state(port)
         except Exception:
             state = "running"
-        for label, action in build_menu(port, state, updates.local_update(port)):
+        for label, action in build_menu(port, state, updates.offer()):
             yield pystray.MenuItem(label, wrap(action), default=(label == "Open"))
 
     _icon = pystray.Icon("CouchElephant", _image(), "CouchElephant", pystray.Menu(items))

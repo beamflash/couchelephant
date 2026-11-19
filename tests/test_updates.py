@@ -187,33 +187,61 @@ def windows(monkeypatch):
     monkeypatch.setattr(updates, "_in_docker", lambda: False)
     monkeypatch.setattr(updates, "_system", lambda: "Windows")
     ran = []
-    monkeypatch.setattr(updates, "_spawn_detached", lambda cmd: ran.append(cmd))
+    monkeypatch.setattr(updates, "_shell_execute_runas",
+                        lambda path, params: ran.append((path, params)))
     return ran
 
 
-def test_windows_runs_a_checked_installer_silently(feed, windows):
+def test_the_service_sends_a_windows_update_to_the_tray(client, feed, windows):
+    feed(names=[f"CouchElephant-Setup-{NEWER}.exe"])
+    data = client.get("/api/update").json()
+    assert data["how"] == "click" and data["click"] is False and data["tray"] is True
+    r = client.post("/api/update/apply")
+    assert r.status_code == 400
+    assert r.json()["error"] == "Use Update in the CouchElephant icon next to the clock."
+    assert windows == []
+
+
+def test_the_tray_runs_a_checked_installer_with_a_prompt(feed, windows):
     name = f"CouchElephant-Setup-{NEWER}.exe"
     feed(names=[name])
-    assert "Updating to" in updates.apply()
-    cmd = windows[0]
-    assert os.path.basename(cmd[0]) == name
-    assert cmd[1:] == ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"]
+    assert "Updating to" in updates.apply_from_tray()
+    path, params = windows[0]
+    assert os.path.basename(path) == name
+    assert params == "/SILENT /SUPPRESSMSGBOXES /NORESTART"
 
 
-def test_windows_refuses_an_installer_that_does_not_match(feed, windows):
+def test_the_tray_refuses_an_installer_that_does_not_match(feed, windows):
     feed(names=[f"CouchElephant-Setup-{NEWER}.exe"], bad_hash=True)
     with pytest.raises(updates.UpdateError, match="checksum"):
-        updates.apply()
+        updates.apply_from_tray()
     assert windows == []
 
 
-def test_windows_refuses_when_the_sums_do_not_name_the_file(feed, windows):
-    name = f"CouchElephant-Setup-{NEWER}.exe"
-    feed(names=[name])
+def test_the_tray_refuses_when_the_sums_do_not_name_the_file(feed, windows):
+    feed(names=[f"CouchElephant-Setup-{NEWER}.exe"])
     _Feed.files["SHA256SUMS"] = b"%s  other-file.exe\n" % (b"0" * 64)
     with pytest.raises(updates.UpdateError, match="no checksum"):
-        updates.apply()
+        updates.apply_from_tray()
     assert windows == []
+
+
+def test_the_tray_offers_the_update_without_the_server(feed, windows):
+    feed(names=[f"CouchElephant-Setup-{NEWER}.exe"])
+    assert updates.offer() == NEWER
+    feed(names=())
+    assert updates.offer() is None
+
+
+def test_the_feed_is_asked_again_after_a_day(feed, monkeypatch):
+    feed()
+    assert updates.latest().version == NEWER
+    feed(_bump(NEWER))
+    updates.latest()                       # reset() cleared it; fills the cache
+    _Feed.release["tag_name"] = "v" + _bump(NEWER, 2)
+    assert updates.latest().version == _bump(NEWER)
+    monkeypatch.setattr(updates.time, "time", lambda: 10**10)
+    assert updates.latest().version == _bump(NEWER, 2)
 
 
 # ---------- macOS ----------
@@ -298,10 +326,10 @@ def test_the_menu_bar_offers_the_update_only_when_there_is_one():
         ["Open", "Start at login", "Update to 1.6.0", "Quit"]
 
 
-def test_a_signed_in_install_sends_the_update_click_to_settings(monkeypatch):
-    opened = []
-    monkeypatch.setattr("webbrowser.open", lambda url: opened.append(url))
-    monkeypatch.setattr(updates, "local_apply", lambda port: False)
-    for module in (tray, menubar):
-        module.apply_update(8712)
-    assert opened == ["http://localhost:8712/settings"] * 2
+def test_menu_items_start_the_update(monkeypatch):
+    calls = []
+    monkeypatch.setattr(updates, "apply_from_tray", lambda: calls.append("tray"))
+    monkeypatch.setattr(updates, "apply", lambda: calls.append("mac"))
+    dict(tray.build_menu(8710, "running", "1.6.0"))["Update to 1.6.0"]()
+    dict(menubar.build_menu(8710, "1.6.0"))["Update to 1.6.0"]()
+    assert calls == ["tray", "mac"]

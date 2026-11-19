@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import urllib.request
 from dataclasses import dataclass, field
 
@@ -25,6 +26,7 @@ DEFAULT_FEED = "https://api.github.com/repos/datbird/couchelephant/releases/late
 TIMEOUT = 15
 MAC_APP = "/Applications/CouchElephant.app"
 UNSIGNED = "This update is not signed yet. Download it from couchelephant.app."
+TRAY_LINE = "Use Update in the CouchElephant icon next to the clock."
 LINUX_COMMAND = "curl -fsSL https://couchelephant.app/install.sh | sudo sh"
 
 
@@ -59,7 +61,8 @@ def newer(candidate: str, current: str) -> bool:
 
 
 _lock = threading.Lock()
-_state: dict = {"tried": False, "release": None}
+DAY = 24 * 3600
+_state: dict = {"at": None, "release": None}
 
 
 def _fetch(url: str) -> Release | None:
@@ -81,9 +84,10 @@ def _fetch(url: str) -> Release | None:
 def latest(refresh: bool = False) -> Release | None:
     """The newest published release, from the last look. Looks once if it never has."""
     with _lock:
-        if _state["tried"] and not refresh:
+        at = _state["at"]
+        if at is not None and not refresh and time.time() - at < DAY:
             return _state["release"]
-        _state["tried"] = True
+        _state["at"] = time.time()
         url = _feed_url()
         if not url:
             _state["release"] = None
@@ -103,7 +107,7 @@ def available() -> Release | None:
 
 def reset() -> None:
     with _lock:
-        _state.update(tried=False, release=None)
+        _state.update(at=None, release=None)
 
 
 def _in_docker() -> bool:
@@ -206,18 +210,37 @@ def apply() -> str:
         raise UpdateError("This release has no installer for this computer yet. "
                           "Download it from couchelephant.app.")
     if _system() == "Windows":
-        return _apply_windows(rel, name)
+        # The service is LocalService and cannot show the UAC prompt the
+        # installer needs. The tray runs in the user's session and can.
+        raise UpdateError(TRAY_LINE)
     return _apply_mac(rel, name)
 
 
-def _apply_windows(rel: Release, name: str) -> str:
+def _shell_execute_runas(path: str, params: str) -> None:
+    import ctypes
+    # Above 32 means started; anything else is an error code (5 = refused at UAC).
+    code = ctypes.windll.shell32.ShellExecuteW(None, "runas", path, params, None, 1)
+    if code <= 32:
+        raise OSError(f"ShellExecute returned {code}")
+
+
+def apply_from_tray() -> str:
+    """Windows: download, check the hash, run the installer with a UAC prompt.
+
+    Called by the tray, which runs in the signed-in user's session.
+    """
+    rel = available()
+    name = asset_name(rel) if rel else None
+    if rel is None or name is None or "SHA256SUMS" not in rel.assets:
+        raise UpdateError("This release has no installer for this computer yet. "
+                          "Download it from couchelephant.app.")
     installer = _fetch_verified(rel, name)
     try:
-        # The installer stops this service itself and waits for the old program.
-        _spawn_detached([installer, "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"])
+        # The installer stops the service itself and waits for the old program.
+        _shell_execute_runas(installer, "/SILENT /SUPPRESSMSGBOXES /NORESTART")
     except OSError as err:
-        raise UpdateError(f"The installer could not be started: {err}") from err
-    return f"Updating to {rel.version}. CouchElephant will restart in a minute."
+        raise UpdateError(f"The installer was not started: {err}") from err
+    return f"Updating to {rel.version}."
 
 
 def _apply_mac(rel: Release, name: str) -> str:
@@ -260,7 +283,8 @@ def status() -> dict:
     rel = available()
     return {"ok": True, "current": VERSION, "latest": rel.version if rel else None,
             "how": how(), "url": rel.url if rel else None,
-            "click": bool(rel and can_click(rel))}
+            "click": bool(rel and can_click(rel) and _system() != "Windows"),
+            "tray": bool(rel and can_click(rel) and _system() == "Windows")}
 
 
 
@@ -276,29 +300,7 @@ async def update_loop():
 
 # ---------- for the tray and the menu bar ----------
 
-def local_update(port: int) -> str | None:
-    """The version the running server offers to install in one click, or None.
-
-    Asked over HTTP like the other menu calls. Sign-in on answers 401 here, so
-    a locked icon simply shows no update item.
-    """
-    import json
-    try:
-        with urllib.request.urlopen(f"http://localhost:{port}/api/update", timeout=5) as r:
-            data = json.load(r)
-    except Exception:
-        return None
-    return data["latest"] if data.get("click") and data.get("latest") else None
-
-
-def local_apply(port: int) -> bool:
-    """Press the update button. False when sign-in on turned it away (401)."""
-    import urllib.error
-    req = urllib.request.Request(f"http://localhost:{port}/api/update/apply", data=b"")
-    try:
-        urllib.request.urlopen(req, timeout=600).close()
-    except urllib.error.HTTPError as err:
-        if err.code == 401:
-            return False
-        raise
-    return True
+def offer() -> str | None:
+    """The version to show as "Update to ...": one this system can install by itself."""
+    rel = available()
+    return rel.version if rel and can_click(rel) else None

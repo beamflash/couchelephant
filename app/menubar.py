@@ -137,10 +137,8 @@ def toggle_login() -> None:
     set_login(not login_enabled())
 
 
-def apply_update(port: int) -> None:
-    # With sign-in on there is no session here, so an administrator confirms in Settings.
-    if not updates.local_apply(port):
-        webbrowser.open(f"http://localhost:{port}/settings")
+def apply_update() -> None:
+    updates.apply()
 
 
 def build_menu(port: int, update: str | None = None) -> list[tuple[str, Callable[[], None]]]:
@@ -149,7 +147,7 @@ def build_menu(port: int, update: str | None = None) -> list[tuple[str, Callable
         ("Start at login", toggle_login),
     ]
     if update:
-        menu.append((f"Update to {update}", lambda: apply_update(port)))
+        menu.append((f"Update to {update}", apply_update))
     menu.append(("Quit", quit_app))
     return menu
 
@@ -180,12 +178,12 @@ def run(port: int | None = None) -> None:
     def apply_in_background(_item):
         def go():
             try:
-                apply_update(started.port)
+                apply_update()
             except Exception as err:
                 rumps.alert("Update", str(err))
         threading.Thread(target=go, daemon=True).start()
 
-    for label, action in build_menu(started.port, updates.local_update(started.port)):
+    for label, action in build_menu(started.port, updates.offer()):
         if label.startswith("Update to"):
             item = rumps.MenuItem(label, callback=apply_in_background)
         elif label == "Start at login":
@@ -198,7 +196,7 @@ def run(port: int | None = None) -> None:
     def look_for_update(_timer):
         # The feed is read a few seconds after start and then daily, so the
         # first menu has nothing to offer yet.
-        version = updates.local_update(started.port)
+        version = updates.offer()
         label = f"Update to {version}" if version else None
         for key in [k for k in app.menu.keys() if str(k).startswith("Update to")]:
             if key != label:

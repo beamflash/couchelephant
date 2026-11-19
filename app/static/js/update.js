@@ -30,6 +30,8 @@
           .catch(function () { note.textContent = 'CouchElephant is restarting.'; });
       });
       bar.appendChild(btn);
+    } else if (d.tray) {
+      note.textContent = 'Use Update in the CouchElephant icon next to the clock.';
     } else {
       addLink(bar, d.url);
       if (d.how === 'docker') note.textContent = 'Pull the new image and recreate the container.';
