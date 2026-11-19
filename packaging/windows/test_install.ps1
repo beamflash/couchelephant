@@ -45,7 +45,8 @@ function Uninstall-It($extra) {
 try {
     # 1. The normal case.
     Install-It
-    Check ((Get-Service CouchElephant).Status -eq 'Running') 'service is running'
+    Wait-Until 'service to run' { (Get-Service CouchElephant).Status -eq 'Running' } 30
+    Check $true 'service is running'
     Wait-Until 'hello on 8710' { (Hello 8710) -eq 200 }
     Check $true 'http://localhost:8710/api/tv/hello answers 200'
     $rule = Get-NetFirewallRule -DisplayName 'CouchElephant'
