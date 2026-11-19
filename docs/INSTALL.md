@@ -3,12 +3,22 @@
 ## What you need
 
 - A Plex Media Server with a DVR set up and a channel lineup.
-- Docker on any machine that can reach that server.
+- Either the installer for your system from [couchelephant.app](https://couchelephant.app), or Docker on any machine that can reach that server.
 
 CouchElephant does not need to run on the same machine as Plex, and it does not
 touch your media files.
 
-## Run it
+## Install it
+
+Get the installer for Windows, macOS or Linux from
+[couchelephant.app](https://couchelephant.app). On Linux, this picks the right
+package for you:
+
+```bash
+curl -fsSL https://couchelephant.app/install.sh | sudo sh
+```
+
+## Run it with Docker
 
 ```bash
 docker run -d --name couchelephant --restart unless-stopped \

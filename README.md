@@ -225,7 +225,15 @@ you can leave for later.
 
 ## Getting started
 
-You need a Plex Media Server with a DVR, and Docker.
+You need a Plex Media Server with a DVR. The easiest way in is the download
+page at [couchelephant.app](https://couchelephant.app): one installer for
+Windows, macOS and Linux. On Linux, one line does it:
+
+```bash
+curl -fsSL https://couchelephant.app/install.sh | sudo sh
+```
+
+The second way is Docker.
 
 ```bash
 docker run -d --name couchelephant --restart unless-stopped \

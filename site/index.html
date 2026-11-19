@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CouchElephant: download</title>
+<meta name="description" content="CouchElephant records the live broadcast of your team, not the repeat. Download it for Windows, macOS or Linux, or run it in Docker or on Unraid.">
+<link rel="icon" href="favicon.ico">
+<style>
+:root{--bg:#040c15;--panel:#0b1621;--panel2:#12202d;--line:#1d2c3a;--text:#f2ede6;--dim:#7a838c;
+  --accent:#f3a30b;--on-accent:#1a1a1a;--hover:#1a2b3a}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);
+  font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:720px;margin:0 auto;padding:32px 16px 64px}
+a{color:var(--accent)}
+.logo{display:block;width:196px;max-width:60%;height:auto;margin:0 auto 8px}
+h1{text-align:center;margin:0;font-size:2rem}
+.tag{text-align:center;color:var(--dim);margin:4px 0 32px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px;margin:0 0 20px}
+.card h2{margin:0 0 8px;font-size:1.1rem}
+.card p{margin:8px 0}
+.big{display:block;text-align:center;background:var(--accent);color:var(--on-accent);font-weight:700;
+  font-size:1.25rem;padding:16px 20px;border-radius:10px;text-decoration:none;margin:12px 0 8px}
+.big:hover{filter:brightness(1.08)}
+.note{color:var(--dim);font-size:.9rem;margin:4px 0}
+.also{display:flex;flex-wrap:wrap;gap:8px 16px;margin:12px 0 0;padding:0;list-style:none}
+.also a{color:var(--text)}
+pre{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:12px;overflow-x:auto;
+  font:.85rem/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;margin:8px 0}
+.alt{border-color:var(--accent)}
+footer{text-align:center;color:var(--dim);font-size:.9rem;margin-top:32px}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<main id="page">
+<img class="logo" src="mark.png" alt="CouchElephant">
+<h1>CouchElephant</h1>
+<p class="tag">A CouchElephant never forgets. It records the live broadcast, not the repeat.</p>
+
+<section class="card" id="hero">
+  <h2 id="hero-title">Download CouchElephant</h2>
+  <noscript>
+    <p>Every download is on the <a href="https://github.com/datbird/couchelephant/releases/latest">latest release page</a>:
+    a Windows installer, a macOS disk image, and Linux packages.</p>
+  </noscript>
+  <a class="big" id="hero-button" href="https://github.com/datbird/couchelephant/releases/latest" hidden></a>
+  <p class="note" id="hero-note" hidden></p>
+  <p class="note" id="hero-missing" hidden></p>
+  <p class="note" id="hero-version" hidden></p>
+</section>
+
+<section class="card" id="others" hidden>
+  <h2>Other systems</h2>
+  <ul class="also" id="others-list"></ul>
+</section>
+
+<section class="card" id="linux">
+  <h2>Linux, one line</h2>
+  <p>On Debian, Ubuntu, Fedora, openSUSE or anything else with systemd:</p>
+  <pre>curl -fsSL https://couchelephant.app/install.sh | sudo sh</pre>
+  <p class="note">It picks the right package for your system and your processor.</p>
+</section>
+
+<section class="card" id="docker">
+  <h2>Docker</h2>
+  <p>Any machine that can reach your Plex server:</p>
+<pre>docker run -d --name couchelephant --restart unless-stopped \
+  -p 8710:8710 \
+  -v /opt/couchelephant/data:/data \
+  -e TZ=UTC \
+  ghcr.io/datbird/couchelephant:latest</pre>
+  <h2>Unraid</h2>
+  <p>Search for <b>CouchElephant</b> in <b>Apps</b>.</p>
+</section>
+
+<footer>
+  <a href="https://github.com/datbird/couchelephant">Source and documentation</a>
+</footer>
+</main>
+
+<script>
+(function () {
+  var FEED = "https://api.github.com/repos/datbird/couchelephant/releases/latest";
+  var RELEASES = "https://github.com/datbird/couchelephant/releases/latest";
+
+  // One row per download. "test" picks the asset out of the release by name.
+  var KINDS = {
+    win:       {label: "Windows",               test: /^CouchElephant-Setup-.*\.exe$/},
+    macArm:    {label: "macOS, Apple silicon",  test: /-macos-arm64\.dmg$/},
+    macIntel:  {label: "macOS, Intel",          test: /-macos-x64\.dmg$/},
+    debX64:    {label: "Linux .deb, x64",       test: /_amd64\.deb$/},
+    debArm:    {label: "Linux .deb, arm64",     test: /_arm64\.deb$/},
+    rpmX64:    {label: "Linux .rpm, x64",       test: /\.x86_64\.rpm$/},
+    rpmArm:    {label: "Linux .rpm, arm64",     test: /\.aarch64\.rpm$/},
+    tarX64:    {label: "Linux .tar.gz, x64",    test: /-linux-x64\.tar\.gz$/},
+    tarArm:    {label: "Linux .tar.gz, arm64",  test: /-linux-arm64\.tar\.gz$/}
+  };
+
+  function $(id) { return document.getElementById(id); }
+
+  function system(arch) {
+    var ua = navigator.userAgent || "";
+    if (/Windows/i.test(ua)) return {name: "Windows", kinds: ["win"], note: ""};
+    // iPhones and iPads say "like Mac OS X", so they are ruled out first.
+    if (/iPhone|iPad|iPod|Android/i.test(ua)) return {name: "this device", kinds: [], mobile: true};
+    if (/Macintosh|Mac OS X/i.test(ua)) {
+      return {name: "macOS", kinds: [arch === "arm" ? "macArm" : "macIntel"],
+              mac: true, intel: arch !== "arm"};
+    }
+    if (/Linux|X11/i.test(ua)) {
+      var a = /aarch64|arm64|armv8/i.test(ua) ? "Arm" : "X64";
+      return {name: "Linux", kinds: ["deb" + a], linux: true};
+    }
+    return {name: "your system", kinds: []};
+  }
+
+  // The user agent cannot tell Apple silicon from Intel. These two hints can.
+  function macArch() {
+    var hint = navigator.userAgentData && navigator.userAgentData.getHighEntropyValues
+      ? navigator.userAgentData.getHighEntropyValues(["architecture"]).then(
+          function (h) { return h.architecture || ""; }, function () { return ""; })
+      : Promise.resolve("");
+    return hint.then(function (a) {
+      if (a) return a === "arm" ? "arm" : "x86";
+      try {
+        var gl = document.createElement("canvas").getContext("webgl");
+        var ext = gl && gl.getExtension("WEBGL_debug_renderer_info");
+        var r = ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : "";
+        if (/Apple (M|GPU)/i.test(r)) return "arm";
+        if (/Intel|AMD|Radeon/i.test(r)) return "x86";
+      } catch (e) {}
+      return "arm";
+    });
+  }
+
+  function pick(release) {
+    var out = {};
+    (release.assets || []).forEach(function (a) {
+      Object.keys(KINDS).forEach(function (k) {
+        if (!out[k] && KINDS[k].test.test(a.name)) out[k] = a.browser_download_url;
+      });
+    });
+    return out;
+  }
+
+  function link(text, href) {
+    var li = document.createElement("li"), a = document.createElement("a");
+    a.href = href; a.textContent = text; li.appendChild(a);
+    return li;
+  }
+
+  // With nothing to offer this visitor, Docker and Unraid lead.
+  function leadWithDocker() {
+    var page = $("page"), hero = $("hero");
+    $("docker").classList.add("alt");
+    page.insertBefore($("docker"), hero.nextSibling);
+  }
+
+  function render(sys, found, release) {
+    var btn = $("hero-button");
+    if (release.tag_name) {
+      $("hero-version").textContent = "Version " + release.tag_name.replace(/^v/, "");
+      $("hero-version").hidden = false;
+    }
+    var mine = sys.kinds.filter(function (k) { return found[k]; })[0];
+    if (mine) {
+      $("hero-title").textContent = "Ready for " + sys.name;
+      btn.textContent = "Download for " + sys.name;
+      btn.href = found[mine];
+      btn.hidden = false;
+      if (sys.linux) {
+        $("hero-note").textContent = "This is the .deb for Debian and Ubuntu. On Fedora or openSUSE use the .rpm below.";
+        $("hero-note").hidden = false;
+      }
+      if (sys.mac) {
+        var other = sys.intel ? "macArm" : "macIntel";
+        $("hero-note").textContent = "The first time, right-click CouchElephant and choose Open.";
+        $("hero-note").hidden = false;
+        if (found[other]) {
+          var p = document.createElement("p");
+          p.className = "note";
+          p.appendChild(document.createTextNode("Not the right Mac? "));
+          var a = document.createElement("a");
+          a.href = found[other];
+          a.textContent = sys.intel ? "Get the Apple silicon version." : "Get the Intel version.";
+          p.appendChild(a);
+          $("hero").insertBefore(p, $("hero-version"));
+        }
+      }
+    } else {
+      $("hero-title").textContent = "Download CouchElephant";
+      if (sys.mobile) {
+        $("hero-missing").textContent =
+          "CouchElephant runs on a computer or a server. Open this page there, or use Docker or Unraid below.";
+      } else {
+        $("hero-missing").textContent =
+          "The download for " + sys.name + " arrives with the next release. Docker or Unraid works today.";
+      }
+      $("hero-missing").hidden = false;
+      leadWithDocker();
+    }
+
+    var rest = Object.keys(KINDS).filter(function (k) {
+      return found[k] && k !== mine;
+    });
+    if (rest.length) {
+      var ul = $("others-list");
+      rest.forEach(function (k) { ul.appendChild(link(KINDS[k].label, found[k])); });
+      $("others").hidden = false;
+    }
+  }
+
+  function failed() {
+    var btn = $("hero-button");
+    btn.textContent = "See all downloads";
+    btn.href = RELEASES;
+    btn.hidden = false;
+    $("hero-missing").textContent = "The download list could not be loaded just now.";
+    $("hero-missing").hidden = false;
+  }
+
+  var sys0 = system("");
+  var archP = sys0.mac ? macArch() : Promise.resolve("");
+  archP.then(function (arch) {
+    var sys = system(arch);
+    return fetch(FEED, {headers: {Accept: "application/vnd.github+json"}})
+      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+      .then(function (release) { render(sys, pick(release), release); });
+  }).catch(failed);
+})();
+</script>
+</body>
+</html>
