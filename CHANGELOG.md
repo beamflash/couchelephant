@@ -1,5 +1,50 @@
 # Changelog
 
+## 1.5.25 - 2026-11-19
+
+### Added
+
+- **One download per system.** Windows (10 and 11), macOS (13 and later,
+  Apple silicon and Intel) and Linux (Debian, Ubuntu, Fedora, RHEL and
+  Rocky, amd64 and arm64) each have an installer that sets up CouchElephant
+  with everything it needs, including ffmpeg and comskip. It listens on port
+  8710 and moves up to the next free port, up to 8759, if that one is taken.
+  Docker and Unraid installs are unchanged.
+- **couchelephant.app** is the download page. On Linux, one command
+  installs it: `curl -fsSL https://couchelephant.app/install.sh | sudo sh`.
+- **Updates.** CouchElephant checks once a day for a newer release and shows
+  a banner. On Windows the icon next to the clock offers Update, on macOS
+  the menu bar icon does, each checking the download against its checksum
+  first. On Linux the banner shows the one command to run.
+- **Pause recordings** is now a switch in Settings, in the CouchElephant DVR
+  section, as well as in the Windows icon. It matters when sign-in is on,
+  because the icon cannot sign in.
+
+### Changed
+
+- On Linux the data folder is private to the CouchElephant service, the
+  service cannot gain new privileges or change system folders, and it joins
+  the video and render groups when they exist.
+- The macOS app makes its recordings folder itself, remembers the port it
+  used last time, and an update replaces the copy that is running. Both
+  builds of macOS programs are made for macOS 13, and the build refuses a
+  program that needs a newer one or loads a library from Homebrew.
+- The Windows uninstaller asks whether to remove your recordings list and
+  settings (default No). A silent uninstall still keeps them unless told not
+  to.
+
+### Fixed
+
+- The Windows icon next to the clock could fail to start, because it loaded
+  the whole web app, which its build does not carry. It now loads only what
+  it needs, and the install test checks it is still running after ten
+  seconds, on a fresh install and an upgrade.
+- A Windows update is checked again right before it runs, in case the
+  downloaded file was swapped in between.
+- The Docker health check follows `COUCHELEPHANT_PORT`.
+- Time zone data is bundled, so times draw correctly in the Windows build.
+- A release tag that does not match the version is refused.
+
 ## 1.5.24 - 2026-11-19
 
 ### Changed
