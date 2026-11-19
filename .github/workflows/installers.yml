@@ -10,6 +10,8 @@ on:
       - "app/__main__.py"
       - "app/tray.py"
       - "app/menubar.py"
+      - "app/updates.py"
+      - "app/version.py"
       - "requirements-menubar.txt"
       - ".github/workflows/installers.yml"
   pull_request:
