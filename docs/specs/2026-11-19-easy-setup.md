@@ -221,9 +221,20 @@ rather than a network error.
   bundled ffmpeg is a static build with each system's hardware decoding
   (VA-API, VideoToolbox, D3D11/QSV), which is used when present.
 - **Updates**: the server says an update is available. On Windows the one
-  click downloads the signed installer from the GitHub release, checks its
-  signature, and runs it. On macOS the app uses Sparkle with its own signing
-  key. Linux updates through its package manager or `install.sh`.
+  click downloads the installer from the GitHub release, checks its SHA-256
+  against the release's checksum file (the installer is unsigned for now),
+  and runs it. On macOS the app checks the new app's Developer ID signature
+  and replaces itself (Sparkle expects a native Cocoa app; this one is
+  Python). Linux updates through its package manager or `install.sh`.
+- **One port for HTTP and HTTPS**: with Use away from home on, the port
+  answers both, telling them apart by the first byte of each connection, so
+  home browsers are not sent to a certificate warning.
+- **Video away from home in the apps**: AVPlayer cannot trust a pinned
+  certificate, so with the server's own certificate the apps play through a
+  small proxy inside the app on 127.0.0.1. With a real domain certificate
+  the proxy is not used. AirPlay away from home needs the real certificate.
+- **The download page** is a static site on Cloudflare Pages at
+  couchelephant.app (registered 2026-11-18). Windows ships unsigned first.
 - **A second copy on the same machine**: the installer checks the port first
   and offers the next free one. Each install has its own id, so the apps list
   both. Moving from Docker uses the existing export and import.
