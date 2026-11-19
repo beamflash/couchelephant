@@ -52,7 +52,7 @@ jobs:
           if ($got -ne $env:WINSW_SHA256) { throw "WinSW hash mismatch: $got" }
 
       - name: Install Inno Setup
-        run: choco install innosetup --version=6.4.3 --no-progress -y
+        run: choco install innosetup --version=6.7.1 --no-progress -y
 
       - name: Build the installer
         shell: pwsh
