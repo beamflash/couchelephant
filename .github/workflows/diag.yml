@@ -1,5 +1,7 @@
 name: Diag
-on: workflow_dispatch
+on:
+  push:
+    branches: [final-fix-ci]
 jobs:
   d:
     runs-on: macos-15-intel
