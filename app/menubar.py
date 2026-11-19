@@ -194,8 +194,8 @@ def run(port: int | None = None) -> None:
         app.menu.add(item)
 
     def look_for_update(_timer):
-        # The feed is read a few seconds after start and then daily, so the
-        # first menu has nothing to offer yet.
+        # The background check finds out about ten seconds after launch;
+        # this only reads what it found.
         version = updates.offer()
         label = f"Update to {version}" if version else None
         for key in [k for k in app.menu.keys() if str(k).startswith("Update to")]:
@@ -204,7 +204,8 @@ def run(port: int | None = None) -> None:
         if label and label not in app.menu:
             app.menu.insert_before("Quit", rumps.MenuItem(label, callback=apply_in_background))
 
-    rumps.Timer(look_for_update, 600).start()
+    updates.watch()
+    rumps.Timer(look_for_update, 30).start()
     app.run()
 
 

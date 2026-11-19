@@ -80,6 +80,8 @@ def run(port: int | None = None) -> None:
     global _icon
     import pystray
     port = port or paths.port()
+    updates.sweep_stale()
+    updates.watch()
 
     def wrap(action):
         def call(icon, item):

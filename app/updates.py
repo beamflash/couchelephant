@@ -14,6 +14,7 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 
@@ -61,16 +62,66 @@ def newer(candidate: str, current: str) -> bool:
 
 
 _lock = threading.Lock()
+_apply_lock = threading.Lock()
 DAY = 24 * 3600
-_state: dict = {"at": None, "release": None}
+RETRY = 600                       # a failed check is tried again after 10 minutes
+_state: dict = {"at": None, "release": None, "ttl": DAY}
+
+INSTALLER_CAP = 500 * 1024 * 1024
+SUMS_CAP = 1024 * 1024
+FEED_CAP = 1024 * 1024
+DOWNLOAD_SECONDS = 20 * 60
+_LOOPBACK = ("127.0.0.1", "localhost", "::1")
+
+
+def _check_url(url: str) -> None:
+    """https only; plain http is for loopback, which is how the tests run."""
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme == "https" or (parts.scheme == "http" and parts.hostname in _LOOPBACK):
+        return
+    raise UpdateError("The update address is not a secure web address, so it was not used.")
+
+
+class _SafeRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        _check_url(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _open(url: str, accept: str | None = None):
+    _check_url(url)
+    headers = {"User-Agent": "CouchElephant"}
+    if accept:
+        headers["Accept"] = accept
+    opener = urllib.request.build_opener(_SafeRedirect)
+    return opener.open(urllib.request.Request(url, headers=headers), timeout=TIMEOUT)
+
+
+def _read_capped(response, cap: int, out=None, deadline: float | None = None) -> bytes:
+    """Read the whole body, refusing one that is bigger than cap or takes too long."""
+    declared = response.headers.get("Content-Length")
+    if declared and declared.isdigit() and int(declared) > cap:
+        raise UpdateError("The download is larger than expected, so it was not used.")
+    total, parts = 0, []
+    while True:
+        chunk = response.read(1 << 16)
+        if not chunk:
+            return b"".join(parts)
+        total += len(chunk)
+        if total > cap:
+            raise UpdateError("The download is larger than expected, so it was not used.")
+        if deadline is not None and time.monotonic() > deadline:
+            raise UpdateError("The download took too long, so it was stopped.")
+        if out is not None:
+            out.write(chunk)
+        else:
+            parts.append(chunk)
 
 
 def _fetch(url: str) -> Release | None:
     import json
-    req = urllib.request.Request(url, headers={
-        "Accept": "application/vnd.github+json", "User-Agent": "CouchElephant"})
-    with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
-        data = json.load(r)
+    with _open(url, "application/vnd.github+json") as r:
+        data = json.loads(_read_capped(r, FEED_CAP))
     if data.get("draft") or data.get("prerelease"):
         return None
     version = str(data.get("tag_name") or "").lstrip("v")
@@ -85,18 +136,18 @@ def latest(refresh: bool = False) -> Release | None:
     """The newest published release, from the last look. Looks once if it never has."""
     with _lock:
         at = _state["at"]
-        if at is not None and not refresh and time.time() - at < DAY:
+        if at is not None and not refresh and time.time() - at < _state["ttl"]:
             return _state["release"]
         _state["at"] = time.time()
         url = _feed_url()
         if not url:
-            _state["release"] = None
+            _state.update(release=None, ttl=DAY)
             return None
         try:
-            _state["release"] = _fetch(url)
+            _state.update(release=_fetch(url), ttl=DAY)
         except Exception as err:
             log.warning("update check failed: %s", err)
-            _state["release"] = None
+            _state.update(release=None, ttl=RETRY)
         return _state["release"]
 
 
@@ -107,11 +158,11 @@ def available() -> Release | None:
 
 def reset() -> None:
     with _lock:
-        _state.update(at=None, release=None)
+        _state.update(at=None, release=None, ttl=DAY)
 
 
 def _in_docker() -> bool:
-    return paths.library_dir() is not None
+    return paths._in_container()
 
 
 def _system() -> str:
@@ -143,15 +194,15 @@ def can_click(release: Release) -> bool:
 
 # ---------- applying ----------
 
-def _download(url: str, dest: str) -> None:
-    req = urllib.request.Request(url, headers={"User-Agent": "CouchElephant"})
-    with urllib.request.urlopen(req, timeout=TIMEOUT) as r, open(dest, "wb") as out:
-        shutil.copyfileobj(r, out)
+def _download(url: str, dest: str, cap: int | None = None) -> None:
+    deadline = time.monotonic() + DOWNLOAD_SECONDS
+    with _open(url) as r, open(dest, "wb") as out:
+        _read_capped(r, cap or INSTALLER_CAP, out, deadline)
 
 
 def _expected_hash(sums_url: str, name: str, folder: str) -> str:
     path = os.path.join(folder, "SHA256SUMS")
-    _download(sums_url, path)
+    _download(sums_url, path, SUMS_CAP)
     with open(path, encoding="utf-8") as f:
         for line in f:
             parts = line.split()
@@ -195,6 +246,20 @@ def _spawn_detached(cmd: list[str]) -> None:
     subprocess.Popen(cmd, **kwargs)
 
 
+def _exclusive(fn):
+    def run(*args):
+        if not _apply_lock.acquire(blocking=False):
+            raise UpdateError("An update is already running.")
+        try:
+            return fn(*args)
+        finally:
+            _apply_lock.release()
+    run.__name__ = fn.__name__
+    run.__doc__ = fn.__doc__
+    return run
+
+
+@_exclusive
 def apply() -> str:
     """Install the newer release. Returns a line to show; raises UpdateError."""
     mode = how()
@@ -224,6 +289,7 @@ def _shell_execute_runas(path: str, params: str) -> None:
         raise OSError(f"ShellExecute returned {code}")
 
 
+@_exclusive
 def apply_from_tray() -> str:
     """Windows: download, check the hash, run the installer with a UAC prompt.
 
@@ -243,6 +309,34 @@ def apply_from_tray() -> str:
     return f"Updating to {rel.version}."
 
 
+NOT_WRITABLE = ("CouchElephant could not be replaced in Applications. Check that this "
+                "account may change it, or download the update from couchelephant.app.")
+
+
+def _swap_in(app: str) -> None:
+    """Put the new app in place; on any failure the old one is still there."""
+    staged, old = MAC_APP + ".new", MAC_APP + ".old"
+    try:
+        shutil.rmtree(staged, ignore_errors=True)
+        if _run(["ditto", app, staged]).returncode != 0:
+            raise UpdateError(NOT_WRITABLE)
+        shutil.rmtree(old, ignore_errors=True)
+        had = os.path.exists(MAC_APP)
+        if had:
+            os.rename(MAC_APP, old)
+        try:
+            os.rename(staged, MAC_APP)
+        except OSError:
+            if had:
+                os.rename(old, MAC_APP)
+            raise
+        shutil.rmtree(old, ignore_errors=True)
+    except OSError as err:
+        raise UpdateError(NOT_WRITABLE) from err
+    finally:
+        shutil.rmtree(staged, ignore_errors=True)
+
+
 def _apply_mac(rel: Release, name: str) -> str:
     dmg = _fetch_verified(rel, name)
     folder = os.path.dirname(dmg)
@@ -259,22 +353,14 @@ def _apply_mac(rel: Release, name: str) -> str:
         if (_run(["codesign", "--verify", "--deep", "--strict", app]).returncode != 0
                 or _run(["spctl", "--assess", "--type", "execute", app]).returncode != 0):
             raise UpdateError(UNSIGNED)
-        staged = MAC_APP + ".new"
-        shutil.rmtree(staged, ignore_errors=True)
-        if _run(["ditto", app, staged]).returncode != 0:
-            raise UpdateError("The update could not be copied to Applications.")
-        old = MAC_APP + ".old"
-        shutil.rmtree(old, ignore_errors=True)
-        if os.path.exists(MAC_APP):
-            os.rename(MAC_APP, old)
-        os.rename(staged, MAC_APP)
-        shutil.rmtree(old, ignore_errors=True)
+        _swap_in(app)
     finally:
         _run(["hdiutil", "detach", mount, "-quiet", "-force"])
         shutil.rmtree(folder, ignore_errors=True)
     pid = os.getpid()
     _spawn_detached(["/bin/sh", "-c",
-                     f"sleep 1; kill {pid}; while kill -0 {pid} 2>/dev/null; do sleep 0.5; done; "
+                     f"sleep 1; kill {pid}; n=0; "
+                     f"while kill -0 {pid} 2>/dev/null && [ $n -lt 60 ]; do sleep 0.5; n=$((n+1)); done; "
                      f"open -n '{MAC_APP}'"])
     return f"Updating to {rel.version}. CouchElephant will reopen in a moment."
 
@@ -292,15 +378,52 @@ async def update_loop():
     import asyncio
     await asyncio.sleep(30)
     while True:
-        await asyncio.to_thread(latest, True)
-        await asyncio.sleep(24 * 3600)
-
-
+        try:
+            await asyncio.to_thread(latest, True)
+        except Exception as err:       # nothing here may stop the loop
+            log.warning("update loop: %s", err)
+        await asyncio.sleep(DAY)
 
 
 # ---------- for the tray and the menu bar ----------
 
 def offer() -> str | None:
-    """The version to show as "Update to ...": one this system can install by itself."""
-    rel = available()
-    return rel.version if rel and can_click(rel) else None
+    """The version to show as "Update to ...": one this system can install by itself.
+
+    Reads what the last check found. It never touches the network, so a menu
+    can call it while it is being drawn.
+    """
+    rel = _state["release"]
+    if rel and newer(rel.version, VERSION) and can_click(rel):
+        return rel.version
+    return None
+
+
+def watch(first_after: float = 10, every: float = 60) -> threading.Thread:
+    """Check in the background so a menu only ever reads the answer.
+
+    latest() itself decides when a look is due: a day after a good one, ten
+    minutes after a failed one.
+    """
+    def run():
+        time.sleep(first_after)
+        while True:
+            try:
+                latest()
+            except Exception as err:
+                log.warning("update watch: %s", err)
+            time.sleep(every)
+    thread = threading.Thread(target=run, daemon=True, name="update-watch")
+    thread.start()
+    return thread
+
+
+def sweep_stale(older_than: float = DAY) -> None:
+    """Remove update folders a crashed or interrupted update left in the temp folder."""
+    import glob
+    for folder in glob.glob(os.path.join(tempfile.gettempdir(), "couchelephant-update-*")):
+        try:
+            if time.time() - os.path.getmtime(folder) > older_than:
+                shutil.rmtree(folder, ignore_errors=True)
+        except OSError:
+            pass

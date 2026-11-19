@@ -227,9 +227,12 @@ def test_the_tray_refuses_when_the_sums_do_not_name_the_file(feed, windows):
 
 
 def test_the_tray_offers_the_update_without_the_server(feed, windows):
+    assert updates.offer() is None            # never touches the network by itself
     feed(names=[f"CouchElephant-Setup-{NEWER}.exe"])
+    updates.latest()
     assert updates.offer() == NEWER
     feed(names=())
+    updates.latest()
     assert updates.offer() is None
 
 
@@ -333,3 +336,145 @@ def test_menu_items_start_the_update(monkeypatch):
     dict(tray.build_menu(8710, "running", "1.6.0"))["Update to 1.6.0"]()
     dict(menubar.build_menu(8710, "1.6.0"))["Update to 1.6.0"]()
     assert calls == ["tray", "mac"]
+
+
+# ---------- fix round 1 ----------
+
+def test_a_failed_swap_puts_the_old_app_back(feed, mac, monkeypatch, tmp_path):
+    _mac_feed(feed, monkeypatch)
+    monkeypatch.setattr(updates, "_run", _Mac(signed=True))
+    real = os.rename
+    calls = []
+
+    def rename(src, dst):
+        calls.append((src, dst))
+        if str(src).endswith(".new"):
+            raise PermissionError("no")
+        real(src, dst)
+    monkeypatch.setattr(os, "rename", rename)
+    with pytest.raises(updates.UpdateError, match="could not be replaced"):
+        updates.apply()
+    assert (tmp_path / "CouchElephant.app" / "old").exists()
+    assert not (tmp_path / "CouchElephant.app.new").exists()
+    assert not (tmp_path / "CouchElephant.app.old").exists()
+
+
+def test_an_unwritable_applications_folder_is_a_message_not_a_500(client, feed, mac, monkeypatch):
+    _mac_feed(feed, monkeypatch)
+    run = _Mac(signed=True)
+
+    def failing(cmd):
+        if cmd[0] == "ditto":
+            import subprocess
+            return subprocess.CompletedProcess(cmd, 1, "", "denied")
+        return run(cmd)
+    monkeypatch.setattr(updates, "_run", failing)
+    r = client.post("/api/update/apply")
+    assert r.status_code == 400 and "could not be replaced" in r.json()["error"]
+
+
+@pytest.mark.parametrize("url", ["file:///etc/passwd", "ftp://example.com/x",
+                                 "http://example.com/x", "gopher://x/"])
+def test_only_https_or_loopback_is_fetched(url):
+    with pytest.raises(updates.UpdateError, match="secure"):
+        updates._open(url)
+
+
+def test_a_redirect_to_a_bad_scheme_is_refused(feed):
+    feed()
+    h = updates._SafeRedirect()
+    with pytest.raises(updates.UpdateError, match="secure"):
+        h.redirect_request(None, None, 302, "Found", {}, "ftp://example.com/x")
+
+
+def test_an_oversized_download_is_refused_and_cleaned_up(feed, windows, monkeypatch):
+    name = f"CouchElephant-Setup-{NEWER}.exe"
+    feed(names=[name])
+    monkeypatch.setattr(updates, "INSTALLER_CAP", 5)
+    import glob
+    import tempfile
+    before = set(glob.glob(os.path.join(tempfile.gettempdir(), "couchelephant-update-*")))
+    with pytest.raises(updates.UpdateError, match="larger than expected"):
+        updates.apply_from_tray()
+    after = set(glob.glob(os.path.join(tempfile.gettempdir(), "couchelephant-update-*")))
+    assert after == before and windows == []
+
+
+def test_the_cap_holds_without_a_content_length(tmp_path):
+    class Body:
+        headers = {}
+        def __init__(self): self.left = 10
+        def read(self, n):
+            chunk, self.left = b"x" * min(n, self.left), max(0, self.left - n)
+            return chunk
+    with pytest.raises(updates.UpdateError, match="larger"):
+        updates._read_capped(Body(), 5)
+
+
+def test_a_slow_download_is_stopped(monkeypatch):
+    class Body:
+        headers = {}
+        def read(self, n): return b"x"
+    with pytest.raises(updates.UpdateError, match="too long"):
+        updates._read_capped(Body(), 10**9, open(os.devnull, "wb"), deadline=0)
+
+
+def test_a_failed_check_is_tried_again_in_ten_minutes(feed, monkeypatch):
+    feed()
+    _Feed.status = 500
+    assert updates.latest() is None
+    _Feed.status = 200
+    assert updates.latest() is None                   # too soon
+    now = updates.time.time()
+    monkeypatch.setattr(updates.time, "time", lambda: now + updates.RETRY + 1)
+    assert updates.latest().version == NEWER
+
+
+def test_one_update_at_a_time(feed, windows):
+    feed(names=[f"CouchElephant-Setup-{NEWER}.exe"])
+    assert updates._apply_lock.acquire(blocking=False)
+    try:
+        with pytest.raises(updates.UpdateError, match="already running"):
+            updates.apply_from_tray()
+    finally:
+        updates._apply_lock.release()
+
+
+def test_the_mac_relaunch_wait_is_bounded(feed, mac, monkeypatch):
+    _mac_feed(feed, monkeypatch)
+    monkeypatch.setattr(updates, "_run", _Mac(signed=True))
+    updates.apply()
+    assert "-lt 60" in mac[0][-1]
+
+
+def test_stale_update_folders_are_swept(tmp_path, monkeypatch):
+    monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
+    old, new = tmp_path / "couchelephant-update-a", tmp_path / "couchelephant-update-b"
+    old.mkdir()
+    new.mkdir()
+    long_ago = updates.time.time() - 2 * 86400
+    os.utime(old, (long_ago, long_ago))
+    updates.sweep_stale()
+    assert not old.exists() and new.exists()
+
+
+def test_the_loop_survives_a_failing_check(monkeypatch):
+    import asyncio
+    seen = []
+
+    async def sleep(n):
+        seen.append(n)
+        if len(seen) > 2:
+            raise asyncio.CancelledError
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+    monkeypatch.setattr(updates, "latest", lambda refresh=False: 1 / 0)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(updates.update_loop())
+    assert len(seen) == 3
+
+
+def test_docker_is_the_container_check_not_the_library_setting(monkeypatch):
+    monkeypatch.setattr(updates.paths, "_in_container", lambda: True)
+    assert updates._in_docker() is True
+    monkeypatch.setattr(updates.paths, "_in_container", lambda: False)
+    assert updates._in_docker() is False
