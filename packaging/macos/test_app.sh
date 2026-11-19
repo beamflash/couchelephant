@@ -63,18 +63,20 @@ minos() {
     cmd == "LC_BUILD_VERSION" && $1 == "minos" { print $2 }
     cmd == "LC_VERSION_MIN_MACOSX" && $1 == "version" { print $2 }'
 }
-checked=0
+checked=0; bad=0
 while IFS= read -r -d '' f; do
   file -b "$f" | grep -q 'Mach-O' || continue
   checked=$((checked + 1))
   if otool -L "$f" 2>/dev/null | grep -E '^[[:space:]]+(/opt/homebrew|/usr/local)/'; then
-    echo "FAILED: $f loads a library from Homebrew"; exit 1
+    echo "BAD: $f loads a library from Homebrew"; bad=1
   fi
   for v in $(minos "$f"); do
     top="$(printf '%s\n13.0\n' "$v" | sort -V | tail -1)"
-    [ "$top" = 13.0 ] || { echo "FAILED: $f needs macOS $v, above 13.0"; exit 1; }
+    [ "$top" = 13.0 ] || { echo "BAD: $f needs macOS $v, above 13.0"; bad=1; }
   done
 done < <(find "$app" -type f -print0)
+# All of them are listed above before this stops.
+[ "$bad" = 0 ] || { echo "FAILED: the app holds programs that will not run on macOS 13 or that need Homebrew"; exit 1; }
 [ "$checked" -gt 20 ] || { echo "FAILED: found only $checked Mach-O files, the check did not look"; exit 1; }
 echo "ok: $checked Mach-O files, none from Homebrew, none above macOS 13.0"
 
