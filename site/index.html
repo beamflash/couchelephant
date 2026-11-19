@@ -44,6 +44,7 @@ footer{text-align:center;color:var(--dim);font-size:.9rem;margin-top:32px}
   <noscript>
     <p>Every download is on the <a href="https://github.com/datbird/couchelephant/releases/latest">latest release page</a>:
     a Windows installer, a macOS disk image, and Linux packages.</p>
+    <p class="note">On a Mac, the first time, right-click CouchElephant and choose Open.</p>
   </noscript>
   <a class="big" id="hero-button" href="https://github.com/datbird/couchelephant/releases/latest" hidden></a>
   <p class="note" id="hero-note" hidden></p>
@@ -135,9 +136,14 @@ footer{text-align:center;color:var(--dim);font-size:.9rem;margin-top:32px}
     });
   }
 
+  // Only our own release files are ever linked, whatever the feed says.
+  var TRUSTED = "https://github.com/datbird/couchelephant/releases/download/";
+
   function pick(release) {
     var out = {};
     (release.assets || []).forEach(function (a) {
+      if (typeof a.browser_download_url !== "string" ||
+          a.browser_download_url.indexOf(TRUSTED) !== 0) return;
       Object.keys(KINDS).forEach(function (k) {
         if (!out[k] && KINDS[k].test.test(a.name)) out[k] = a.browser_download_url;
       });

@@ -32,4 +32,4 @@ jobs:
             echo "Skipping the deploy: CLOUDFLARE_PAGES_TOKEN or CLOUDFLARE_ACCOUNT_ID is not set."
             exit 0
           fi
-          npx --yes wrangler@4 pages deploy site --project-name=couchelephant --branch=main
+          npx --yes wrangler@4.165.0 pages deploy site --project-name=couchelephant --branch=main

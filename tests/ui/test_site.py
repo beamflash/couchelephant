@@ -102,6 +102,20 @@ def test_no_installer_yet_leads_with_docker(browser):
     ctx.close()
 
 
+def test_hostile_download_urls_are_never_linked(browser):
+    evil = {"tag_name": "v9.9.9", "assets": [
+        {"name": "CouchElephant-Setup-9.9.9.exe", "browser_download_url": "javascript:alert(1)"},
+        {"name": "CouchElephant-9.9.9-macos-arm64.dmg",
+         "browser_download_url": "https://example.invalid/CouchElephant-9.9.9-macos-arm64.dmg"}]}
+    ctx, page = open_site(browser, WIN, release=evil)
+    page.wait_for_selector("#hero-missing:not([hidden])")
+    assert ("The download for Windows arrives with the next release."
+            in page.locator("#hero-missing").inner_text())
+    assert page.locator("#hero-button").is_hidden()
+    assert page.locator("#others").is_hidden()
+    ctx.close()
+
+
 def test_feed_failure_links_the_releases_page(browser):
     ctx, page = open_site(browser, WIN, status=500)
     text, href = hero(page)
@@ -115,5 +129,7 @@ def test_no_script_points_at_every_download(browser):
     page.goto(PAGE)
     link = page.locator("noscript a[href='https://github.com/datbird/couchelephant/releases/latest']")
     assert link.count() == 1
+    assert page.locator("#hero-button").is_hidden()
+    assert "right-click CouchElephant and choose Open." in page.locator("noscript").inner_text()
     assert "curl -fsSL https://couchelephant.app/install.sh" in page.content()
     ctx.close()

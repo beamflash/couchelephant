@@ -17,3 +17,4 @@ build/
 dist/
 packaging/windows/WinSW-x64.exe
 site/install.sh
+.wrangler/
