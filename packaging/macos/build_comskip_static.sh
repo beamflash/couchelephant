@@ -41,8 +41,9 @@ tar xf at.tgz
 guess="$(find -L "$(brew --prefix automake)" -name config.guess | head -1)"
 sub="$(find -L "$(brew --prefix automake)" -name config.sub | head -1)"
 [ -f "$guess" ] && [ -f "$sub" ] || { echo "no config.guess or config.sub in automake" >&2; exit 1; }
+# It also calls isspace and toupper without ctype.h, which clang 16 refuses by default.
 (cd argtable2-13 && cp "$guess" "$sub" . \
-    && ./configure --prefix="$prefix" --disable-shared --enable-static && make -j"$(getconf _NPROCESSORS_ONLN)" && make install)
+    && CFLAGS="$CFLAGS -Wno-implicit-function-declaration" ./configure --prefix="$prefix" --disable-shared --enable-static && make -j"$(getconf _NPROCESSORS_ONLN)" && make install)
 
 export PKG_CONFIG_PATH="$prefix/lib/pkgconfig"
 export CPPFLAGS="-I$prefix/include" LDFLAGS="-L$prefix/lib -mmacosx-version-min=13.0"
