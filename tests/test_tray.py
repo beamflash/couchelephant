@@ -16,7 +16,7 @@ def test_tray_menu():
 
 
 def test_the_menu_offers_resume_while_paused():
-    assert [label for label, _ in tray.build_menu(8710, paused=True)] == \
+    assert [label for label, _ in tray.build_menu(8710, "paused")] == \
         ["Open", "Resume recordings", "Quit"]
 
 
@@ -51,11 +51,11 @@ def test_pause_and_resume_post_to_the_recorder_setting():
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     try:
         port = srv.server_address[1]
-        assert tray.is_paused(port) is False
+        assert tray.pause_state(port) == "running"
         tray.build_menu(port)[1][1]()
-        assert tray.is_paused(port) is True
-        tray.build_menu(port, paused=True)[1][1]()
-        assert tray.is_paused(port) is False
+        assert tray.pause_state(port) == "paused"
+        tray.build_menu(port, "paused")[1][1]()
+        assert tray.pause_state(port) == "running"
     finally:
         srv.shutdown()
     assert _Server.seen == [("/settings/recorder/pause", "on=1"),
@@ -65,3 +65,36 @@ def test_pause_and_resume_post_to_the_recorder_setting():
 def test_importing_the_tray_does_not_need_pystray():
     import sys
     assert "pystray" not in sys.modules
+
+
+class _SignedIn(_Server):
+    """A server with sign-in on: the tray has no session, so it gets 401."""
+    seen: list = []
+
+    def do_POST(self):
+        type(self).seen.append(self.path)
+        self.send_response(401)
+        self.send_header("content-length", "0")
+        self.end_headers()
+
+    def do_GET(self):
+        self.do_POST()
+
+
+def test_with_sign_in_on_the_pause_item_opens_settings():
+    _SignedIn.seen = []
+    srv = HTTPServer(("127.0.0.1", 0), _SignedIn)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        port = srv.server_address[1]
+        state = tray.pause_state(port)
+        assert state == "locked"
+        menu = tray.build_menu(port, state)
+        assert [label for label, _ in menu] == ["Open", "Pause recordings in Settings", "Quit"]
+        _SignedIn.seen.clear()
+        with mock.patch("webbrowser.open") as opened:
+            menu[1][1]()
+    finally:
+        srv.shutdown()
+    opened.assert_called_once_with(f"http://localhost:{port}/settings")
+    assert _SignedIn.seen == [], "nothing is posted without a session"

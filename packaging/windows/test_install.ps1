@@ -56,6 +56,26 @@ try {
     Check ("$($filter.LocalPort)" -eq '8710') 'firewall rule covers port 8710'
     Check (Test-Path (Join-Path $data 'couchelephant.db')) 'database is in ProgramData'
     Check (Test-Path (Join-Path $data 'recordings')) 'recordings folder exists'
+
+    # The data folder holds the Plex token and secrets: no ordinary user may read it.
+    foreach ($dir in @($data, (Join-Path $data 'recordings'), (Join-Path $data 'couchelephant.db'))) {
+        $open = (Get-Acl $dir).Access | Where-Object {
+            $_.AccessControlType -eq 'Allow' -and
+            "$($_.IdentityReference)" -match '^(BUILTIN\\Users|Everyone|NT AUTHORITY\\Authenticated Users)$' }
+        Check ($null -eq $open) "no ordinary users in the ACL of $dir"
+    }
+    $svc = Get-CimInstance Win32_Service -Filter "Name='CouchElephant'"
+    Check ($svc.StartName -eq 'NT AUTHORITY\LocalService') "service runs as LocalService (was $($svc.StartName))"
+    $acl = (Get-Acl $data).Access | Where-Object { "$($_.IdentityReference)" -eq 'NT AUTHORITY\LOCAL SERVICE' }
+    Check ($null -ne $acl -and "$($acl.FileSystemRights)" -match 'Modify') 'LocalService can modify the data folder'
+
+    # Upgrade: install again over a running install. Data stays, service runs.
+    Set-Content (Join-Path $data 'upgrade-marker.txt') 'kept'
+    Install-It
+    Wait-Until 'service to run after upgrade' { (Get-Service CouchElephant).Status -eq 'Running' } 30
+    Wait-Until 'hello after upgrade' { (Hello 8710) -eq 200 }
+    Check (Test-Path (Join-Path $data 'upgrade-marker.txt')) 'upgrade keeps the data'
+    Check ((Get-CimInstance Win32_Service -Filter "Name='CouchElephant'").StartName -eq 'NT AUTHORITY\LocalService') 'upgrade keeps the service account'
     Check (Test-Path (Join-Path $app 'tray\CouchElephantTray.exe')) 'tray program installed'
     $run = Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Run'
     Check ($null -ne $run.CouchElephantTray) 'tray starts at login'
