@@ -351,6 +351,10 @@
           recorder for everything that does not say otherwise.</p>
         <div class="verdict" id="recverdict" hidden>
           <span class="vmark"></span><span class="vtext"></span></div>
+        <div class="field" id="recpausebox" data-find="pause resume recordings stop">
+          <button type="button" id="recpausebtn">Pause recordings</button>
+          <span class="help" id="recpausesay" hidden>Recordings are paused. Nothing new records until you resume.</span>
+        </div>
         <form method="post" action="/settings/recorder" class="setform" id="recform"
               style="margin-top:14px">
           <div class="field" data-find="recorded by default recorder dvr couchelephant plex">

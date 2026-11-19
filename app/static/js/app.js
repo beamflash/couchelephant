@@ -764,10 +764,28 @@ window.wireSettings = function (root) {
       }
       sel.innerHTML = h;
     };
+    var drawPause = function (paused) {
+      var btn = root.querySelector('#recpausebtn'), say = root.querySelector('#recpausesay');
+      if (!btn || !say) return;
+      btn.textContent = paused ? 'Resume recordings' : 'Pause recordings';
+      btn.dataset.paused = paused ? '1' : '0';
+      say.hidden = !paused;
+    };
+    var pausebtn = root.querySelector('#recpausebtn');
+    if (pausebtn) {
+      pausebtn.addEventListener('click', function () {
+        var turnOn = pausebtn.dataset.paused !== '1';
+        fetch('/settings/recorder/pause', {method: 'POST',
+          headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+          body: 'on=' + (turnOn ? '1' : '0')})
+          .then(CE.readJson).then(function (d) { if (d.ok) drawPause(d.paused); });
+      });
+    }
     fetch('/api/recorder/status').then(CE.readJson).then(function (d) {
       // The window can be closed again before this answers, and then there is
       // nothing left to fill in.
       if (!d.ok || !root.querySelector('#recform')) return;
+      drawPause(d.paused);
       verdict(root.querySelector('#recverdict'), d.available,
         d.available ? 'CouchElephant DVR can run on this install.'
                     : d.why + ' Until then every recording is made by Plex.');

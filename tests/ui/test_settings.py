@@ -153,3 +153,27 @@ def test_the_version_is_on_the_logo_tooltip_too(page):
 def test_the_close_button_leaves_settings(settings):
     settings.click("#setclose")
     settings.wait_for_url(lambda url: not url.endswith("/settings"))
+
+
+def test_the_dvr_section_has_a_pause_switch_that_holds_and_resumes_recordings(settings):
+    from app import db
+    db.set_setting("recorder_paused", "0")
+    settings.goto("/settings")
+    settings.click('.nav-item[data-sec="recording"]')
+    settings.click('#settabs .tab:has-text("CouchElephant DVR")')
+    btn = settings.locator("#recpausebtn")
+    assert btn.inner_text() == "Pause recordings"
+    assert not settings.locator("#recpausesay").is_visible()
+    btn.click()
+    settings.wait_for_selector("#recpausebtn:has-text('Resume recordings')")
+    assert settings.locator("#recpausesay").inner_text() == \
+        "Recordings are paused. Nothing new records until you resume."
+    assert db.get_setting("recorder_paused") == "1"
+    # It is the same switch the tray uses: it survives a reload.
+    settings.goto("/settings")
+    settings.click('.nav-item[data-sec="recording"]')
+    settings.click('#settabs .tab:has-text("CouchElephant DVR")')
+    settings.wait_for_selector("#recpausebtn:has-text('Resume recordings')")
+    settings.click("#recpausebtn")
+    settings.wait_for_selector("#recpausebtn:has-text('Pause recordings')")
+    assert db.get_setting("recorder_paused") == "0"
