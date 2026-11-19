@@ -79,9 +79,10 @@ if [ "$inside" = 1 ]; then
         || fail "recordings folder is not owned by the service user"
     [ "$(stat -c %a /var/lib/couchelephant)" = 750 ] \
         || fail "data folder mode is $(stat -c %a /var/lib/couchelephant), not 750"
+    # Not "cat | grep -q": pipefail turns the early exit of grep into a failure.
+    unit=$(cat /usr/lib/systemd/system/couchelephant.service /etc/systemd/system/couchelephant.service 2>/dev/null || true)
     for line in UMask=0027 NoNewPrivileges=yes ProtectSystem=full; do
-        cat /usr/lib/systemd/system/couchelephant.service /etc/systemd/system/couchelephant.service \
-            2>/dev/null | grep -q "^$line$" || fail "unit lacks $line"
+        grep -qx "$line" <<<"$unit" || fail "unit lacks $line"
     done
     for g in render video; do
         if getent group "$g" >/dev/null; then

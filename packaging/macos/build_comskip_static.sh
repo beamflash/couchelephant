@@ -37,8 +37,10 @@ curl -fsSL --retry 5 --retry-delay 10 -o at.tgz \
 echo "$ARGTABLE_SHA256  at.tgz" | shasum -a 256 -c -
 tar xf at.tgz
 # An old autoconf tree: take current config.guess and config.sub so arm64 is known.
-guess="$(find "$(brew --prefix automake)" -name config.guess | head -1)"
-sub="$(find "$(brew --prefix automake)" -name config.sub | head -1)"
+# -L: the brew prefix is a symlink into the Cellar.
+guess="$(find -L "$(brew --prefix automake)" -name config.guess | head -1)"
+sub="$(find -L "$(brew --prefix automake)" -name config.sub | head -1)"
+[ -f "$guess" ] && [ -f "$sub" ] || { echo "no config.guess or config.sub in automake" >&2; exit 1; }
 (cd argtable2-13 && cp "$guess" "$sub" . \
     && ./configure --prefix="$prefix" --disable-shared --enable-static && make -j"$(getconf _NPROCESSORS_ONLN)" && make install)
 
