@@ -41,3 +41,12 @@ def test_the_release_workflow_runs_that_check_on_tag_pushes_only():
     assert "scripts/check_tag_version.sh" in text
     block = text[text.index("Tag matches VERSION"):]
     assert "github.event_name == 'push'" in block.split("run:")[0]
+
+
+def test_a_tag_push_publishes_the_release_and_only_a_manual_run_drafts():
+    # In a workflow expression '' counts as false, so `cond && '' || '--draft'`
+    # gives --draft every time. 1.5.25 came out as a draft that way.
+    text = (ROOT / ".github" / "workflows" / "release.yml").read_text()
+    line = next(x for x in text.splitlines() if x.strip().startswith("DRAFT:"))
+    assert "&& ''" not in line
+    assert "github.event_name != 'push' && '--draft' || ''" in line
