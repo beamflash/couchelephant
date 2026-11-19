@@ -16,9 +16,9 @@ jobs:
         run: |
           F=/Library/Frameworks/Python.framework/Versions/3.12
           ls $F/lib | head -30
-          for f in $F/lib/libcrypto*.dylib $F/lib/ossl-modules/*.dylib; do echo $f; otool -l $f | grep -A4 "LC_BUILD_VERSION\|LC_VERSION_MIN" | grep "minos\|version"; done
+          for f in $F/lib/libcrypto*.dylib ; do echo $f; otool -l $f | grep -A4 "LC_BUILD_VERSION\|LC_VERSION_MIN" | grep "minos\|version"; done
           ls /usr/local/opt/openssl@3/lib 2>/dev/null | head
-          for f in /usr/local/opt/openssl@3/lib/libcrypto.3.dylib; do otool -l $f | grep minos; done
+          otool -l /usr/local/opt/openssl@3/lib/libcrypto.3.dylib | grep minos || true
           . v/bin/activate
           grep -v '^psycopg' requirements.txt > r.txt
           pip install -q -r r.txt
