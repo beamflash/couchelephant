@@ -58,4 +58,4 @@ HEALTHCHECK --interval=60s --timeout=5s --start-period=20s --retries=3 \
 # One process. The sync loop runs as a FastAPI background task rather than a
 # second container, because it and the web UI share one SQLite file and
 # splitting them buys nothing but a locking problem.
-CMD ["uvicorn", "app.web:app", "--host", "0.0.0.0", "--port", "8710", "--log-level", "info"]
+CMD ["python", "-m", "app", "--no-open"]
