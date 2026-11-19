@@ -15,3 +15,4 @@ data/
 packaging/tools/
 build/
 dist/
+packaging/windows/WinSW-x64.exe

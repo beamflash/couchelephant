@@ -76,7 +76,7 @@ NUMBERS = {
 KEYS = ("plex_url", "plex_token", "timezone", "dry_run", "tuner_url",
         "recorder_shows_folder", "recorder_movies_folder",
         "recorder_shows_section", "recorder_movies_section",
-        "sportsdb_key", "adskip_live", "adskip_final", "sports_overtime", *CHOICES, *NUMBERS)
+        "sportsdb_key", "adskip_live", "adskip_final", "sports_overtime", "recorder_paused", *CHOICES, *NUMBERS)
 
 
 def apply(values: dict) -> list[str]:
@@ -101,7 +101,8 @@ def apply(values: dict) -> list[str]:
             if value not in ZONES:
                 refused.append(key)
                 continue
-        elif key in ("dry_run", "adskip_live", "adskip_final", "sports_overtime"):
+        elif key in ("dry_run", "adskip_live", "adskip_final", "sports_overtime",
+                     "recorder_paused"):
             value = "1" if value in ("1", "true", "on") else "0"
         elif key in ("plex_url", "tuner_url"):
             value = value.rstrip("/")
@@ -157,12 +158,21 @@ def settings_recorder(tuner_url: str = Form(""), recorder_default: str = Form("a
     return RedirectResponse("/settings", status_code=303)
 
 
+@router.post("/settings/recorder/pause")
+def settings_recorder_pause(on: str = Form("1")):
+    """Stop our own recorder starting anything new (the tray's switch). A
+    recording already running finishes, and Plex is not touched."""
+    apply({"recorder_paused": on})
+    return {"ok": True, "paused": db.get_setting("recorder_paused") == "1"}
+
+
 @router.get("/api/recorder/status")
 def recorder_status():
     """Everything the Recorder settings show: whether it can run and why not,
     what the tuner says, and the choices for the handover."""
     out = {"ok": True, "available": recorder.available(),
            "why": recorder.why_unavailable(),
+           "paused": db.get_setting("recorder_paused") == "1",
            "tuner": {"url": tuner.base() or "",
                      "typed": bool((db.get_setting("tuner_url") or "").strip())},
            "library": {"mounted": bool(handover.LIB_DIR) and os.path.isdir(handover.LIB_DIR),

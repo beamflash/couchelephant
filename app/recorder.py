@@ -647,6 +647,7 @@ def _follow_guide(now):
 
 
 def _start_due(now):
+    paused = db.get_setting("recorder_paused") == "1"
     rows = db.query(
         "SELECT * FROM recordings WHERE state IN ('scheduled', 'recording') "
         "AND starts_at <= ? AND stops_at > ? "
@@ -655,6 +656,8 @@ def _start_due(now):
     for rec in rows:
         if rec["id"] in _jobs:
             continue
+        if paused and rec["kind"] == "recording":
+            continue                     # paused from the tray; a live view still starts
         try:
             url = tuner.stream_url(rec["channel_vcn"])
             if rec["kind"] == "recording":

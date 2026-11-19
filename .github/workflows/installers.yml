@@ -1,0 +1,71 @@
+# Builds the per-system installers and proves each one installs and runs.
+name: Installers
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packaging/**"
+      - "app/paths.py"
+      - "app/__main__.py"
+      - "app/tray.py"
+      - ".github/workflows/installers.yml"
+  workflow_dispatch:
+
+env:
+  WINSW_VERSION: v2.12.0
+  WINSW_SHA256: 05b82d46ad331cc16bdc00de5c6332c1ef818df8ceefcd49c726553209b3a0da
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install build requirements
+        run: pip install -r requirements.txt -r requirements-tray.txt "pyinstaller==6.*"
+
+      - name: Fetch ffmpeg and comskip
+        run: python packaging/fetch_tools.py windows x64 packaging/tools/windows-x64
+
+      - name: Freeze the server
+        env:
+          COUCHELEPHANT_TOOLS: ${{ github.workspace }}\packaging\tools\windows-x64
+        run: pyinstaller --noconfirm packaging/couchelephant.spec
+
+      - name: Smoke test the frozen server
+        run: python packaging/smoke.py dist/couchelephant/couchelephant.exe
+
+      - name: Freeze the tray
+        run: pyinstaller --noconfirm packaging/windows/tray.spec
+
+      - name: Fetch the service program (pinned, checked)
+        shell: pwsh
+        run: |
+          $url = "https://github.com/winsw/winsw/releases/download/$env:WINSW_VERSION/WinSW-x64.exe"
+          Invoke-WebRequest $url -OutFile packaging/windows/WinSW-x64.exe
+          $got = (Get-FileHash packaging/windows/WinSW-x64.exe -Algorithm SHA256).Hash.ToLower()
+          if ($got -ne $env:WINSW_SHA256) { throw "WinSW hash mismatch: $got" }
+
+      - name: Install Inno Setup
+        run: choco install innosetup --version=6.4.3 --no-progress -y
+
+      - name: Build the installer
+        shell: pwsh
+        run: |
+          $version = python -c "import re;print(re.search(r'VERSION = \"([^\"]+)\"', open('app/routes/_shared.py').read()).group(1))"
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$version" packaging\windows\couchelephant.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
+
+      - name: Test the installer
+        shell: pwsh
+        run: packaging/windows/test_install.ps1
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: CouchElephant-Setup
+          path: dist/CouchElephant-Setup-*.exe

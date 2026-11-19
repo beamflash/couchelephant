@@ -11,7 +11,7 @@ import time
 
 import pytest
 
-from app import db, handover, passes, recorder
+from app import auth, db, handover, passes, recorder
 from app import tuner as tuner_mod
 from tests import fake_plex
 
@@ -612,3 +612,30 @@ def test_a_missing_absolute_folder_does_not_wipe_rows(tuner, native):
     shutil.rmtree(native)                      # drive unplugged, not deleted in Plex
     handover.tidy(now=int(time.time()) + 3 * 86400)
     assert recorder.get(rec["id"]) is not None
+
+
+def test_pausing_stops_new_recordings_and_resuming_starts_them(tuner):
+    from fastapi.testclient import TestClient
+
+    from app.web import app
+    c = TestClient(app)
+    assert c.post("/settings/recorder/pause", data={"on": "1"},
+                  follow_redirects=False).status_code == 200
+    assert db.get_setting("recorder_paused") == "1"
+    now = int(time.time())
+    rec_id = recorder.book(_airing("a-p", "g-p", "5.1", now - 60))
+    recorder.tick()
+    assert recorder.get(rec_id)["state"] == "scheduled"
+    assert not recorder.busy(rec_id)
+    assert c.post("/settings/recorder/pause", data={"on": "0"}).json() == {"ok": True, "paused": False}
+    recorder.tick()
+    _until(lambda: (recorder.tick() or recorder.get(rec_id)["state"] == "recording"))
+
+
+def test_only_an_administrator_may_pause(client, synced):
+    db.set_setting("auth_mode", "local")
+    auth.create_user("owner", "a-good-password")
+    viewer = auth.create_user("kid", "a-good-password", role="user")
+    client.cookies.set(auth.SESSION_COOKIE, auth.create_session(viewer))
+    assert client.post("/settings/recorder/pause", data={"on": "1"}).status_code == 403
+    assert db.get_setting("recorder_paused") != "1"

@@ -56,7 +56,8 @@ def _check_comskip(path: Path) -> None:
     except (FileNotFoundError, subprocess.TimeoutExpired) as err:
         raise SystemExit(f"comskip did not start: {err!r}") from None
     text = (done.stdout + done.stderr).decode("utf-8", "replace")
-    if done.returncode == 127 or "error while loading shared libraries" in text \
+    # 127 is Unix "not found"; 0xC0000135 is Windows "a DLL is missing".
+    if done.returncode in (127, 0xC0000135, -1073741515) or "error while loading shared libraries" in text \
             or "Library not loaded" in text:
         raise SystemExit(f"comskip cannot load its libraries (exit {done.returncode}): {text.strip()[:300]}")
     if not text.strip():

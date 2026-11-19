@@ -1,0 +1,21 @@
+<!-- WinSW service definition. The installer fills in @PORT@ and saves this
+     next to the service program as CouchElephantService.xml. -->
+<service>
+  <id>CouchElephant</id>
+  <name>CouchElephant</name>
+  <description>CouchElephant: the guide, schedule and recorder for your TV.</description>
+  <executable>%BASE%\couchelephant\couchelephant.exe</executable>
+  <arguments>--no-open</arguments>
+  <workingdirectory>%ProgramData%\CouchElephant</workingdirectory>
+  <env name="COUCHELEPHANT_PORT" value="@PORT@" />
+  <env name="COUCHELEPHANT_DATA" value="%ProgramData%\CouchElephant" />
+  <startmode>Automatic</startmode>
+  <onfailure action="restart" delay="5 sec" />
+  <onfailure action="restart" delay="30 sec" />
+  <stoptimeout>20 sec</stoptimeout>
+  <logpath>%ProgramData%\CouchElephant\logs</logpath>
+  <log mode="roll-by-size">
+    <sizeThreshold>5120</sizeThreshold>
+    <keepFiles>5</keepFiles>
+  </log>
+</service>
