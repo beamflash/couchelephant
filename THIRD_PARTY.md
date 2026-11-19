@@ -76,3 +76,31 @@ CouchElephant runs it as a separate program and does not link to it.
 Copyright (c) Erik Kaashoek and contributors, licensed under the GNU General
 Public License, version 2: https://github.com/erikkaashoek/Comskip/blob/master/LICENSE.
 The source for the exact build is at the commit above.
+
+---
+
+## Programs bundled in the installers
+
+The Windows, macOS and Linux installers carry three programs, each run as a
+separate process (CouchElephant does not link to them). The exact builds are
+pinned by URL and SHA-256 in `packaging/tools.json`. Their licences sit in the
+install folder's `bin/` as `LICENSE-ffmpeg.txt`.
+
+- **ffmpeg and ffprobe**, FFmpeg 9.x static builds, GNU General Public
+  License, version 3 (the GPL builds, which include x264 and x265).
+  Windows and Linux: BtbN's FFmpeg-Builds, release
+  `autobuild-2026-11-18-12-39`, https://github.com/BtbN/FFmpeg-Builds .
+  macOS: Martin Riedl's build server, version 9.0.2,
+  https://ffmpeg.martin-riedl.de . Copyright (c) the FFmpeg developers,
+  https://ffmpeg.org/legal.html .
+- **comskip**, GNU General Public License, version 2. Linux and macOS
+  installers carry it built unmodified from the commit named above by
+  `packaging/build_comskip.sh`. The Windows installer carries the upstream
+  Windows build 0.82.012 from https://www.kaashoek.com/files/comskip82_012.zip .
+
+**Source offer.** The corresponding source for every program above is public.
+FFmpeg: https://ffmpeg.org/releases/ and the build scripts in the two build
+projects named above. Comskip: https://github.com/erikkaashoek/Comskip . If
+any of that is ever unavailable, write to the project's issue tracker at
+https://github.com/datbird/couchelephant/issues and the matching source will
+be provided for three years after the release that shipped the program.

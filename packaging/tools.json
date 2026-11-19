@@ -1,0 +1,105 @@
+{
+  "_note": "Pinned downloads. 'pick' maps the end of an archive member path to a file name under <dest>/bin. comskip for Linux and macOS is built by build_comskip.sh.",
+  "windows-x64": {
+    "downloads": [
+      {
+        "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-11-18-12-39/ffmpeg-N-129046-g3a78197c4c-win64-gpl.zip",
+        "sha256": "bda4c0e93eb0bb4354345c1615ae3afb38b540d866806b08042ef580dac241af",
+        "pick": {
+          "/bin/ffmpeg.exe": "ffmpeg.exe",
+          "/bin/ffprobe.exe": "ffprobe.exe",
+          "/LICENSE.txt": "LICENSE-ffmpeg.txt"
+        }
+      },
+      {
+        "url": "https://www.kaashoek.com/files/comskip82_012.zip",
+        "sha256": "d7753126329c49b64d677c34f85d78c6545ea935b0d738224a675f40f82d36ed",
+        "pick": {
+          "comskip.exe": "comskip.exe"
+        }
+      }
+    ]
+  },
+  "windows-arm64": {
+    "downloads": [
+      {
+        "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-11-18-12-39/ffmpeg-N-129046-g3a78197c4c-winarm64-gpl.zip",
+        "sha256": "9dfdb2301fddfa820c5ebbe8e3233e78040290efc92c1ea28360a3c28ed04d43",
+        "pick": {
+          "/bin/ffmpeg.exe": "ffmpeg.exe",
+          "/bin/ffprobe.exe": "ffprobe.exe",
+          "/LICENSE.txt": "LICENSE-ffmpeg.txt"
+        }
+      },
+      {
+        "url": "https://www.kaashoek.com/files/comskip82_012.zip",
+        "sha256": "d7753126329c49b64d677c34f85d78c6545ea935b0d738224a675f40f82d36ed",
+        "pick": {
+          "comskip.exe": "comskip.exe"
+        }
+      }
+    ]
+  },
+  "linux-x64": {
+    "downloads": [
+      {
+        "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-11-18-12-39/ffmpeg-N-129046-g3a78197c4c-linux64-gpl.tar.xz",
+        "sha256": "cff00e567053ea67834d2a9b76fae43371fb1e872885649077f3764513f52818",
+        "pick": {
+          "/bin/ffmpeg": "ffmpeg",
+          "/bin/ffprobe": "ffprobe",
+          "/LICENSE.txt": "LICENSE-ffmpeg.txt"
+        }
+      }
+    ]
+  },
+  "linux-arm64": {
+    "downloads": [
+      {
+        "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-11-18-12-39/ffmpeg-N-129046-g3a78197c4c-linuxarm64-gpl.tar.xz",
+        "sha256": "12cdd8c36c5e5e896ffc4e7d65b627589eccc9e42bd32c6116cdefc3e0b0d370",
+        "pick": {
+          "/bin/ffmpeg": "ffmpeg",
+          "/bin/ffprobe": "ffprobe",
+          "/LICENSE.txt": "LICENSE-ffmpeg.txt"
+        }
+      }
+    ]
+  },
+  "macos-arm64": {
+    "downloads": [
+      {
+        "url": "https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2/ffmpeg.zip",
+        "sha256": "c8ed4c4e6978a03c485edbfe4e0a5dc2380f8a30bba5150531b31b094492d924",
+        "pick": {
+          "ffmpeg": "ffmpeg"
+        }
+      },
+      {
+        "url": "https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2/ffprobe.zip",
+        "sha256": "fcbe839537485eaee7a7a8bc5cbc0f90d53617e80943e8a5b2e31cb851197ea6",
+        "pick": {
+          "ffprobe": "ffprobe"
+        }
+      }
+    ]
+  },
+  "macos-x64": {
+    "downloads": [
+      {
+        "url": "https://ffmpeg.martin-riedl.de/download/macos/amd64/1789931006_9.0.2/ffmpeg.zip",
+        "sha256": "7c6b4125b191cbf773832dc51f424cf2b6bb7da43007d1e066f95909e47cacd4",
+        "pick": {
+          "ffmpeg": "ffmpeg"
+        }
+      },
+      {
+        "url": "https://ffmpeg.martin-riedl.de/download/macos/amd64/1789931006_9.0.2/ffprobe.zip",
+        "sha256": "2322438ed2f6319a691291b247d09c69dcaa3a982460d1f269a7e1af335cfdfd",
+        "pick": {
+          "ffprobe": "ffprobe"
+        }
+      }
+    ]
+  }
+}

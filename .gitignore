@@ -10,3 +10,8 @@ __pycache__/
 
 # The compose file mounts ./data here: the database and the video pass secret.
 data/
+
+# Installer build output and the programs it bundles.
+packaging/tools/
+build/
+dist/

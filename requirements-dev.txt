@@ -1,4 +1,5 @@
 # Test-only. None of this is in the image that ships.
+pyinstaller==6.*
 pytest==8.3.4
 playwright==1.49.1
 ruff==0.16.4
