@@ -195,6 +195,9 @@ jobs:
           # psycopg's macOS wheel is built for macOS 14, above our floor of 13. The
           # optional PostgreSQL store is for Docker setups; the app says so if asked.
           grep -v '^psycopg' requirements.txt > "$RUNNER_TEMP/requirements-macos.txt"
+          # cryptography 50's Intel wheel loads Homebrew's OpenSSL, built for macOS 15.
+          # 44.x carries its own OpenSSL, built for an old macOS.
+          echo "cryptography==44.0.3" >> "$RUNNER_TEMP/requirements-macos.txt"
           pip install -r "$RUNNER_TEMP/requirements-macos.txt" -r requirements-menubar.txt "pyinstaller==6.*"
 
       - name: Fetch ffmpeg
