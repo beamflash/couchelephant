@@ -12,8 +12,9 @@ import webbrowser
 from collections.abc import Callable
 from pathlib import Path
 
-from . import __main__ as entry
 from . import paths
+from .__main__ import main as serve      # this form is the one PyInstaller can see
+from .__main__ import stop as stop_serving
 
 LABEL = "app.couchelephant"
 
@@ -43,13 +44,13 @@ def set_login(on: bool, executable: str | None = None) -> None:
 def start_server(port: int) -> threading.Thread:
     """Run the server in a thread. uvicorn skips signal handlers off the main thread."""
     thread = threading.Thread(
-        target=entry.main, args=(["--port", str(port), "--open"],), daemon=True)
+        target=serve, args=(["--port", str(port), "--open"],), daemon=True)
     thread.start()
     return thread
 
 
 def stop_server(thread: threading.Thread) -> None:
-    entry.stop()
+    stop_serving()
     thread.join(15)
 
 
