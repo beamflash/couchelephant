@@ -2,7 +2,7 @@
 # Build comskip from the commit the Dockerfile pins, on Linux or macOS.
 #   packaging/build_comskip.sh <dest>      writes <dest>/bin/comskip
 # Needs a C toolchain, autoconf, automake, libtool, pkg-config, argtable2 and the
-# ffmpeg development libraries (the Dockerfile's comskip stage lists the apt ones;
+# ffmpeg development libraries (ffmpeg 7 or older; 8 removed ticks_per_frame)
 # on macOS: brew install autoconf automake libtool pkg-config argtable ffmpeg).
 set -euo pipefail
 
