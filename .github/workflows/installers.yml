@@ -183,7 +183,11 @@ jobs:
           python-version: "3.12"
 
       - name: Install build requirements
-        run: pip install -r requirements.txt -r requirements-menubar.txt "pyinstaller==6.*"
+        run: |
+          # psycopg's macOS wheel is built for macOS 14, above our floor of 13. The
+          # optional PostgreSQL store is for Docker setups; the app says so if asked.
+          grep -v '^psycopg' requirements.txt > "$RUNNER_TEMP/requirements-macos.txt"
+          pip install -r "$RUNNER_TEMP/requirements-macos.txt" -r requirements-menubar.txt "pyinstaller==6.*"
 
       - name: Fetch ffmpeg
         run: python packaging/fetch_tools.py macos ${{ matrix.arch }} packaging/tools/macos-${{ matrix.arch }}
