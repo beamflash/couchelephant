@@ -139,3 +139,32 @@ def test_a_server_that_dies_is_reported():
     with mock.patch.object(menubar, "serve", side_effect=RuntimeError("boom")):
         started = menubar.bring_up(_free_port(), wait=10)
     assert "boom" in started.error
+
+
+def test_the_range_is_the_same_as_the_other_installs():
+    assert menubar.PORT_TRIES == 50          # 8710 to 8759
+
+
+def test_the_port_from_last_time_is_reused_while_free_and_dropped_when_taken(monkeypatch):
+    from app import db
+    monkeypatch.delenv("COUCHELEPHANT_PORT", raising=False)
+    spare = _free_port()
+    db.set_setting("menubar_port", str(spare))
+    assert menubar.wanted_port(None) == spare
+    with socket.socket() as hog:
+        hog.bind(("0.0.0.0", spare))
+        assert menubar.wanted_port(None) == 8710
+    assert menubar.wanted_port(9999) == 9999
+    db.set_setting("menubar_port", "")
+
+
+def test_the_chosen_port_is_saved_for_next_launch(monkeypatch):
+    from app import db, updates
+    monkeypatch.setitem(__import__("sys").modules, "rumps", mock.MagicMock())
+    monkeypatch.setattr(menubar, "bring_up", lambda start: menubar.Started(object(), 8733))
+    monkeypatch.setattr(updates, "watch", lambda: None)
+    monkeypatch.setattr(updates, "offer", lambda: None)
+    monkeypatch.setattr(menubar.paths, "recordings_dir", lambda: __import__("pathlib").Path("/tmp"))
+    menubar.run(8733)
+    assert db.get_setting("menubar_port") == "8733"
+    db.set_setting("menubar_port", "")

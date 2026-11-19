@@ -25,7 +25,7 @@ log = logging.getLogger("couchelephant")
 
 DEFAULT_FEED = "https://api.github.com/repos/datbird/couchelephant/releases/latest"
 TIMEOUT = 15
-MAC_APP = "/Applications/CouchElephant.app"
+MOVE_FIRST = "Move CouchElephant to Applications first"
 UNSIGNED = "This update is not signed yet. Download it from couchelephant.app."
 TRAY_LINE = "Use Update in the CouchElephant icon next to the clock."
 LINUX_COMMAND = "curl -fsSL https://couchelephant.app/install.sh | sudo sh"
@@ -212,19 +212,24 @@ def _expected_hash(sums_url: str, name: str, folder: str) -> str:
     raise UpdateError("The release has no checksum for this download, so it was not installed.")
 
 
-def _fetch_verified(release: Release, name: str) -> str:
+def _sha256(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _fetch_verified(release: Release, name: str) -> tuple[str, str]:
+    """Download and check a file. Returns its path and the hash it was checked against."""
     folder = tempfile.mkdtemp(prefix="couchelephant-update-")
     try:
         want = _expected_hash(release.assets["SHA256SUMS"], name, folder)
         dest = os.path.join(folder, name)
         _download(release.assets[name], dest)
-        h = hashlib.sha256()
-        with open(dest, "rb") as f:
-            for chunk in iter(lambda: f.read(1 << 20), b""):
-                h.update(chunk)
-        if h.hexdigest() != want:
+        if _sha256(dest) != want:
             raise UpdateError("The download did not match its checksum, so it was not installed.")
-        return dest
+        return dest, want
     except BaseException:
         shutil.rmtree(folder, ignore_errors=True)
         raise
@@ -300,7 +305,12 @@ def apply_from_tray() -> str:
     if rel is None or name is None or "SHA256SUMS" not in rel.assets:
         raise UpdateError("This release has no installer for this computer yet. "
                           "Download it from couchelephant.app.")
-    installer = _fetch_verified(rel, name)
+    installer, want = _fetch_verified(rel, name)
+    # The file sits in a folder this user can write to. Look again right before
+    # the prompt, so a swap between the check and the click is caught.
+    if _sha256(installer) != want:
+        shutil.rmtree(os.path.dirname(installer), ignore_errors=True)
+        raise UpdateError("The download did not match its checksum, so it was not installed.")
     try:
         # The installer stops the service itself and waits for the old program.
         _shell_execute_runas(installer, "/SILENT /SUPPRESSMSGBOXES /NORESTART")
@@ -313,22 +323,42 @@ NOT_WRITABLE = ("CouchElephant could not be replaced in Applications. Check that
                 "account may change it, or download the update from couchelephant.app.")
 
 
-def _swap_in(app: str) -> None:
+def in_applications(path: str) -> bool:
+    exe = os.path.realpath(path)
+    roots = (os.path.realpath("/Applications"),
+             os.path.realpath(os.path.expanduser("~/Applications")))
+    return any(exe.startswith(root + os.sep) for root in roots)
+
+
+def running_app() -> str:
+    """The app bundle this process runs from, the one an update must replace."""
+    exe = os.path.realpath(sys.executable)
+    parts = exe.split(os.sep)
+    for i, part in enumerate(parts):
+        if part.endswith(".app"):
+            bundle = os.sep.join(parts[:i + 1])
+            if in_applications(bundle):
+                return bundle
+            break
+    raise UpdateError(MOVE_FIRST)
+
+
+def _swap_in(app: str, target: str) -> None:
     """Put the new app in place; on any failure the old one is still there."""
-    staged, old = MAC_APP + ".new", MAC_APP + ".old"
+    staged, old = target + ".new", target + ".old"
     try:
         shutil.rmtree(staged, ignore_errors=True)
         if _run(["ditto", app, staged]).returncode != 0:
             raise UpdateError(NOT_WRITABLE)
         shutil.rmtree(old, ignore_errors=True)
-        had = os.path.exists(MAC_APP)
+        had = os.path.exists(target)
         if had:
-            os.rename(MAC_APP, old)
+            os.rename(target, old)
         try:
-            os.rename(staged, MAC_APP)
+            os.rename(staged, target)
         except OSError:
             if had:
-                os.rename(old, MAC_APP)
+                os.rename(old, target)
             raise
         shutil.rmtree(old, ignore_errors=True)
     except OSError as err:
@@ -338,7 +368,8 @@ def _swap_in(app: str) -> None:
 
 
 def _apply_mac(rel: Release, name: str) -> str:
-    dmg = _fetch_verified(rel, name)
+    target = running_app()          # before any download: a copy outside Applications stops here
+    dmg, _ = _fetch_verified(rel, name)
     folder = os.path.dirname(dmg)
     mount = os.path.join(folder, "mnt")
     os.makedirs(mount)
@@ -353,7 +384,7 @@ def _apply_mac(rel: Release, name: str) -> str:
         if (_run(["codesign", "--verify", "--deep", "--strict", app]).returncode != 0
                 or _run(["spctl", "--assess", "--type", "execute", app]).returncode != 0):
             raise UpdateError(UNSIGNED)
-        _swap_in(app)
+        _swap_in(app, target)
     finally:
         _run(["hdiutil", "detach", mount, "-quiet", "-force"])
         shutil.rmtree(folder, ignore_errors=True)
@@ -361,7 +392,7 @@ def _apply_mac(rel: Release, name: str) -> str:
     _spawn_detached(["/bin/sh", "-c",
                      f"sleep 1; kill {pid}; n=0; "
                      f"while kill -0 {pid} 2>/dev/null && [ $n -lt 60 ]; do sleep 0.5; n=$((n+1)); done; "
-                     f"open -n '{MAC_APP}'"])
+                     f"open -n '{target}'"])
     return f"Updating to {rel.version}. CouchElephant will reopen in a moment."
 
 

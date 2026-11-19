@@ -59,6 +59,7 @@ def test_a_broadcast_plex_already_has_is_not_recorded_twice(client, synced, tune
 def test_asking_for_our_recorder_where_it_cannot_run_says_why(client, synced, tuner,
                                                              monkeypatch):
     monkeypatch.setattr(recorder, "REC_DIR", "/nonexistent-ce-test")
+    monkeypatch.setattr(recorder.paths, "_in_container", lambda: True)
     aid = _live_airing()
     d = client.get("/api/record/options", params={"airing_id": aid}).json()
     assert d["recorder"] == {"available": False, "default": "plex"}

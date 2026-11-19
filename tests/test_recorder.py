@@ -7,11 +7,13 @@ real and only the codecs are missing.
 import json
 import os
 import shutil
+import sys
 import time
+import types
 
 import pytest
 
-from app import auth, db, handover, passes, recorder
+from app import auth, db, handover, passes, paths, recorder
 from app import tuner as tuner_mod
 from tests import fake_plex
 
@@ -639,3 +641,32 @@ def test_only_an_administrator_may_pause(client, synced):
     client.cookies.set(auth.SESSION_COOKIE, auth.create_session(viewer))
     assert client.post("/settings/recorder/pause", data={"on": "1"}).status_code == 403
     assert db.get_setting("recorder_paused") != "1"
+
+
+def test_the_unavailable_wording_matches_where_it_runs(monkeypatch):
+    monkeypatch.setattr(recorder, "REC_DIR", "/nonexistent-ce-test")
+    monkeypatch.setattr(paths, "_in_container", lambda: True)
+    assert "Mount one on the container" in recorder.why_unavailable()
+    monkeypatch.setattr(paths, "_in_container", lambda: False)
+    native = recorder.why_unavailable()
+    assert "container" not in native and "Mount" not in native
+    assert "Create it" in native
+
+
+def test_the_menu_bar_makes_the_recordings_folder_before_the_server_starts(tmp_path, monkeypatch):
+    from app import menubar
+    folder = tmp_path / "rec"
+    monkeypatch.setenv("COUCHELEPHANT_RECORDINGS", str(folder))
+    seen = {}
+
+    class Stop(Exception):
+        pass
+
+    def fake_bring_up(start):
+        seen["folder_existed"] = folder.is_dir()
+        raise Stop
+    monkeypatch.setattr(menubar, "bring_up", fake_bring_up)
+    monkeypatch.setitem(sys.modules, "rumps", types.SimpleNamespace())
+    with pytest.raises(Stop):
+        menubar.run(9)
+    assert seen["folder_existed"]

@@ -47,13 +47,18 @@ ACTIVE = ("scheduled", "recording")
 
 def why_unavailable() -> str | None:
     """None when the recorder can run, or a sentence saying what is missing."""
+    docker = paths._in_container()
     if not os.path.isdir(REC_DIR):
-        return (f"There is no {REC_DIR} folder. Mount one on the container to "
-                "let CouchElephant record.")
+        if docker:
+            return (f"There is no {REC_DIR} folder. Mount one on the container to "
+                    "let CouchElephant record.")
+        return (f"There is no {REC_DIR} folder. Create it, or restart "
+                "CouchElephant so it can make it.")
     if not os.access(REC_DIR, os.W_OK):
         return f"CouchElephant cannot write to {REC_DIR}."
     if not shutil.which(FFMPEG):
-        return "ffmpeg is not installed in this container."
+        return ("ffmpeg is not installed in this container." if docker
+                else "ffmpeg was not found. Reinstall CouchElephant.")
     return None
 
 

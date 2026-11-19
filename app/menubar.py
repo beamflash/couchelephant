@@ -15,7 +15,7 @@ import webbrowser
 from collections.abc import Callable
 from pathlib import Path
 
-from . import paths, updates
+from . import db, paths, updates
 from .__main__ import main as serve  # this form is the one PyInstaller can see
 from .__main__ import stop as stop_serving
 
@@ -34,12 +34,6 @@ class LoginError(Exception):
     """Start at login cannot be set; the message is meant for the user."""
 
 
-def _in_applications(executable: str) -> bool:
-    exe = Path(executable).resolve()
-    roots = (Path("/Applications"), Path.home() / "Applications")
-    return any(root in exe.parents for root in roots)
-
-
 def set_login(on: bool, executable: str | None = None) -> None:
     path = login_item_path()
     if not on:
@@ -49,8 +43,8 @@ def set_login(on: bool, executable: str | None = None) -> None:
         return
     executable = executable or sys.executable
     # A copy run from the dmg or Downloads would be a dead path after it is moved.
-    if not _in_applications(executable):
-        raise LoginError("Move CouchElephant to Applications first")
+    if not updates.in_applications(executable):
+        raise LoginError(updates.MOVE_FIRST)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(plistlib.dumps({
         "Label": LABEL,
@@ -59,19 +53,34 @@ def set_login(on: bool, executable: str | None = None) -> None:
     }))
 
 
-PORT_TRIES = 20          # 8710 up to 8729
+PORT_TRIES = 50          # 8710 up to 8759, as the Linux and Windows installs
+
+
+def port_free(port: int) -> bool:
+    with socket.socket() as probe:
+        try:
+            probe.bind(("0.0.0.0", port))
+        except OSError:
+            return False
+    return True
 
 
 def free_port(start: int, tries: int = PORT_TRIES) -> int | None:
     """The first port from start that nothing listens on, as the Linux and Windows installers do."""
     for port in range(start, start + tries):
-        with socket.socket() as probe:
-            try:
-                probe.bind(("0.0.0.0", port))
-            except OSError:
-                continue
+        if port_free(port):
             return port
     return None
+
+
+def wanted_port(explicit: int | None) -> int:
+    """Where to start looking: a port given, else last run's if still free, else the default."""
+    if explicit:
+        return explicit
+    saved = db.get_setting("menubar_port")
+    if saved and saved.isdigit() and port_free(int(saved)):
+        return int(saved)
+    return paths.port()
 
 
 class Started:
@@ -160,8 +169,12 @@ def _icon_path() -> str:
 def run(port: int | None = None) -> None:
     import rumps
     global _server
-    started = bring_up(port or paths.port())
+    # The installers make this folder on Windows and Linux; nothing else would here.
+    paths.recordings_dir().mkdir(parents=True, exist_ok=True)
+    started = bring_up(wanted_port(port))
     _server = started.thread
+    if not started.error:
+        db.set_setting("menubar_port", str(started.port))
     app = rumps.App("CouchElephant", icon=_icon_path(), quit_button=None)
     if started.error:
         # Say why, rather than leave an icon that does nothing.

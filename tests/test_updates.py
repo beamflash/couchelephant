@@ -272,7 +272,7 @@ class _Mac:
 def mac(monkeypatch, tmp_path):
     monkeypatch.setattr(updates, "_in_docker", lambda: False)
     monkeypatch.setattr(updates, "_system", lambda: "Darwin")
-    monkeypatch.setattr(updates, "MAC_APP", str(tmp_path / "CouchElephant.app"))
+    monkeypatch.setattr(updates, "running_app", lambda: str(tmp_path / "CouchElephant.app"))
     spawned = []
     monkeypatch.setattr(updates, "_spawn_detached", lambda cmd: spawned.append(cmd))
     (tmp_path / "CouchElephant.app").mkdir()
@@ -478,3 +478,35 @@ def test_docker_is_the_container_check_not_the_library_setting(monkeypatch):
     assert updates._in_docker() is True
     monkeypatch.setattr(updates.paths, "_in_container", lambda: False)
     assert updates._in_docker() is False
+
+
+@pytest.mark.parametrize("exe,ok", [
+    ("/Applications/CouchElephant.app/Contents/MacOS/CouchElephant", True),
+    ("~/Applications/Tools/CouchElephant.app/Contents/MacOS/CouchElephant", True),
+    ("/Volumes/CouchElephant/CouchElephant.app/Contents/MacOS/CouchElephant", False),
+    ("~/Downloads/CouchElephant.app/Contents/MacOS/CouchElephant", False),
+    ("/usr/bin/python3", False),
+])
+def test_the_update_replaces_the_running_bundle_and_only_inside_applications(monkeypatch, exe, ok):
+    exe = exe.replace("~", os.path.expanduser("~"))
+    monkeypatch.setattr("sys.executable", exe)
+    if ok:
+        assert updates.running_app() == exe.split(".app")[0] + ".app"
+    else:
+        with pytest.raises(updates.UpdateError, match="Move CouchElephant to Applications first"):
+            updates.running_app()
+
+
+def test_the_tray_catches_an_installer_swapped_after_the_check(feed, windows, monkeypatch):
+    feed(names=[f"CouchElephant-Setup-{NEWER}.exe"])
+    real = updates._fetch_verified
+
+    def fetch_then_swap(rel, name):
+        path, want = real(rel, name)
+        with open(path, "wb") as f:
+            f.write(b"something else")
+        return path, want
+    monkeypatch.setattr(updates, "_fetch_verified", fetch_then_swap)
+    with pytest.raises(updates.UpdateError, match="checksum"):
+        updates.apply_from_tray()
+    assert windows == []
