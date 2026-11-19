@@ -57,7 +57,7 @@ jobs:
       - name: Build the installer
         shell: pwsh
         run: |
-          $version = python -c "import re;print(re.search(r'VERSION = \"([^\"]+)\"', open('app/routes/_shared.py').read()).group(1))"
+          $version = (Select-String -Path app/routes/_shared.py -Pattern '^VERSION = "(.+)"').Matches[0].Groups[1].Value
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$version" packaging\windows\couchelephant.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
 
