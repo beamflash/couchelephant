@@ -7,7 +7,6 @@ display; rumps is imported only when the app really runs.
 import os
 import plistlib
 import socket
-import subprocess
 import sys
 import threading
 import time
@@ -44,13 +43,8 @@ def _in_applications(executable: str) -> bool:
 def set_login(on: bool, executable: str | None = None) -> None:
     path = login_item_path()
     if not on:
-        if path.exists():
-            # Unload it too, or it stays loaded until the next login.
-            try:
-                subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}/{LABEL}"],
-                               capture_output=True, timeout=10)
-            except (OSError, subprocess.SubprocessError):
-                pass
+        # Only the file goes. Unloading the agent would quit this very app
+        # when it was started at login, and launchd forgets it at logout.
         path.unlink(missing_ok=True)
         return
     executable = executable or sys.executable

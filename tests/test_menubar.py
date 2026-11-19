@@ -72,15 +72,11 @@ def test_start_at_login_only_from_applications(where, ok):
         assert not menubar.login_enabled()
 
 
-def test_turning_login_off_unloads_a_loaded_agent():
+def test_turning_login_off_never_quits_the_running_app():
     menubar.set_login(True, "/Applications/CouchElephant.app/x")
     with mock.patch("subprocess.run") as run:
         menubar.set_login(False)
-    cmd = run.call_args.args[0]
-    assert cmd[:2] == ["launchctl", "bootout"] and cmd[2].endswith("/app.couchelephant")
-    with mock.patch("subprocess.run", side_effect=FileNotFoundError):
-        menubar.set_login(True, "/Applications/CouchElephant.app/x")
-        menubar.set_login(False)             # no launchctl is not an error
+    run.assert_not_called()                  # no launchctl bootout of ourselves
     assert not menubar.login_enabled()
 
 
