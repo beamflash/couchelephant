@@ -12,7 +12,14 @@ on:
       - "app/menubar.py"
       - "requirements-menubar.txt"
       - ".github/workflows/installers.yml"
+  pull_request:
+    paths:
+      - "packaging/**"
+      - "app/paths.py"
+      - ".github/workflows/installers.yml"
   workflow_dispatch:
+  # Release calls this on a version tag.
+  workflow_call:
 
 env:
   WINSW_VERSION: v2.12.0
@@ -80,6 +87,63 @@ jobs:
         with:
           name: CouchElephant-Setup
           path: dist/CouchElephant-Setup-*.exe
+
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            deb_arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            deb_arch: arm64
+            runner: ubuntu-24.04-arm
+    name: linux-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      # ffmpeg and the comskip build are slow to fetch and compile; keep them.
+      - name: Cache the programs
+        id: tools
+        uses: actions/cache@v5
+        with:
+          path: packaging/tools/linux-${{ matrix.arch }}
+          key: tools-linux-${{ matrix.arch }}-${{ hashFiles('packaging/tools.json', 'packaging/build_comskip.sh', 'packaging/linux/build_in_rocky.sh') }}
+
+      - name: Fetch ffmpeg
+        if: steps.tools.outputs.cache-hit != 'true'
+        run: python packaging/fetch_tools.py linux ${{ matrix.arch }} packaging/tools/linux-${{ matrix.arch }}
+
+      # Rocky 9 carries the oldest glibc of the systems we install on, so the
+      # frozen server and comskip run on all of them. The script also builds
+      # comskip, freezes the server and smoke tests it.
+      - name: Build comskip, freeze and smoke test in Rocky Linux 9
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src rockylinux:9 \
+            packaging/linux/build_in_rocky.sh ${{ matrix.arch }} packaging/tools/linux-${{ matrix.arch }} "$(id -u):$(id -g)"
+
+      - name: Build the packages
+        run: |
+          version=$(sed -n 's/^VERSION = "\(.*\)"/\1/p' app/routes/_shared.py)
+          packaging/linux/build_packages.sh "$version" ${{ matrix.deb_arch }} dist/couchelephant dist/linux
+          # Two throwaway versions let the install test try an upgrade.
+          for v in 9.9.8 9.9.9; do
+            packaging/linux/build_packages.sh "$v" ${{ matrix.deb_arch }} dist/couchelephant dist/linux-test
+          done
+
+      - name: Test the packages on Debian, Ubuntu, Fedora and Rocky
+        run: packaging/linux/test_install.sh dist/linux-test 9.9.8 9.9.9 ${{ matrix.deb_arch }}
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: CouchElephant-linux-${{ matrix.arch }}
+          path: dist/linux/*
 
   macos:
     strategy:

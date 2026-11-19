@@ -13,6 +13,10 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Throwaway tag for a DRAFT release, to prove the pipeline (for example v0.0.0-test-1)"
+        required: false
 
 env:
   # Both registries carry the same image. Docker Hub is where people look
@@ -24,6 +28,46 @@ env:
 jobs:
   test:
     uses: ./.github/workflows/ci.yml
+
+  installers:
+    needs: test
+    uses: ./.github/workflows/installers.yml
+    secrets: inherit
+
+  # Gathers every installer, checksums them and attaches them to the release.
+  # A manual run only ever makes a draft, and only when given a tag.
+  release-assets:
+    needs: installers
+    if: github.event_name == 'push' || inputs.tag != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+      DRAFT: ${{ github.event_name == 'push' && '' || '--draft' }}
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: CouchElephant-*
+          path: assets
+          merge-multiple: true
+
+      - name: Write SHA256SUMS
+        working-directory: assets
+        run: |
+          ls -l
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Attach to the release
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" assets/* --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" assets/* $DRAFT --target "$GITHUB_SHA" --title "$TAG" \
+              --generate-notes --repo "$GITHUB_REPOSITORY"
+          fi
 
   publish:
     needs: test
