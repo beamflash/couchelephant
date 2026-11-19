@@ -201,7 +201,8 @@ class PostgresBackend(_SqlBackend):
             import psycopg
         except ImportError:
             raise BackendError("PostgreSQL support needs the psycopg driver, which "
-                               "is not in this image.") from None
+                               "is not in this copy of CouchElephant. Use the Docker or Linux "
+                               "install for a PostgreSQL store.") from None
         try:
             return psycopg.connect(
                 host=self.cfg.get("pg_host") or "127.0.0.1",

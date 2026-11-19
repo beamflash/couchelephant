@@ -670,3 +670,20 @@ def test_the_menu_bar_makes_the_recordings_folder_before_the_server_starts(tmp_p
     with pytest.raises(Stop):
         menubar.run(9)
     assert seen["folder_existed"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX modes")
+def test_the_library_copy_is_readable_by_plex_under_a_private_umask(tmp_path):
+    # The Linux service runs with UMask=0027 to keep its data private. Plex
+    # runs as its own user, so the library copy must still be world readable.
+    src = tmp_path / "rec.ts"
+    src.write_bytes(b"x" * 1000)
+    dest = tmp_path / "lib" / "Series" / "Season 01" / "ep.ts"
+    old = os.umask(0o027)
+    try:
+        handover._copy(str(src), str(dest))
+    finally:
+        os.umask(old)
+    assert dest.stat().st_mode & 0o777 == 0o644
+    assert (tmp_path / "lib").stat().st_mode & 0o777 == 0o755
+    assert (tmp_path / "lib" / "Series" / "Season 01").stat().st_mode & 0o777 == 0o755

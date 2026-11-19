@@ -124,6 +124,8 @@ begin
     P := P + 1;
   ChosenPort := P;
   Result := '';
+  if P >= 8760 then
+    Result := 'Ports 8710 to 8759 are all in use. Close a program using one and run setup again.';
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);

@@ -141,13 +141,26 @@ def _plex_folder(plex: Plex, section: str, rel_dir: str) -> str | None:
     return None
 
 
+def _make_folders(path: str) -> None:
+    """Make the missing folders open to Plex. The Linux service's umask
+    keeps our own data private, and would hide these from Plex too."""
+    missing = []
+    while path and not os.path.isdir(path):
+        missing.append(path)
+        path = os.path.dirname(path)
+    for d in reversed(missing):
+        os.makedirs(d, exist_ok=True)
+        os.chmod(d, 0o755)
+
+
 def _copy(src: str, dest: str) -> None:
     size = os.path.getsize(src)
     if os.path.exists(dest) and os.path.getsize(dest) == size:
         return                      # an earlier attempt got this far
-    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    _make_folders(os.path.dirname(dest))
     part = dest + ".part"           # an ending Plex does not read
     shutil.copyfile(src, part)
+    os.chmod(part, 0o644)           # Plex runs as its own user
     if os.path.getsize(part) != size:
         os.remove(part)
         raise HandoverError("The copy into the Plex library came out the wrong size.")

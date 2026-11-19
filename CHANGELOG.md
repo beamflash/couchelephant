@@ -28,7 +28,9 @@
 - The macOS app makes its recordings folder itself, remembers the port it
   used last time, and an update replaces the copy that is running. Both
   builds of macOS programs are made for macOS 13, and the build refuses a
-  program that needs a newer one or loads a library from Homebrew.
+  program that needs a newer one or loads a library from Homebrew. The macOS
+  app has no PostgreSQL store, because its driver needs macOS 14; SQLite and
+  MySQL work as before.
 - The Windows uninstaller asks whether to remove your recordings list and
   settings (default No). A silent uninstall still keeps them unless told not
   to.
@@ -44,6 +46,10 @@
 - The Docker health check follows `COUCHELEPHANT_PORT`.
 - Time zone data is bundled, so times draw correctly in the Windows build.
 - A release tag that does not match the version is refused.
+- On Linux, recordings handed over to Plex stay readable by a Plex server on
+  the same computer, even though the service keeps its own data private.
+- Windows setup stops with a message when ports 8710 to 8759 are all in use,
+  instead of picking a port outside that range.
 
 ## 1.5.24 - 2026-11-19
 
