@@ -10,6 +10,7 @@ import shutil
 import sys
 import tarfile
 import tempfile
+import time
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -17,13 +18,24 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 
 
+TRIES = 3
+
+
 def _download(url: str, sha256: str, target: Path) -> None:
-    digest = hashlib.sha256()
-    req = urllib.request.Request(url, headers={"User-Agent": "couchelephant-build"})
-    with urllib.request.urlopen(req, timeout=120) as resp, open(target, "wb") as out:
-        while chunk := resp.read(1 << 20):
-            digest.update(chunk)
-            out.write(chunk)
+    for attempt in range(1, TRIES + 1):
+        digest = hashlib.sha256()
+        req = urllib.request.Request(url, headers={"User-Agent": "couchelephant-build"})
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp, open(target, "wb") as out:
+                while chunk := resp.read(1 << 20):
+                    digest.update(chunk)
+                    out.write(chunk)
+            break
+        except OSError as err:           # a slow mirror; a bad hash is not retried
+            if attempt == TRIES:
+                raise
+            print(f"download failed ({err!r}), try {attempt + 1} of {TRIES}: {url}", file=sys.stderr)
+            time.sleep(5 * attempt)
     if digest.hexdigest() != sha256:
         raise SystemExit(f"hash mismatch for {url}\n  want {sha256}\n  got  {digest.hexdigest()}")
 
