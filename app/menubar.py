@@ -77,6 +77,7 @@ def wanted_port(explicit: int | None) -> int:
     """Where to start looking: a port given, else last run's if still free, else the default."""
     if explicit:
         return explicit
+    db.init()                 # a first launch has no tables yet
     saved = db.get_setting("menubar_port")
     if saved and saved.isdigit() and port_free(int(saved)):
         return int(saved)

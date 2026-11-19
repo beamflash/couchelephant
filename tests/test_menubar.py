@@ -168,3 +168,16 @@ def test_the_chosen_port_is_saved_for_next_launch(monkeypatch):
     menubar.run(8733)
     assert db.get_setting("menubar_port") == "8733"
     db.set_setting("menubar_port", "")
+
+
+def test_a_first_launch_with_no_database_yet_can_ask_for_its_port(tmp_path):
+    import subprocess
+    import sys
+    env = dict(__import__("os").environ, COUCHELEPHANT_DB=str(tmp_path / "new.db"),
+               COUCHELEPHANT_AUTH_DB=str(tmp_path / "auth.db"))
+    env.pop("COUCHELEPHANT_PORT", None)
+    out = subprocess.run([sys.executable, "-c",
+                          "from app import menubar; print(menubar.wanted_port(None))"],
+                         capture_output=True, text=True, env=env)
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip().isdigit()
