@@ -609,7 +609,6 @@ def test_a_recording_deleted_in_plex_leaves_the_list_on_a_native_install(tuner, 
 def test_a_missing_absolute_folder_does_not_wipe_rows(tuner, native):
     rec = _record()
     handover.tick(wait=True)
-    done = recorder.get(rec["id"])
     shutil.rmtree(native)                      # drive unplugged, not deleted in Plex
     handover.tidy(now=int(time.time()) + 3 * 86400)
     assert recorder.get(rec["id"]) is not None

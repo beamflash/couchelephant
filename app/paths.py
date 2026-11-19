@@ -104,7 +104,7 @@ def library_dir() -> Path | None:
 
 
 def install_id() -> str:
-    from . import db                      # db imports this module
+    from . import db  # db imports this module
     value = db.get_setting("install_id")
     if not value:
         value = uuid.uuid4().hex
