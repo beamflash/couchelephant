@@ -173,14 +173,22 @@ jobs:
     name: macos-${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
     env:
+      PY_VERSION: 3.12.10
+      PY_SHA256: 8373e58da4ea146b3eb1c1f9834f19a319440b6b679b06050b1f9ee3237aa8e4
       # Signing steps run only when the Developer ID secrets exist.
       HAVE_SIGNING: ${{ secrets.MACOS_DEVID_P12 != '' && secrets.MACOS_DEVID_P12_PASSWORD != '' && secrets.ASC_KEY_ID != '' && secrets.ASC_ISSUER != '' && secrets.ASC_KEY_P8 != '' }}
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
+      # The runner's own Python is built on the runner's macOS, so its OpenSSL and
+      # libraries ask for macOS 15. The python.org build runs on macOS 10.13 and up.
+      - name: Install Python from python.org
+        run: |
+          curl -fsSL --retry 5 -o "$RUNNER_TEMP/python.pkg" "https://www.python.org/ftp/python/$PY_VERSION/python-$PY_VERSION-macos11.pkg"
+          echo "$PY_SHA256  $RUNNER_TEMP/python.pkg" | shasum -a 256 -c -
+          sudo installer -pkg "$RUNNER_TEMP/python.pkg" -target /
+          /Library/Frameworks/Python.framework/Versions/3.12/bin/python3 -m venv "$RUNNER_TEMP/venv"
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
 
       - name: Install build requirements
         run: |
