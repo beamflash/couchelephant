@@ -165,7 +165,7 @@ def recorder_status():
            "why": recorder.why_unavailable(),
            "tuner": {"url": tuner.base() or "",
                      "typed": bool((db.get_setting("tuner_url") or "").strip())},
-           "library": {"mounted": os.path.isdir(handover.LIB_DIR),
+           "library": {"mounted": bool(handover.LIB_DIR) and os.path.isdir(handover.LIB_DIR),
                        "path": handover.LIB_DIR, "folders": [], "sections": []},
            "handover_why": handover.why_unavailable() if recorder.available() else None}
     if not out["tuner"]["url"] and db.get_setting("plex_url") and db.get_setting("plex_token"):

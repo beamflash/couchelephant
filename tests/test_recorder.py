@@ -6,6 +6,7 @@ real and only the codecs are missing.
 """
 import json
 import os
+import shutil
 import time
 
 import pytest
@@ -560,3 +561,55 @@ def test_hardware_that_fails_mid_recording_gives_way_to_software(tuner, monkeypa
     assert job.converter.enc == "software"
     assert "hardware encoding failed" in caplog.text
     _until(lambda: recorder.view_info(recorder.get(rec_id)["uid"])["segments"] > 0)
+
+
+# ---------- a native install: no /library mount, folders are absolute ----------
+
+@pytest.fixture
+def native(plex, tmp_path, monkeypatch):
+    monkeypatch.setattr(handover, "LIB_DIR", None)
+    monkeypatch.setattr(handover, "SCAN_WAIT_SECONDS", 2)    # fail fast, not in 3 minutes
+    monkeypatch.setattr(handover, "SCAN_POLL_SECONDS", 0.5)
+    root = tmp_path / "Movies and TV"
+    root.mkdir()
+    # The fake Plex lists whatever is under this folder when it is asked to scan.
+    monkeypatch.setenv("COUCHELEPHANT_LIBRARY", str(root))
+    db.set_setting("recorder_shows_folder", str(root))
+    db.set_setting("recorder_shows_section", "2")
+    return root
+
+
+def test_an_absolute_folder_receives_the_recording(tuner, native):
+    rec = _record()
+    handover.tick(wait=True)
+    done = recorder.get(rec["id"])
+    assert done["state"] == "in_plex", done["error"]
+    assert done["plex_path"].startswith(str(native) + os.sep)
+    assert os.path.getsize(done["plex_path"]) == rec["bytes"]
+
+
+def test_a_relative_folder_is_refused_without_a_library_mount(tuner, native):
+    db.set_setting("recorder_shows_folder", "tv")
+    rec = _record()
+    handover.tick(wait=True)
+    held = recorder.get(rec["id"])
+    assert held["state"] == "finished"
+    assert "full path" in held["error"]
+    assert os.path.exists(recorder.broadcast_path(rec["uid"]))
+
+
+def test_a_recording_deleted_in_plex_leaves_the_list_on_a_native_install(tuner, native):
+    rec = _record()
+    handover.tick(wait=True)
+    os.remove(recorder.get(rec["id"])["plex_path"])
+    handover.tidy(now=int(time.time()) + 3 * 86400)
+    assert recorder.get(rec["id"]) is None
+
+
+def test_a_missing_absolute_folder_does_not_wipe_rows(tuner, native):
+    rec = _record()
+    handover.tick(wait=True)
+    done = recorder.get(rec["id"])
+    shutil.rmtree(native)                      # drive unplugged, not deleted in Plex
+    handover.tidy(now=int(time.time()) + 3 * 86400)
+    assert recorder.get(rec["id"]) is not None

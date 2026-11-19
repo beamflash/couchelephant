@@ -54,6 +54,10 @@ def why_unavailable(rec=None) -> str | None:
     kinds = [_kind(rec)] if rec is not None else ["shows"]
     for k in kinds:
         word = "movies" if k == "movies" else "TV"
+        folder = (db.get_setting(f"recorder_{k}_folder") or "").strip()
+        if not LIB_DIR and folder and not os.path.isabs(folder):
+            return (f"The {word} library folder needs its full path, such as "
+                    "/home/you/Movies. Choose it in Settings, Recording, CouchElephant DVR.")
         if not (db.get_setting(f"recorder_{k}_folder") or "").strip():
             return f"No library folder is chosen for {word}. Choose one in Settings, Recording, CouchElephant DVR."
         if not (db.get_setting(f"recorder_{k}_section") or "").strip():
@@ -160,7 +164,9 @@ def hand_over(rec) -> None:
     if why:
         raise HandoverError(why)
     k = _kind(rec)
-    folder = db.get_setting(f"recorder_{k}_folder").strip().strip("/")
+    folder = db.get_setting(f"recorder_{k}_folder").strip()
+    if LIB_DIR:
+        folder = folder.strip("/")      # a name inside the mount, not a path
     section = db.get_setting(f"recorder_{k}_section").strip()
     root = os.path.join(LIB_DIR or "", folder)
     src = recorder.broadcast_path(rec["uid"])
@@ -319,12 +325,20 @@ def tidy(now: int | None = None) -> None:
             continue
         if rec["plex_path"] and os.path.exists(rec["plex_path"]):
             shutil.rmtree(recorder.view_dir(rec["uid"]), ignore_errors=True)
-        elif LIB_DIR and os.path.isdir(LIB_DIR):
-            # Deleted in Plex. The library is mounted and the file is not in
+        elif _library_present(rec):
+            # Deleted in Plex. The library is there and the file is not in
             # it, so there is nothing left to list or to play.
             shutil.rmtree(recorder.rec_dir(rec["uid"]), ignore_errors=True)
             with db.tx() as c:
                 c.execute("DELETE FROM recordings WHERE id = ?", (rec["id"],))
+
+
+def _library_present(rec) -> bool:
+    """Whether the folder the file would be in is there to be believed."""
+    if LIB_DIR:
+        return os.path.isdir(LIB_DIR)
+    folder = (db.get_setting(f"recorder_{_kind(rec)}_folder") or "").strip()
+    return os.path.isabs(folder) and os.path.isdir(folder)
 
 
 def delete(rec) -> None:

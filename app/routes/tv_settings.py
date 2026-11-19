@@ -43,7 +43,7 @@ def _refused():
 
 def _library():
     """The folders and Plex libraries a finished recording can be moved to."""
-    out = {"mounted": os.path.isdir(handover.LIB_DIR), "folders": [], "sections": []}
+    out = {"mounted": bool(handover.LIB_DIR) and os.path.isdir(handover.LIB_DIR), "folders": [], "sections": []}
     if out["mounted"]:
         try:
             out["folders"] = sorted(

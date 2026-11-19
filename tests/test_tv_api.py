@@ -985,3 +985,14 @@ def test_an_announced_series_pass_keeps_its_options(client, synced, tuner, monke
     p = db.one("SELECT * FROM passes")
     assert p["series_title"] == "Not Yet Aired" and p["recorder"] == "couchelephant"
     assert db.unjs(p["networks"]) == [net]
+
+
+def test_settings_endpoints_work_without_a_library_mount(client, tuner, monkeypatch):
+    from app import handover
+    monkeypatch.setattr(handover, "LIB_DIR", None)
+    tv = _pair(client)
+    lib = client.get("/api/tv/settings", headers=tv).json()["library"]
+    assert lib["mounted"] is False
+    r = client.get("/api/recorder/status")
+    assert r.status_code == 200
+    assert r.json()["library"]["mounted"] is False
