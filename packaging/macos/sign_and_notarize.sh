@@ -9,17 +9,19 @@ cd "$(dirname "$0")/../.."
 app=dist/CouchElephant.app
 ents=packaging/macos/entitlements.plist
 
+list="$(mktemp)"
+trap 'rm -f "$list"' EXIT
+
 # Every Mach-O file, deepest first, so a container is signed after its contents.
 # The main executable goes last, with the entitlements.
 find "$app" -type f \( -perm -u+x -o -name '*.dylib' -o -name '*.so' \) -print0 \
   | while IFS= read -r -d '' f; do
       file -b "$f" | grep -q 'Mach-O' && printf '%s\0' "$f"
-    done | sort -z -r > /tmp/ce-macho.list
+    done | sort -z -r > "$list"
 while IFS= read -r -d '' f; do
   [ "$f" = "$app/Contents/MacOS/CouchElephant" ] && continue
   codesign --force --options runtime --timestamp --sign "$identity" "$f"
-done < /tmp/ce-macho.list
-rm -f /tmp/ce-macho.list
+done < "$list"
 codesign --force --options runtime --timestamp --entitlements "$ents" --sign "$identity" "$app"
 codesign --verify --deep --strict --verbose=2 "$app"
 

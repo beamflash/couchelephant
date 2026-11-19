@@ -85,7 +85,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     env:
       # Signing steps run only when the Developer ID secrets exist.
-      HAVE_SIGNING: ${{ secrets.MACOS_DEVID_P12 != '' && secrets.ASC_KEY_P8 != '' }}
+      HAVE_SIGNING: ${{ secrets.MACOS_DEVID_P12 != '' && secrets.MACOS_DEVID_P12_PASSWORD != '' && secrets.ASC_KEY_ID != '' && secrets.ASC_ISSUER != '' && secrets.ASC_KEY_P8 != '' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -124,33 +124,40 @@ jobs:
 
       - name: Import the Developer ID certificate
         if: env.HAVE_SIGNING == 'true'
+        shell: bash --noprofile --norc -euo pipefail {0}
         env:
           P12: ${{ secrets.MACOS_DEVID_P12 }}
           P12_PASSWORD: ${{ secrets.MACOS_DEVID_P12_PASSWORD }}
         run: |
           kc="$RUNNER_TEMP/build.keychain-db"
+          echo "SIGN_KEYCHAIN=$kc" >> "$GITHUB_ENV"
           pw="$(uuidgen)"
           security create-keychain -p "$pw" "$kc"
           security set-keychain-settings -lut 21600 "$kc"
           security unlock-keychain -p "$pw" "$kc"
           echo "$P12" | base64 --decode > "$RUNNER_TEMP/devid.p12"
           security import "$RUNNER_TEMP/devid.p12" -k "$kc" -P "$P12_PASSWORD" -T /usr/bin/codesign
-          rm "$RUNNER_TEMP/devid.p12"
-          security set-key-partition-list -S apple-tool:,apple: -s -k "$pw" "$kc"
+          rm -f "$RUNNER_TEMP/devid.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$pw" "$kc" >/dev/null
           security list-keychains -d user -s "$kc" login.keychain-db
-          id="$(security find-identity -v -p codesigning "$kc" | grep 'Developer ID Application' | head -1 | sed 's/.*"\(.*\)"/\1/')"
+          id="$(security find-identity -v -p codesigning "$kc" | grep 'Developer ID Application' | head -1 | sed 's/.*"\(.*\)"/\1/' || true)"
+          if [ -z "$id" ]; then
+            echo "::error::No Developer ID Application identity in the imported certificate"
+            exit 1
+          fi
           echo "SIGN_IDENTITY=$id" >> "$GITHUB_ENV"
 
       - name: Sign and notarize the app
         if: env.HAVE_SIGNING == 'true'
+        shell: bash --noprofile --norc -euo pipefail {0}
         env:
           ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER: ${{ secrets.ASC_ISSUER }}
         run: |
+          [ -n "${SIGN_IDENTITY:-}" ] || { echo "::error::SIGN_IDENTITY is empty"; exit 1; }
           printf '%s' "$ASC_KEY_P8" > "$RUNNER_TEMP/asc.p8"
           packaging/macos/sign_and_notarize.sh "$SIGN_IDENTITY" "$RUNNER_TEMP/asc.p8" "$ASC_KEY_ID" "$ASC_ISSUER"
-          rm "$RUNNER_TEMP/asc.p8"
 
       - name: Build the dmg
         run: |
@@ -159,14 +166,25 @@ jobs:
 
       - name: Sign the dmg
         if: env.HAVE_SIGNING == 'true'
-        run: codesign --force --timestamp --sign "$SIGN_IDENTITY" dist/CouchElephant-*.dmg
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          [ -n "${SIGN_IDENTITY:-}" ] || { echo "::error::SIGN_IDENTITY is empty"; exit 1; }
+          codesign --force --timestamp --sign "$SIGN_IDENTITY" dist/CouchElephant-*.dmg
 
       - name: Say so when the build is unsigned
         if: env.HAVE_SIGNING != 'true'
         run: echo "::warning::Unsigned build, the Developer ID secrets are not set."
 
       - name: Test the dmg
+        env:
+          REQUIRE_SIGNED: ${{ env.HAVE_SIGNING == 'true' && '1' || '0' }}
         run: packaging/macos/test_app.sh dist/CouchElephant-*-macos-${{ matrix.arch }}.dmg
+
+      - name: Remove the temporary keychain and key files
+        if: always()
+        run: |
+          [ -z "${SIGN_KEYCHAIN:-}" ] || security delete-keychain "$SIGN_KEYCHAIN" || true
+          rm -f "$RUNNER_TEMP/devid.p12" "$RUNNER_TEMP/asc.p8"
 
       - uses: actions/upload-artifact@v5
         with:

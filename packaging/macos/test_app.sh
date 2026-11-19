@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Mount the dmg, run the app from a temp folder, check it answers, quit it.
 #   packaging/macos/test_app.sh <dmg>
-# Without a Developer ID build the Gatekeeper check is skipped, and says so.
+# Without a Developer ID build the Gatekeeper check is skipped, and says so
+# (unless REQUIRE_SIGNED=1).
 set -euo pipefail
 dmg="${1:?usage: test_app.sh <dmg>}"
 port=8710
@@ -26,8 +27,18 @@ grep -q '<key>LSUIElement</key>' "$app/Contents/Info.plist" \
   || { echo "FAILED: LSUIElement missing"; exit 1; }
 echo "ok: menu bar only (LSUIElement)"
 
-if codesign -dv "$app" 2>&1 | grep -q 'Authority=Developer ID Application'; then
-  spctl --assess --type execute --verbose=2 "$app"
+# REQUIRE_SIGNED=1 comes from a build that had the signing secrets: then a missing
+# or rejected signature is a failure, not something to skip.
+signed=0
+if codesign -dv "$app" 2>&1 | grep -q 'Authority=Developer ID Application'; then signed=1; fi
+if [ "${REQUIRE_SIGNED:-0}" = 1 ]; then
+  [ "$signed" = 1 ] || { echo "FAILED: signing was expected but the app has no Developer ID signature"; exit 1; }
+  spctl --assess --type execute --verbose=2 "$app" \
+    || { echo "FAILED: Gatekeeper rejects the app (spctl)"; exit 1; }
+  echo "ok: Gatekeeper accepts the app (spctl)"
+elif [ "$signed" = 1 ]; then
+  spctl --assess --type execute --verbose=2 "$app" \
+    || { echo "FAILED: Gatekeeper rejects the app (spctl)"; exit 1; }
   echo "ok: Gatekeeper accepts the app (spctl)"
 else
   echo "SKIPPED: spctl check, unsigned build (no Developer ID certificate)"
@@ -42,6 +53,10 @@ if echo "$out" | grep -qi 'Library not loaded\|dyld'; then
 fi
 echo "ok: bundled comskip starts"
 
+# Something else on the port would answer for the app and hide a dead build.
+if lsof -nP -iTCP:$port -sTCP:LISTEN >/dev/null 2>&1; then
+  echo "FAILED: port $port is already in use before the app started"; exit 1
+fi
 "$app/Contents/MacOS/CouchElephant" >"$work/app.log" 2>&1 &
 pid=$!
 for _ in $(seq 1 90); do
