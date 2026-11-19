@@ -27,7 +27,8 @@ binaries = [(str(tools_bin / (n + exe_suffix)), "bin") for n in wanted]
 missing = [src for src, _ in binaries if not Path(src).is_file()]
 if missing:
     raise SystemExit("missing tools, run fetch_tools.py / build_comskip.sh first: " + ", ".join(missing))
-licences = [(str(p), "bin") for p in tools_bin.glob("LICENSE*")]
+# The licence texts live in the repo so every system ships them.
+licences = [(str(p), "bin") for p in (root / "packaging" / "licenses").glob("LICENSE-*.txt")]
 
 a = Analysis(
     [str(root / "packaging" / "launcher.py")],

@@ -84,7 +84,8 @@ The source for the exact build is at the commit above.
 The Windows, macOS and Linux installers carry three programs, each run as a
 separate process (CouchElephant does not link to them). The exact builds are
 pinned by URL and SHA-256 in `packaging/tools.json`. Their licences sit in the
-install folder's `bin/` as `LICENSE-ffmpeg.txt`.
+install folder's `bin/` as `LICENSE-ffmpeg.txt` and `LICENSE-comskip.txt`
+(copies are kept in `packaging/licenses/`).
 
 - **ffmpeg and ffprobe**, FFmpeg 9.x static builds, GNU General Public
   License, version 3 (the GPL builds, which include x264 and x265).
@@ -96,7 +97,10 @@ install folder's `bin/` as `LICENSE-ffmpeg.txt`.
 - **comskip**, GNU General Public License, version 2. Linux and macOS
   installers carry it built unmodified from the commit named above by
   `packaging/build_comskip.sh`. The Windows installer carries the upstream
-  Windows build 0.82.012 from https://www.kaashoek.com/files/comskip82_012.zip .
+  Windows build 0.82.012 from https://www.kaashoek.com/files/comskip82_012.zip ,
+  whose source is the Comskip repository at commit
+  9900227ae759e631e29abbbce99df6742651cfc5 (the last commit before that build
+  was made, 2022-02-25): https://github.com/erikkaashoek/Comskip/tree/9900227ae759e631e29abbbce99df6742651cfc5 .
 
 **Source offer.** The corresponding source for every program above is public.
 FFmpeg: https://ffmpeg.org/releases/ and the build scripts in the two build

@@ -48,6 +48,21 @@ def _stop(proc: subprocess.Popen) -> None:
         raise SystemExit("server did not stop on terminate") from None
 
 
+def _check_comskip(path: Path) -> None:
+    """comskip only has to start. Its usage exit status is normal; a missing
+    library, a missing file, a hang or silence is not."""
+    try:
+        done = subprocess.run([str(path), "--help"], capture_output=True, timeout=60)
+    except (FileNotFoundError, subprocess.TimeoutExpired) as err:
+        raise SystemExit(f"comskip did not start: {err!r}") from None
+    text = (done.stdout + done.stderr).decode("utf-8", "replace")
+    if done.returncode == 127 or "error while loading shared libraries" in text \
+            or "Library not loaded" in text:
+        raise SystemExit(f"comskip cannot load its libraries (exit {done.returncode}): {text.strip()[:300]}")
+    if not text.strip():
+        raise SystemExit("comskip printed nothing, so it did not really run")
+
+
 def main(exe_arg: str) -> int:
     exe = Path(exe_arg).resolve()
     if not exe.is_file():
@@ -75,9 +90,7 @@ def main(exe_arg: str) -> int:
                               capture_output=True, timeout=60)
         if done.returncode != 0:
             raise SystemExit(f"{name} -version failed")
-    # comskip has no clean --help exit; it only has to start.
-    subprocess.run([str(bin_dir / ("comskip" + suffix)), "--help"],
-                   capture_output=True, timeout=60)
+    _check_comskip(bin_dir / ("comskip" + suffix))
     print("smoke ok")
     return 0
 
