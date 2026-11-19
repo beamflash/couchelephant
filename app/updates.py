@@ -19,7 +19,7 @@ import urllib.request
 from dataclasses import dataclass, field
 
 from . import paths
-from .routes._shared import VERSION
+from .version import VERSION
 
 log = logging.getLogger("couchelephant")
 

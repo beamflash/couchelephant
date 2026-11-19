@@ -6,7 +6,7 @@ from pathlib import Path
 
 root = Path(SPECPATH).parent.parent
 tools_bin = Path(os.environ.get("COUCHELEPHANT_TOOLS", root / "packaging" / "tools")) / "bin"
-version = [line for line in (root / "app" / "routes" / "_shared.py").read_text().splitlines()
+version = [line for line in (root / "app" / "version.py").read_text().splitlines()
            if line.startswith("VERSION = ")][0].split('"')[1]
 
 hidden = [

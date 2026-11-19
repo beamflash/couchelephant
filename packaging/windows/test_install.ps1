@@ -26,6 +26,14 @@ function Hello($port) {
     } catch { return 0 }
 }
 
+function Tray-Survives($what) {
+    # The tray starts after install. A missing file in the frozen build would
+    # kill it at once and nobody would see it, so look again after 10 seconds.
+    Wait-Until "tray to start $what" { Get-Process CouchElephantTray -ErrorAction SilentlyContinue } 30
+    Start-Sleep -Seconds 10
+    Check ($null -ne (Get-Process CouchElephantTray -ErrorAction SilentlyContinue)) "tray still running 10 s after $what"
+}
+
 function Install-It {
     # Not -Wait: that waits for the tray the installer starts, which never ends.
     $p = Start-Process $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=$env:TEMP\ce-setup.log" -PassThru
@@ -56,6 +64,7 @@ try {
     Check ("$($filter.LocalPort)" -eq '8710') 'firewall rule covers port 8710'
     Check (Test-Path (Join-Path $data 'couchelephant.db')) 'database is in ProgramData'
     Check (Test-Path (Join-Path $data 'recordings')) 'recordings folder exists'
+    Tray-Survives 'install'
 
     # The data folder holds the Plex token and secrets: no ordinary user may read it.
     foreach ($dir in @($data, (Join-Path $data 'recordings'), (Join-Path $data 'couchelephant.db'))) {
@@ -75,6 +84,7 @@ try {
     Wait-Until 'service to run after upgrade' { (Get-Service CouchElephant).Status -eq 'Running' } 30
     Wait-Until 'hello after upgrade' { (Hello 8710) -eq 200 }
     Check (Test-Path (Join-Path $data 'upgrade-marker.txt')) 'upgrade keeps the data'
+    Tray-Survives 'the upgrade'
     Check ((Get-CimInstance Win32_Service -Filter "Name='CouchElephant'").StartName -eq 'NT AUTHORITY\LocalService') 'upgrade keeps the service account'
     Check (Test-Path (Join-Path $app 'tray\CouchElephantTray.exe')) 'tray program installed'
     $run = Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Run'

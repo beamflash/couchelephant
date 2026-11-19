@@ -13,7 +13,7 @@ git tag v1.0.0 && git push origin v1.0.0
 tagged `1.0.0`, `1.0`, `1` and `latest`. An image that fails its own tests is
 never published: the release workflow calls the CI workflow and waits for it.
 
-Version numbers follow semver. `VERSION` in `app/routes/_shared.py` is what the
+Version numbers follow semver. `VERSION` in `app/version.py` is what the
 About page shows, so move it in the same commit you tag.
 
 ## Where the image lives

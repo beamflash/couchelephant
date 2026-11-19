@@ -71,6 +71,11 @@ done
 [ "$code" = 200 ] || { cat "$work/app.log"; echo "FAILED: no 200 from /api/tv/hello"; exit 1; }
 echo "ok: /api/tv/hello answers 200"
 
+# The menu bar code runs after the server is up. A crash there would only show later.
+sleep 10
+kill -0 "$pid" 2>/dev/null || { cat "$work/app.log"; echo "FAILED: the app exited within 10 s of starting"; exit 1; }
+echo "ok: app still running 10 s after start"
+
 kill "$pid"
 for _ in $(seq 1 20); do kill -0 "$pid" 2>/dev/null || break; sleep 0.5; done
 echo "ok: app stopped"

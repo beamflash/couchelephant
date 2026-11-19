@@ -89,7 +89,7 @@ jobs:
       - name: Build the installer
         shell: pwsh
         run: |
-          $version = (Select-String -Path app/routes/_shared.py -Pattern '^VERSION = "(.+)"').Matches[0].Groups[1].Value
+          $version = (Select-String -Path app/version.py -Pattern '^VERSION = "(.+)"').Matches[0].Groups[1].Value
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$version" packaging\windows\couchelephant.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
 
@@ -144,7 +144,7 @@ jobs:
 
       - name: Build the packages
         run: |
-          version=$(sed -n 's/^VERSION = "\(.*\)"/\1/p' app/routes/_shared.py)
+          version=$(sed -n 's/^VERSION = "\(.*\)"/\1/p' app/version.py)
           packaging/linux/build_packages.sh "$version" ${{ matrix.deb_arch }} dist/couchelephant dist/linux
           # Two throwaway versions let the install test try an upgrade.
           for v in 9.9.8 9.9.9; do
@@ -248,7 +248,7 @@ jobs:
 
       - name: Build the dmg
         run: |
-          version=$(sed -n 's/^VERSION = "\(.*\)"/\1/p' app/routes/_shared.py)
+          version=$(sed -n 's/^VERSION = "\(.*\)"/\1/p' app/version.py)
           packaging/macos/make_dmg.sh "$version" ${{ matrix.arch }}
 
       - name: Sign the dmg
