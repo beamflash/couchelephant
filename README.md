@@ -62,6 +62,14 @@ It also does several things Plex cannot say at all:
 
 ## What it looks like
 
+### Home
+
+Where CouchElephant DVR shows what it is recording right now, what it recorded
+lately, and what is on now. A recording plays from its start while it is still
+being made.
+
+![Home](docs/images/home.png)
+
 ### The guide
 
 A real two-axis guide. Channels down, time across, both loading more as you
@@ -147,8 +155,6 @@ first matches, before you create it.
 Plex's own settings are on every pass, padding included, with Plex's own
 explanation of each one a hover away.
 
-![Setting explanations](docs/images/record-tooltip.png)
-
 ### When Plex is the problem
 
 CouchElephant can only record from the airings Plex offers it, so it checks
@@ -216,6 +222,13 @@ It asks for the one thing it needs, tests it before saving, and tells you what
 you can leave for later.
 
 ![First run](docs/images/first-run.png)
+
+### CouchElephant DVR settings
+
+Settings, Recording, CouchElephant DVR says whether the recorder can run, which
+tuner it found, and who makes new recordings.
+
+![CouchElephant DVR settings](docs/images/settings-recorder.png)
 
 ### On a phone
 

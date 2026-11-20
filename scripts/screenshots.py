@@ -28,6 +28,15 @@ SCRATCH = tempfile.mkdtemp(prefix="ce-test-shots-")
 os.environ["COUCHELEPHANT_DB"] = os.path.join(SCRATCH, "couchelephant.db")
 os.environ["COUCHELEPHANT_AUTH_DB"] = os.path.join(SCRATCH, "auth.db")
 os.environ["COUCHELEPHANT_LOGOS"] = os.path.join(SCRATCH, "logos")
+# The recorder's folders. Present, so the CouchElephant DVR settings page
+# draws as it does on an install that has them mounted.
+os.environ["COUCHELEPHANT_RECORDINGS"] = os.path.join(SCRATCH, "recordings")
+os.environ["COUCHELEPHANT_LIBRARY"] = os.path.join(SCRATCH, "library")
+os.makedirs(os.environ["COUCHELEPHANT_RECORDINGS"], exist_ok=True)
+os.makedirs(os.environ["COUCHELEPHANT_LIBRARY"], exist_ok=True)
+# Not a real ffmpeg: the recorder only has to find one to count as available,
+# which is what turns Home on. Nothing here records anything.
+os.environ["COUCHELEPHANT_FFMPEG"] = os.path.join(ROOT, "tests", "fake_ffmpeg.py")
 os.environ["COUCHELEPHANT_NO_SYNC_LOOP"] = "1"
 os.environ["COUCHELEPHANT_DEMO_GUIDE"] = "1"
 # Two hours from now, so the grid opens on a full afternoon rather than on
@@ -159,6 +168,37 @@ def _seed_expectations():
                 (pid, sid, title, network, when, precision, int(time.time())))
 
 
+def seed_recordings():
+    """What CouchElephant DVR has made, so Home has cards to show.
+
+    Rows only. No file exists and nothing records; the page just lists what
+    the table says. Invented programmes, on the demo guide's invented channels.
+    """
+    now = int(time.time())
+    hour = 3600
+    rows = [
+        ("demo-rec-live", "recording", "Chiefs at Buccaneers", "Chiefs at Buccaneers",
+         "NFL Football", "41.1", "WQGGDT", now - hour, now + 2 * hour),
+        ("demo-rec-1", "in_plex", "Broncos at Chiefs", "Broncos at Chiefs",
+         "NFL Football", "4.1", "WQBBDT", now - 26 * hour, now - 23 * hour),
+        ("demo-rec-2", "in_plex", "Kansas at Kansas State", "Kansas at Kansas State",
+         "College Football", "5.1", "KQCCDT", now - 50 * hour, now - 47 * hour),
+        ("demo-rec-3", "moving", "Royals at Tigers", "Royals at Tigers",
+         "MLB Baseball", "9.1", "WQDDDT", now - 5 * hour, now - 2 * hour),
+        ("demo-rec-4", "in_plex", "Chiefs at Raiders", "Chiefs at Raiders",
+         "NFL Football", "41.1", "WQGGDT", now - 76 * hour, now - 73 * hour),
+    ]
+    with db.tx() as c:
+        for uid, state, title, show, section, vcn, call, b, e in rows:
+            c.execute(
+                "INSERT INTO recordings (uid, kind, state, title, show_title, "
+                "ptype, section, channel_vcn, channel_title, begins_at, ends_at, "
+                "starts_at, stops_at, started_at, ended_at, source) "
+                "VALUES (?, 'recording', ?, ?, ?, 'episode', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'demo')",
+                (uid, state, title, show, section, vcn, call, b, e, b, e, b,
+                 None if state == "recording" else e))
+
+
 def seed_destinations():
     """Three alert destinations, so the Notifications shot is not an empty page.
 
@@ -207,8 +247,15 @@ def main():
                                    timezone_id="UTC", color_scheme="dark")
         page = desk.new_page()
 
+        # ---- home ----
+        seed_recordings()
+        page.goto("/home")
+        page.wait_for_selector(".tvhead", timeout=20000)
+        page.wait_for_timeout(1200)
+        shot(page, "home")
+
         # ---- the guide ----
-        page.goto("/")
+        page.goto("/guide")
         page.wait_for_selector(".gprog", timeout=20000)
         page.wait_for_timeout(700)
         shot(page, "guide-dark")
@@ -216,7 +263,7 @@ def main():
         light = browser.new_context(base_url=base, viewport={"width": 1440, "height": 900},
                                     timezone_id="UTC", color_scheme="light")
         lp = light.new_page()
-        lp.goto("/")
+        lp.goto("/guide")
         lp.wait_for_selector(".gprog", timeout=20000)
         lp.wait_for_timeout(700)
         shot(lp, "guide-light")
@@ -242,6 +289,7 @@ def main():
         # ---- the schedule ----
         page.goto("/recordings")
         page.wait_for_selector(".agrow", timeout=20000)
+        page.wait_for_timeout(1000)
         shot(page, "schedule-agenda")
         page.click('[data-view="calendar"]')
         page.wait_for_selector("#calgrid .calday", timeout=20000)
@@ -271,7 +319,7 @@ def main():
         page.wait_for_timeout(200)
 
         # ---- passes, with one open ----
-        page.click('.subtab[data-sub="passes"]')
+        page.click('.subtab[data-sub="sports"]')
         page.wait_for_selector(".passrow", timeout=20000)
         page.click(".passrow .pmeta")
         page.wait_for_selector(".passdetail table", timeout=20000)
@@ -295,13 +343,6 @@ def main():
         page.wait_for_timeout(600)
         shot(page, "smart-filter")
 
-        page.wait_for_selector('[data-set="comskipMethod"]', timeout=25000)
-        page.locator('label.optrow:has([data-set="comskipMethod"]) .opthelp').hover()
-        page.wait_for_selector(".tipbox.on", timeout=10000)
-        page.wait_for_timeout(300)
-        shot(page, "record-tooltip")
-        page.keyboard.press("Escape")
-
         # ---- settings ----
         page.goto("/settings")
         page.wait_for_selector("#setnav .nav-item", timeout=20000)
@@ -309,6 +350,14 @@ def main():
         # inside that window shows dots over "Guide".
         page.wait_for_timeout(900)
         shot(page, "settings-plex")
+        page.click('.nav-item[data-sec="recording"]')
+        page.click('#settabs .tab[data-tab="recorder"]')
+        page.wait_for_selector("#recform", state="visible", timeout=20000)
+        page.wait_for_timeout(1200)
+        # The demo Plex cannot name a tuner, and its refusal prints here. That is
+        # the demo's gap, not the product's, so the sentence is blanked.
+        page.evaluate("document.getElementById('rectunersay').textContent = ''")
+        shot(page, "settings-recorder")
         page.click('.nav-item[data-sec="accounts"]')
         page.wait_for_timeout(300)
         shot(page, "settings-accounts")
@@ -335,7 +384,8 @@ def main():
         db.set_setting("plex_url", "")
         db.set_setting("plex_token", "")
         page.goto("/")
-        page.wait_for_selector("#wform", timeout=20000)
+        page.wait_for_selector("#wsignin .psi-go", timeout=20000)
+        page.wait_for_timeout(500)
         shot(page, "first-run")
         db.set_setting("plex_url", plex_url)
         db.set_setting("plex_token", "demo")
@@ -346,7 +396,7 @@ def main():
                                     device_scale_factor=2, timezone_id="UTC",
                                     color_scheme="dark")
         pp = phone.new_page()
-        pp.goto("/")
+        pp.goto("/guide")
         pp.wait_for_selector(".gprog", timeout=20000)
         pp.wait_for_timeout(700)
         shot(pp, "mobile-guide")
