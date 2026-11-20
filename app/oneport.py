@@ -13,6 +13,7 @@ control and shutdown would all be one step removed.
 TLS is offered only while Use away from home is on (app.tls.context)."""
 import asyncio
 import errno
+import ipaddress
 import logging
 import re
 import select
@@ -38,6 +39,7 @@ IS_WINDOWS = sys.platform == "win32"
 NO_READER = False            # tests: act like a loop with no add_reader
 HEADER_SECONDS = 10          # after hand-over, a request's headers must be whole by then
 MAX_CONNECTIONS = None       # tests set it; None means from the descriptor limit
+PER_ADDRESS = 16             # one outsider address (IPv6: its /64) may hold this many
 MAX_WATCHED = 500            # select() on Windows takes 512 at most
 _SLEEP_ERRNOS = {errno.EMFILE, errno.ENFILE, errno.ENOBUFS}
 
@@ -55,6 +57,19 @@ def connection_cap(soft=None) -> int:
     return max(16, min(soft // 2, 1000))
 
 
+def _peer_key(host: str) -> str:
+    """What one outsider is counted by: the address, or the /64 for IPv6."""
+    try:
+        addr = ipaddress.ip_address(host.split("%")[0])
+    except ValueError:
+        return host
+    if addr.version == 6 and addr.ipv4_mapped:
+        addr = addr.ipv4_mapped
+    if addr.version == 6:
+        return str(ipaddress.ip_network((addr, 64), strict=False))
+    return str(addr)
+
+
 def _with_header_deadline(base):
     """The protocol uvicorn would use, plus a deadline: after a request is done
     (or the connection is new) the next one's headers must be complete within
@@ -64,20 +79,23 @@ def _with_header_deadline(base):
 
     class Guarded(base):
         _timer = None
+        _on_lost = None
 
         def _arm(self):
             if self._timer:
                 self._timer.cancel()
-            seen = getattr(self, "cycle", None)
             self._timer = asyncio.get_running_loop().call_later(
-                HEADER_SECONDS, self._header_deadline, seen)
+                HEADER_SECONDS, self._header_deadline)
 
-        def _header_deadline(self, seen):
+        def _header_deadline(self):
             self._timer = None
             t = getattr(self, "transport", None)
             if t is None or t.is_closing() or t.get_protocol() is not self:
                 return
-            if getattr(self, "cycle", None) is seen:     # no new request began
+            cycle = getattr(self, "cycle", None)
+            # Only an idle connection: a response still going (a pipelined
+            # stream) is never cut.
+            if cycle is None or cycle.response_complete:
                 t.close()
 
         def connection_made(self, transport):
@@ -91,6 +109,9 @@ def _with_header_deadline(base):
         def connection_lost(self, exc):
             if self._timer:
                 self._timer.cancel()
+            if self._on_lost:
+                self._on_lost()
+                self._on_lost = None
             super().connection_lost(exc)
 
     return Guarded
@@ -371,6 +392,8 @@ class _Listener:
         self.loop = asyncio.get_running_loop()
         self.closed = False
         self.pending: set = set()
+        self.out: dict = {}                  # outsider address -> connections
+        self.out_total = 0
         sock.setblocking(False)
         sock.listen(server.config.backlog)
         self.task = self.loop.create_task(self._accept())
@@ -387,16 +410,43 @@ class _Listener:
                 if _accept_failed(e):
                     await asyncio.sleep(0.1)   # out of descriptors: do not spin
                 continue
-            if len(self.pending) + len(self.server.server_state.connections) >= (
-                    MAX_CONNECTIONS or connection_cap()):
-                conn.close()                  # full: keep room for the ones we have
+            ok, key = self._admit(conn)
+            if not ok:
+                conn.close()                  # an outsider past a limit
                 continue
-            t = self.loop.create_task(self._hand_over(conn, time.monotonic()))
+            t = self.loop.create_task(self._hand_over(conn, time.monotonic(), key))
             self.pending.add(t)
             t.add_done_callback(self.pending.discard)
 
-    async def _hand_over(self, conn, accepted):
+    def _admit(self, conn):
+        """(ok, key). Only outsiders are counted: one of them must not use up
+        the room a home device (a TV, Plex) needs. Decided here, from the
+        socket's own peer address. key is None for a home peer."""
+        try:
+            host = conn.getpeername()[0]
+        except OSError:
+            return False, None
+        if exposure.peer_is_home(host):
+            return True, None
+        key = _peer_key(host)
+        if (self.out_total >= (MAX_CONNECTIONS or connection_cap())
+                or self.out.get(key, 0) >= PER_ADDRESS):
+            return False, None
+        self.out[key] = self.out.get(key, 0) + 1
+        self.out_total += 1
+        return True, key
+
+    def _release(self, key):
+        n = self.out.get(key, 0) - 1
+        if n > 0:
+            self.out[key] = n
+        else:
+            self.out.pop(key, None)
+        self.out_total = max(0, self.out_total - 1)
+
+    async def _hand_over(self, conn, accepted, key=None):
         ssl_ctx, was_tls = None, False
+        kept = False                        # the protocol took over the count
         try:
             conn.setblocking(False)
             first = await peek_first_byte(self.loop, conn, accepted + FIRST_BYTE_SECONDS)
@@ -412,10 +462,14 @@ class _Listener:
                 if tls._challenge:              # an order is running: look at the hello
                     hello = await peek_hello(self.loop, conn, accepted + FIRST_BYTE_SECONDS)
                     ssl_ctx = tls.challenge_for(hello) or ssl_ctx
-            await self.loop.connect_accepted_socket(
+            transport, proto = await self.loop.connect_accepted_socket(
                 self.server.create_protocol, conn, ssl=ssl_ctx,
                 ssl_handshake_timeout=HANDSHAKE_SECONDS if ssl_ctx else None,
                 ssl_shutdown_timeout=SHUTDOWN_SECONDS if ssl_ctx else None)
+            if key is not None and not transport.is_closing() \
+                    and hasattr(proto, "_on_lost"):
+                proto._on_lost = lambda: self._release(key)
+                kept = True
         except asyncio.CancelledError:
             conn.close()
             raise
@@ -425,6 +479,9 @@ class _Listener:
             else:
                 log.debug("connection dropped: %s", e)
             conn.close()
+        finally:
+            if key is not None and not kept:
+                self._release(key)
 
     def close(self):
         self.closed = True

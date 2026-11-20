@@ -648,6 +648,15 @@ def test_a_failed_order_is_retried_every_retry_wait(monkeypatch):
     assert calls == ["tv.example.com"]
 
 
+def test_a_failed_renewal_of_a_valid_cert_is_retried_every_retry_wait(monkeypatch):
+    calls = _failed_setup(monkeypatch, acme_tls.RETRY_WAIT + 5)
+    soon = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=3)
+    monkeypatch.setattr(acme_tls, "valid_until", lambda name: soon)
+    acme_tls._last_renew[0] = time.monotonic() - 60
+    acme_tls.renew_daily()
+    assert calls == ["tv.example.com"]
+
+
 def test_a_failed_order_waits_out_the_retry_time(monkeypatch):
     calls = _failed_setup(monkeypatch, 60)
     acme_tls._last_renew[0] = time.monotonic() - 60

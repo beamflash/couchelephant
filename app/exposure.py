@@ -271,8 +271,8 @@ def client_address(request):
         return _NOBODY
     trusted = _trusted()
     if not trusted or not _is_trusted(peer, trusted):
-        if request.headers.get("x-forwarded-for") is not None or \
-                request.headers.get("forwarded") is not None:
+        if any(request.headers.get(h) is not None
+               for h in ("x-forwarded-for", "forwarded", "x-real-ip")):
             _forwarded[:] = [str(peer), time.time()]
             return _NOBODY
         return peer
@@ -291,8 +291,22 @@ def client_address(request):
     return hops[0]
 
 
+def peer_is_home(host) -> bool:
+    """For a socket's peer address, before any request: the same rules as
+    is_home, and a trusted proxy counts as home."""
+    addr = _parse(host)
+    if addr is None:
+        return False
+    if _is_trusted(addr, _trusted()):
+        return True
+    return _addr_is_home(addr)
+
+
 def is_home(request) -> bool:
-    addr = client_address(request)
+    return _addr_is_home(client_address(request))
+
+
+def _addr_is_home(addr) -> bool:
     if addr == _NOBODY:
         return False
     addrs, nets_never = _never_home()

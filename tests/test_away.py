@@ -591,7 +591,8 @@ def test_a_flood_of_made_up_names_cannot_push_out_a_locked_account(monkeypatch):
     ("post", "/api/backingstore/run"), ("get", "/api/backingstore/config"),
     ("post", "/api/update/apply"),
     ("get", "/api/tv/devices"), ("post", "/api/tv/devices/approve"),
-    ("post", "/api/tv/devices/1/delete"), ("get", "/api/connect.svg")])
+    ("post", "/api/tv/devices/1/delete"), ("get", "/api/connect.svg"),
+    ("get", "/api/recorder/library-suggest")])
 def test_admin_apis_are_not_found_from_outside_even_signed_in(method, path):
     uid = _local_with_account()
     _away()

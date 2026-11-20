@@ -1,4 +1,5 @@
 """One port, HTTP and HTTPS, on a real server."""
+import ipaddress
 import json
 import socket
 import ssl
@@ -70,9 +71,9 @@ async def echo(scope, receive, send):
                 await send({"type": "lifespan.shutdown.complete"})
                 return
     body = json.dumps({"client": list(scope["client"]), "scheme": scope["scheme"]})
-    if scope["path"] == "/stream":
+    if scope["path"] in ("/stream", "/huge"):
         await send({"type": "http.response.start", "status": 200, "headers": []})
-        for _ in range(5):
+        for _ in range(5 if scope["path"] == "/stream" else 150):
             await send({"type": "http.response.body", "body": b"x" * 100000,
                         "more_body": True})
         await send({"type": "http.response.body", "body": b""})
@@ -385,13 +386,26 @@ def test_a_slow_but_finishing_request_and_keep_alive_still_work(monkeypatch):
             assert c.get(r.url()).status_code == 200
 
 
-def test_connections_past_the_cap_are_refused_at_once(monkeypatch):
+def _outsiders(monkeypatch):
+    """127.0.0.1 counts as outside here (as a Docker gateway would); other
+    loopback addresses stay home."""
+    monkeypatch.setattr(exposure, "_never_home",
+                        lambda: ({ipaddress.ip_address("127.0.0.1")}, []))
+
+
+def _dial(port, source=None):
+    return socket.create_connection(("127.0.0.1", port),
+                                    source_address=(source, 0) if source else None)
+
+
+def test_outsiders_past_the_cap_are_refused_at_once(monkeypatch):
+    _outsiders(monkeypatch)
     monkeypatch.setattr(oneport, "MAX_CONNECTIONS", 5)
     with Running() as r:
-        held = [socket.create_connection(("127.0.0.1", r.port)) for _ in range(5)]
+        held = [_dial(r.port) for _ in range(5)]
         try:
             time.sleep(0.3)
-            extra = socket.create_connection(("127.0.0.1", r.port))
+            extra = _dial(r.port)
             extra.settimeout(2)
             assert extra.recv(10) == b""                 # closed by the server
             extra.close()
@@ -400,6 +414,63 @@ def test_connections_past_the_cap_are_refused_at_once(monkeypatch):
                 h.close()
         time.sleep(0.3)
         assert httpx.get(r.url(), timeout=3).status_code == 200      # room again
+
+
+def test_a_home_peer_still_connects_when_outsiders_fill_their_share(monkeypatch):
+    _outsiders(monkeypatch)
+    monkeypatch.setattr(oneport, "MAX_CONNECTIONS", 5)
+    with Running() as r:
+        held = [_dial(r.port) for _ in range(5)]
+        try:
+            time.sleep(0.3)
+            home = _dial(r.port, "127.0.0.2")
+            home.settimeout(5)
+            home.sendall(b"GET /api/tv/hello HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+            assert home.recv(100).startswith(b"HTTP/1.1 ")
+            home.close()
+        finally:
+            for h in held:
+                h.close()
+
+
+def test_one_outsider_address_cannot_pass_sixteen(monkeypatch):
+    _outsiders(monkeypatch)
+    monkeypatch.setattr(oneport, "MAX_CONNECTIONS", 200)
+    with Running() as r:
+        held = [_dial(r.port) for _ in range(16)]
+        try:
+            time.sleep(0.3)
+            extra = _dial(r.port)
+            extra.settimeout(2)
+            assert extra.recv(10) == b""                 # that address is full
+            extra.close()
+        finally:
+            for h in held:
+                h.close()
+
+
+def test_an_ipv6_outsider_is_counted_by_its_sixty_four():
+    a = oneport._peer_key("2001:db8:1:2:aaaa::1")
+    assert a == oneport._peer_key("2001:db8:1:2:bbbb::9")
+    assert a != oneport._peer_key("2001:db8:1:3::1")
+    assert oneport._peer_key("192.0.2.7") == "192.0.2.7"
+
+
+def test_a_pipelined_request_that_streams_past_the_deadline_is_not_closed(monkeypatch):
+    monkeypatch.setattr(oneport, "HEADER_SECONDS", 1)
+    with Running(echo) as r:
+        s = _dial(r.port)
+        try:
+            one = b"GET / HTTP/1.1\r\nHost: x\r\n\r\n"
+            s.sendall(one + b"GET /huge HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+            s.settimeout(10)
+            time.sleep(2.5)              # past the deadline, reader not draining
+            got = b""
+            while chunk := s.recv(65536):
+                got += chunk
+            assert len(got) > 15_000_000   # the whole stream arrived
+        finally:
+            s.close()
 
 
 def test_the_cap_sits_below_the_descriptor_limit():

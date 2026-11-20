@@ -407,7 +407,7 @@ def _failed_and_due() -> bool:
     """A failed order is tried again every RETRY_WAIT, not once a day."""
     name = domain()
     return bool(name and (db.get_setting("away_domain_error") or "")
-                and not valid_until(name) and too_soon(name) == 0)
+                and too_soon(name) == 0)
 
 
 def renew_daily() -> None:

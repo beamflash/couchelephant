@@ -200,7 +200,8 @@ def pairing_open_to_outsiders(request) -> bool:
 _OUT_NEVER = ("/setup", "/welcome", "/settings", "/partial/settings", "/api/away",
               "/docs", "/openapi.json", "/redoc",
               "/api/import", "/api/export", "/api/backups", "/api/backingstore",
-              "/api/update/apply", "/api/tv/devices", "/api/connect.svg")
+              "/api/update/apply", "/api/tv/devices", "/api/connect.svg",
+              "/api/recorder/library-suggest")
 
 
 def _out_never(path):

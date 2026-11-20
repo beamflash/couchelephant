@@ -20,12 +20,14 @@ def _pinned(monkeypatch):
     exposure.clear_cache()
 
 
-def req(peer, xff=None, forwarded=None):
+def req(peer, xff=None, forwarded=None, real_ip=None):
     """xff may be one line or a list of lines."""
     lines = [xff] if isinstance(xff, str) else (xff or [])
     raw = [(b"x-forwarded-for", x.encode()) for x in lines]
     if forwarded:
         raw.append((b"forwarded", forwarded.encode()))
+    if real_ip:
+        raw.append((b"x-real-ip", real_ip.encode()))
     return SimpleNamespace(client=SimpleNamespace(host=peer), headers=Headers(raw=raw))
 
 
@@ -50,6 +52,12 @@ def test_a_forward_header_from_an_untrusted_peer_is_never_home():
     assert not exposure.is_home(req("192.168.1.1", "192.168.1.9"))
     assert not exposure.is_home(req("127.0.0.1", forwarded="for=8.8.8.8"))
     assert exposure.is_home(req("192.168.1.1"))          # no header: the peer
+
+
+def test_x_real_ip_from_an_untrusted_peer_is_never_home():
+    assert not exposure.is_home(req("192.168.1.1", real_ip="192.168.1.9"))
+    assert not exposure.is_home(req("127.0.0.1", real_ip="8.8.8.8"))
+    assert exposure.untrusted_forward() == "127.0.0.1"
 
 
 def test_an_untrusted_forward_is_remembered_for_the_self_check():
