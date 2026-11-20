@@ -6,7 +6,7 @@ Allow on plex.tv, `load_resources()` is the account's server list.
 """
 import json
 import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 TOKEN = "tok-secret-0123456789"
 
@@ -22,9 +22,17 @@ class State:
         self.resources = []
         self.hang = 0           # how many requests stall before answering
         self.fail_status = None  # answer every request with this status
+        self.raw = None         # if set, every GET answers this JSON
+        self.valid_tokens = {TOKEN}  # account tokens /resources accepts
 
     def approve(self, pin_id, token=TOKEN):
+        if pin_id not in self.pins:
+            raise KeyError(f"fake plex.tv has no pin {pin_id}")
         self.pins[pin_id]["authToken"] = token
+        self.valid_tokens.add(token)
+
+    def expire(self, pin_id):
+        self.pins[pin_id]["expired"] = True
 
     def load_resources(self, resources):
         self.resources = list(resources)
@@ -68,6 +76,8 @@ class Handler(BaseHTTPRequestHandler):
         if STATE.hang > 0:
             STATE.hang -= 1
             threading.Event().wait(2)
+        if STATE.raw is not None and method == "GET":
+            return self._send(STATE.raw)
         if STATE.fail_status:
             return self._send({"errors": [{"message": "nope"}]}, STATE.fail_status)
         if method == "POST" and u.path == "/api/v2/pins":
@@ -79,11 +89,13 @@ class Handler(BaseHTTPRequestHandler):
         if method == "GET" and u.path.startswith("/api/v2/pins/"):
             pid = int(u.path.rsplit("/", 1)[1])
             pin = STATE.pins.get(pid)
-            if pin is None:
+            if pin is None or pin.get("expired"):
                 return self._send({"errors": [{"message": "not found"}]}, 404)
             return self._send({"id": pid, "code": pin["code"],
                                "authToken": pin["authToken"]})
         if method == "GET" and u.path == "/api/v2/resources":
+            if self.headers.get("X-Plex-Token") not in STATE.valid_tokens:
+                return self._send({"errors": [{"message": "unauthorized"}]}, 401)
             return self._send(STATE.resources)
         return self._send({"error": "gone"}, 404)
 
@@ -96,6 +108,10 @@ class Handler(BaseHTTPRequestHandler):
 
 def start():
     """Run the fake on a free localhost port. Returns (url, stop)."""
-    srv = HTTPServer(("127.0.0.1", 0), Handler)
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
-    return f"http://127.0.0.1:{srv.server_address[1]}", srv.shutdown
+
+    def stop():
+        srv.shutdown()
+        srv.server_close()
+    return f"http://127.0.0.1:{srv.server_address[1]}", stop

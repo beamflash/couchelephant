@@ -89,3 +89,48 @@ def test_token_never_logged(tv, caplog):
         plextv.servers(fake.TOKEN)
     assert fake.TOKEN not in caplog.text
     assert "srv-token-abc" not in caplog.text
+
+
+def test_server_repr_hides_tokens(tv):
+    tv.load_resources([fake.server("Den", "c", [("http://h:1", True, False)])])
+    text = repr(plextv.servers(fake.TOKEN))
+    assert fake.TOKEN not in text and "srv-token-abc" not in text
+
+
+def test_wrong_shape_json_is_a_plextv_error(tv):
+    pin = plextv.create_pin()
+    tv.raw = ["not", "a", "dict"]
+    with pytest.raises(plextv.PlexTvError):
+        plextv.check_pin(pin.id)
+    tv.raw = {"not": "a list"}
+    with pytest.raises(plextv.PlexTvError):
+        plextv.servers(fake.TOKEN)
+
+
+def test_non_dict_resource_entries_are_skipped(tv):
+    den = fake.server("Den", "c", [])
+    den["connections"] = ["junk"]
+    tv.load_resources(["junk", 3, den])
+    assert [s.name for s in plextv.servers(fake.TOKEN)] == ["Den"]
+
+
+def test_expired_pin_has_its_own_message(tv):
+    pin = plextv.create_pin()
+    tv.expire(pin.id)
+    with pytest.raises(plextv.PlexTvError) as e:
+        plextv.check_pin(pin.id)
+    assert str(e.value) == "That code has expired. Get a new one."
+    assert e.value.status == 404
+
+
+def test_rejected_token_has_its_own_message(tv):
+    with pytest.raises(plextv.PlexTvError) as e:
+        plextv.servers("wrong-token")
+    assert str(e.value) == "Plex did not accept the sign-in. Sign in again."
+    assert e.value.status == 401
+    assert "wrong-token" not in str(e.value)
+
+
+def test_approve_unknown_pin_is_clear(tv):
+    with pytest.raises(KeyError):
+        tv.approve(999999)

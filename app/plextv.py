@@ -14,10 +14,17 @@ from .version import VERSION
 
 BASE = os.environ.get("COUCHELEPHANT_PLEXTV_URL", "https://plex.tv").rstrip("/")
 TIMEOUT = 10.0
+_UNREADABLE = "plex.tv sent an answer I could not read."
 
 
 class PlexTvError(Exception):
-    """Something went wrong talking to plex.tv. The message suits the page."""
+    """Something went wrong talking to plex.tv. The message suits the page.
+
+    `status` is the HTTP status when plex.tv answered, else None."""
+
+    def __init__(self, message, status=None):
+        super().__init__(message)
+        self.status = status
 
 
 @dataclass
@@ -38,7 +45,7 @@ class Connection:
 class PlexServer:
     name: str
     client_id: str
-    access_token: str
+    access_token: str = field(repr=False)
     connections: list = field(default_factory=list)
 
 
@@ -54,7 +61,7 @@ def _headers(token=None):
     return h
 
 
-def _call(method, path, token=None, params=None):
+def _call(method, path, token=None, params=None, by_status=None):
     try:
         r = httpx.request(method, BASE + path, params=params,
                           headers=_headers(token), timeout=TIMEOUT)
@@ -63,25 +70,32 @@ def _call(method, path, token=None, params=None):
     except httpx.HTTPError:
         raise PlexTvError("Could not reach plex.tv.") from None
     if r.status_code >= 400:
-        raise PlexTvError(f"plex.tv answered with an error ({r.status_code}).")
+        msg = (by_status or {}).get(r.status_code)
+        raise PlexTvError(msg or f"plex.tv answered with an error ({r.status_code}).",
+                          r.status_code)
     try:
         return r.json()
     except ValueError:
-        raise PlexTvError("plex.tv sent an answer I could not read.") from None
+        raise PlexTvError(_UNREADABLE) from None
 
 
 def create_pin() -> Pin:
     d = _call("POST", "/api/v2/pins", params={"strong": "false"})
     try:
+        if not isinstance(d, dict):
+            raise TypeError
         return Pin(int(d["id"]), str(d["code"]),
                    int(time.time()) + int(d.get("expiresIn") or 900))
     except (KeyError, TypeError, ValueError):
-        raise PlexTvError("plex.tv sent an answer I could not read.") from None
+        raise PlexTvError(_UNREADABLE) from None
 
 
 def check_pin(pin_id: int):
     """The account token once the user has approved the PIN, else None."""
-    d = _call("GET", f"/api/v2/pins/{int(pin_id)}")
+    d = _call("GET", f"/api/v2/pins/{int(pin_id)}",
+              by_status={404: "That code has expired. Get a new one."})
+    if not isinstance(d, dict):
+        raise PlexTvError(_UNREADABLE)
     return d.get("authToken") or None
 
 
@@ -91,14 +105,19 @@ def _rank(c: Connection):
 
 def servers(token: str) -> list:
     d = _call("GET", "/api/v2/resources", token=token,
-              params={"includeHttps": "1", "includeRelay": "1"})
+              params={"includeHttps": "1", "includeRelay": "1"},
+              by_status={401: "Plex did not accept the sign-in. Sign in again."})
+    if not isinstance(d, list):
+        raise PlexTvError(_UNREADABLE)
     out = []
-    for r in d if isinstance(d, list) else []:
+    for r in d:
+        if not isinstance(r, dict):
+            continue
         if "server" not in (r.get("provides") or "").split(","):
             continue
         conns = [Connection(c.get("uri", ""), bool(c.get("local")),
                             bool(c.get("relay")))
-                 for c in r.get("connections") or []]
+                 for c in r.get("connections") or [] if isinstance(c, dict)]
         conns.sort(key=_rank)
         out.append(PlexServer(r.get("name", ""), r.get("clientIdentifier", ""),
                               r.get("accessToken", ""), conns))
