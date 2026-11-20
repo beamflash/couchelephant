@@ -584,6 +584,34 @@
             {% endif %}
           </div>
         </form>
+
+        <h3>Away from home</h3>
+        <div id="away" data-find="away from home outside internet remote travel port forward"
+             data-on="{{ '1' if settings.away_mode == '1' else '0' }}">
+          <label class="row">
+            <input type="checkbox" id="awayon" {{ 'checked' if settings.away_mode == '1' }}>
+            <span>Use away from home</span>
+          </label>
+          <span class="help">Lets your phone and TVs reach this server from anywhere. People
+            outside your home network must sign in first, and Settings stays home only.</span>
+          <div id="awaymsg" class="banner bad" hidden></div>
+          <form id="awayfix" hidden autocomplete="off">
+            <div class="field" id="awayuserbox">
+              <label for="awayuser">Username</label>
+              <input id="awayuser" autocomplete="off">
+            </div>
+            <div class="field" id="awayselbox" hidden>
+              <label for="awaysel">Account</label>
+              <select id="awaysel"></select>
+            </div>
+            <div class="field">
+              <label for="awaypw">Password</label>
+              <input id="awaypw" type="password" autocomplete="new-password">
+            </div>
+            <div class="row"><button class="primary" id="awayfixgo">Make it</button></div>
+          </form>
+          <div id="awaycheck" hidden></div>
+        </div>
       </section>
 
       <section data-sec="accounts" data-tab="people" data-tab-label="People" hidden>

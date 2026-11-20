@@ -29,7 +29,7 @@ from tests import fake_plex, fake_tuner, isolation  # noqa: E402
 
 isolation.assert_isolated()                      # before anything is imported
 
-from app import adskip, auth, db, recorder, sync  # noqa: E402
+from app import adskip, auth, db, ratelimit, recorder, sync  # noqa: E402
 
 
 def pytest_sessionfinish(session, exitstatus):
@@ -78,6 +78,7 @@ def clean_db(plex_url):
     db.set_setting("plex_url", plex_url)
     db.set_setting("plex_token", "test-token")
     db.set_setting("dry_run", "0")
+    ratelimit.reset()
     db.set_setting("auth_mode", "none")
     # The guide is drawn from the server's configured timezone and positioned
     # by the browser's clock. They have to agree, or the grid asks for a window

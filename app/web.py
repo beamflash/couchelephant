@@ -7,7 +7,7 @@ import time
 import urllib.parse
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import (
@@ -17,6 +17,7 @@ from . import (
     backingstore,
     backups,
     db,
+    exposure,
     handover,
     overtime,
     passes,
@@ -69,7 +70,7 @@ _OPEN_PREFIX = ("/static/",)
 # keep the guide, the schedule and the passes, which is what the app is for.
 _ADMIN_PREFIX = ("/settings", "/api/backups", "/api/backingstore", "/api/import",
                  "/api/export", "/api/tv/devices", "/api/update/apply",
-                 "/api/connect.svg")
+                 "/api/connect.svg", "/api/away")
 
 
 def _device_may(path):
@@ -169,6 +170,64 @@ async def _auth_gate(request: Request, call_next):
         return JSONResponse({"ok": False, "error": "sign in required"}, status_code=401)
     return RedirectResponse(where, status_code=303)
 
+
+# Away from home. With the switch on, someone outside the home network gets
+# the sign-in page, pairing, and video links that carry their own pass. Not
+# the setup or settings pages, not even signed in, and not the API docs.
+_OUT_EXACT = frozenset(("/login", "/favicon.ico", "/api/tv/hello", "/api/tv/pair",
+                        "/api/tv/pair/poll"))
+_OUT_NEVER = ("/setup", "/welcome", "/settings", "/partial/settings", "/api/away",
+              "/docs", "/openapi.json", "/redoc")
+
+
+def _out_never(path):
+    return any(path == p or path.startswith(p + "/") or
+               (p == "/settings" and path.startswith(p)) for p in _OUT_NEVER)
+
+
+@app.middleware("http")
+async def _away_gate(request: Request, call_next):
+    """Registered after the sign-in gate, so it runs before it."""
+    path = request.url.path
+    if not exposure.away_on() or exposure.is_home(request):
+        return await call_next(request)
+    if _out_never(path):
+        return PlainTextResponse("Not found", status_code=404)
+    if path in _OUT_EXACT or path.startswith(_OPEN_PREFIX):
+        return await call_next(request)
+    if _device_may(path) and tv.device_for(request):
+        return await call_next(request)
+    if path.startswith("/hlsk/") and tv.stream_path_ok(path):
+        return await call_next(request)
+    if current_user(request):
+        return await call_next(request)
+    if path.startswith("/api/") or path.startswith("/partial/") or auth.mode() == "none":
+        return JSONResponse({"ok": False, "error": "sign in required"}, status_code=401)
+    return RedirectResponse("/login", status_code=303)
+
+
+# What the pages need and no more: their own scripts and styles (some are
+# inline), pictures from here, from data: and from blob:, video from blob:.
+CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; "
+       "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
+       "media-src 'self' blob:; connect-src 'self'; worker-src 'self' blob:; "
+       "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'")
+
+
+@app.middleware("http")
+async def _headers(request: Request, call_next):
+    """Outermost, so every answer carries them, a refusal included."""
+    resp = await call_next(request)
+    h = resp.headers
+    h["X-Content-Type-Options"] = "nosniff"
+    h["X-Frame-Options"] = "SAMEORIGIN"   # the player frames the guide
+    h["Referrer-Policy"] = "same-origin"
+    h["Content-Security-Policy"] = CSP
+    if request.url.scheme == "https":
+        h["Strict-Transport-Security"] = "max-age=31536000"
+    if "server" in h:
+        del h["server"]
+    return resp
 
 
 # ---------- lifecycle ----------

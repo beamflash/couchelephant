@@ -15,6 +15,7 @@ from .. import (
     auth,
     cf_access,
     db,
+    exposure,
     handover,
     health,
     notify,
@@ -341,6 +342,8 @@ def settings_auth(request: Request, auth_mode: str = Form("none"),
     Cloudflare Access can still reach the box on the LAN and switch back.
     """
     mode = auth_mode if auth_mode in auth.MODES else "none"
+    if mode == "none" and exposure.away_on():
+        db.set_setting("away_mode", "0")     # nothing would guard the way in
     if mode == "cloudflare":
         ok, detail = cf_access.check(cf_team_domain.strip(), cf_aud.strip())
         if not ok:
@@ -350,6 +353,97 @@ def settings_auth(request: Request, auth_mode: str = Form("none"),
     db.set_setting("cf_aud", cf_aud.strip())
     db.set_setting("auth_mode", mode)
     return RedirectResponse("/settings", status_code=303)
+
+
+def _away_blocker():
+    """Why the switch may not turn on yet, or None."""
+    mode = auth.mode()
+    if mode == "cloudflare":
+        return None
+    if mode == "none" or auth.user_count() == 0:
+        return {"ok": False, "fix": "make_account",
+                "error": "Make an account first. Away from home needs a sign-in."}
+    bare = [{"id": u["id"], "username": u["username"]}
+            for u in auth.list_users() if not u["has_password"]]
+    if bare:
+        names = ", ".join(u["username"] for u in bare)
+        return {"ok": False, "fix": "set_passwords", "users": bare,
+                "error": f"Give a password to {names} first."}
+    return None
+
+
+@router.post("/settings/away")
+def settings_away(on: str = Form("0")):
+    """The Use away from home switch. It will not turn on while a way in
+    from outside has no password."""
+    if on != "1":
+        db.set_setting("away_mode", "0")
+        return {"ok": True}
+    blocked = _away_blocker()
+    if blocked:
+        return blocked
+    db.set_setting("away_mode", "1")
+    return {"ok": True}
+
+
+@router.post("/settings/away/account")
+def settings_away_account(username: str = Form(""), password: str = Form("")):
+    """The fix for a switch with no sign-in: Local accounts on, and the first
+    account made, with this browser signed in to it."""
+    if auth.mode() == "cloudflare" or (auth.mode() == "local" and auth.user_count()):
+        return JSONResponse({"ok": False, "error": "There is already a way to sign in."})
+    try:
+        uid = auth.create_user(username, password, role="admin")
+    except ValueError as e:
+        return JSONResponse({"ok": False, "error": str(e)})
+    db.set_setting("auth_mode", "local")
+    resp = JSONResponse({"ok": True})
+    resp.set_cookie(auth.SESSION_COOKIE, auth.create_session(uid), httponly=True,
+                    samesite="lax", max_age=auth.SESSION_TTL, path="/")
+    return resp
+
+
+@router.post("/settings/away/password")
+def settings_away_password(uid: int = Form(...), password: str = Form("")):
+    """The fix for an account with no password. Only such an account: a
+    password that exists is changed by its owner, not from here."""
+    row = next((u for u in auth.list_users() if u["id"] == uid), None)
+    if not row or row["has_password"]:
+        return JSONResponse({"ok": False, "error": "That account is not waiting for a password."})
+    try:
+        auth.set_password(uid, password)
+    except ValueError as e:
+        return JSONResponse({"ok": False, "error": str(e)})
+    return {"ok": True}
+
+
+@router.get("/api/away/check")
+def away_check(request: Request):
+    """What is safe and what is not, in plain words, for the self-check."""
+    users = auth.list_users()
+    mode = auth.mode()
+    signin = mode == "cloudflare" or (mode == "local" and users
+                                     and all(u["has_password"] for u in users))
+    items = [
+        {"name": "Sign-in", "ok": bool(signin),
+         "say": "Everyone who comes from outside must sign in." if signin
+         else "Someone from outside could get in without a password."},
+        {"name": "Guessing", "ok": True,
+         "say": "Five wrong passwords in ten minutes lock sign-in for a minute, "
+                "then longer each time."},
+        {"name": "Settings", "ok": True,
+         "say": "Settings and setup only open from your home network."},
+        {"name": "Paired devices", "ok": True,
+         "say": "Paired TVs and phones keep working with their own keys."},
+        {"name": "Encryption", "ok": request.url.scheme == "https",
+         "say": "This connection is encrypted." if request.url.scheme == "https"
+         else "This connection is not encrypted. Passwords cross the internet in the "
+              "clear until HTTPS is on."},
+        {"name": "Router", "ok": False,
+         "say": "Your router may send home devices through the internet address; "
+                "they will be asked to sign in."},
+    ]
+    return {"items": items}
 
 
 @router.post("/settings/users/{uid}/delete")

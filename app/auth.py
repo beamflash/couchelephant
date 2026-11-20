@@ -154,9 +154,19 @@ def verify(username: str, password: str) -> dict | None:
     return None
 
 
+def set_password(uid: int, password: str) -> None:
+    if len(password or "") < MIN_PASSWORD:
+        raise ValueError(f"the password must be at least {MIN_PASSWORD} characters")
+    ph, salt = _hash_pw(password)
+    con = _con()
+    con.execute("UPDATE users SET pw_hash=?, pw_salt=? WHERE id=?", (ph, salt, uid))
+    con.commit()
+
+
 def list_users() -> list[dict]:
     return [dict(r) for r in _con().execute(
-        "SELECT id, username, role, created_at FROM users ORDER BY created_at")]
+        "SELECT id, username, role, created_at, "
+        "(COALESCE(pw_hash, '') <> '') AS has_password FROM users ORDER BY created_at")]
 
 
 def delete_user(uid: int) -> None:

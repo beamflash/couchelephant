@@ -1,14 +1,16 @@
 """First run, sign in, sign out, theme."""
+import logging
 import urllib.parse
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from .. import auth, db
+from .. import auth, db, exposure, ratelimit
 from ._shared import ZONES, current_user, page
 from .settings import _save_and_sync, _test_plex
 
 router = APIRouter()
+log = logging.getLogger("couchelephant")
 
 # ---------- first run ----------
 
@@ -85,12 +87,26 @@ def login_form(request: Request, error: str = ""):
 
 
 @router.post("/login")
-def login_save(username: str = Form(""), password: str = Form("")):
+def login_save(request: Request, username: str = Form(""), password: str = Form("")):
+    addr = str(exposure.client_address(request))
+    keys = ("addr:" + addr, "user:" + (username or "").strip().lower())
+    wait = max(ratelimit.check(k) for k in keys)
+    if wait:
+        resp = page(request, "signin.html", setup=False, error=ratelimit.say(wait),
+                    nav="")
+        resp.status_code = 429
+        resp.headers["Retry-After"] = str(int(wait) + 1)
+        return resp
     user = auth.verify(username, password)
     if not user:
+        for k in keys:
+            ratelimit.fail(k)
+        log.warning("sign-in failed for %r from %s", (username or "")[:60], addr)
         return RedirectResponse(
             "/login?error=" + urllib.parse.quote("that username and password do not match"),
             status_code=303)
+    for k in keys:
+        ratelimit.ok(k)
     return _set_session(RedirectResponse("/", status_code=303),
                         auth.create_session(user["id"]))
 

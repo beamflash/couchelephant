@@ -41,7 +41,8 @@ def base_url(plex_url):
     os.environ["COUCHELEPHANT_ADDRESS"] = "192.168.1.20"
 
     port = _free_port()
-    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
+    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning",
+                            server_header=False, proxy_headers=False)
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
@@ -74,11 +75,20 @@ def _page(browser, base_url, **context):
     # machine five hours from the server drew an empty grid, because the page
     # asked for the wrong day.
     context.setdefault("timezone_id", "UTC")
+    # Playwright's own wait_for_function evaluates a string in the page, which
+    # the Content-Security-Policy refuses. The policy is enforced for real in
+    # tests/ui/test_away.py, which turns this off.
+    context.setdefault("bypass_csp", True)
     ctx = browser.new_context(base_url=base_url, **context)
     page = ctx.new_page()
     # A console error is a failure. Half of what a UI suite is for is catching
     # the exception that leaves a panel half drawn and no server-side trace.
     page.on("pageerror", lambda e: pytest.fail(f"uncaught page error: {e}"))
+    # The Content-Security-Policy must not break a page. A blocked script or
+    # style is only a console message, so every page here is watched for them.
+    page.csp_violations = []
+    page.on("console", lambda m: page.csp_violations.append(m.text)
+            if "Content Security Policy" in m.text else None)
     return ctx, page
 
 

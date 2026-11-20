@@ -29,7 +29,20 @@ from fastapi.responses import (
     Response,
 )
 
-from .. import adskip, announce, auth, db, handover, passes, paths, recorder, sync, tuner
+from .. import (
+    adskip,
+    announce,
+    auth,
+    db,
+    exposure,
+    handover,
+    passes,
+    paths,
+    ratelimit,
+    recorder,
+    sync,
+    tuner,
+)
 from . import passes as pass_routes
 from . import record
 from ._shared import VERSION, _plex, current_user, page
@@ -258,9 +271,18 @@ def connect_svg(request: Request):
 
 
 @router.post("/api/tv/pair")
-def pair_start(name: str = Form("Apple TV")):
+def pair_start(request: Request, name: str = Form("Apple TV")):
     """A client asks to be let in. It shows the code; a person types the code
     into Settings. The key is handed over only to whoever holds the secret."""
+    # From outside, every ask counts, so codes cannot be made by the thousand.
+    if exposure.away_on() and not exposure.is_home(request):
+        key = "pair:" + str(exposure.client_address(request))
+        wait = ratelimit.check(key)
+        if wait:
+            return JSONResponse({"ok": False, "error": ratelimit.say(wait)},
+                                status_code=429,
+                                headers={"Retry-After": str(int(wait) + 1)})
+        ratelimit.fail(key)
     now = int(time.time())
     code = "".join(secrets.choice("ABCDEFGHJKMNPQRSTUVWXYZ23456789") for _ in range(6))
     secret = secrets.token_urlsafe(24)

@@ -663,6 +663,99 @@ window.wireSettings = function (root) {
     });
   });
 
+  // ---- Use away from home -------------------------------------------
+  //
+  // The server refuses to turn it on while a way in has no password, and says
+  // which fix applies. The fix is a small form here, then the switch retries.
+  var away = root.querySelector('#away');
+  if (away) {
+    var awayon = away.querySelector('#awayon'), awaymsg = away.querySelector('#awaymsg'),
+        awayfix = away.querySelector('#awayfix'), awaycheck = away.querySelector('#awaycheck'),
+        awayfor = '';
+
+    var post = function (url, data) {
+      return fetch(url, {method: 'POST', body: new URLSearchParams(data)})
+        .then(function (r) { return r.json(); });
+    };
+    var drawCheck = function () {
+      fetch('/api/away/check').then(function (r) { return r.json(); }).then(function (d) {
+        awaycheck.textContent = '';
+        var h = document.createElement('div');
+        h.className = 'help';
+        h.textContent = 'What is safe, and what is not:';
+        awaycheck.appendChild(h);
+        d.items.forEach(function (i) {
+          var row = document.createElement('div');
+          row.className = 'row';
+          var pill = document.createElement('span');
+          pill.className = 'pill ' + (i.ok ? 'ok' : 'warn');
+          pill.textContent = i.ok ? 'Safe' : 'Note';
+          var t = document.createElement('span');
+          t.textContent = i.name + ': ' + i.say;
+          row.appendChild(pill);
+          row.appendChild(t);
+          awaycheck.appendChild(row);
+        });
+        awaycheck.hidden = false;
+      });
+    };
+    var fixForm = function (j) {
+      awayfor = j.fix;
+      awaymsg.textContent = j.error;
+      awaymsg.hidden = false;
+      awayfix.hidden = false;
+      var sel = away.querySelector('#awaysel');
+      away.querySelector('#awayuserbox').hidden = j.fix !== 'make_account';
+      away.querySelector('#awayselbox').hidden = j.fix !== 'set_passwords';
+      sel.textContent = '';
+      (j.users || []).forEach(function (u) {
+        var o = document.createElement('option');
+        o.value = u.id;
+        o.textContent = u.username;
+        sel.appendChild(o);
+      });
+      away.querySelector('#awayfixgo').textContent = j.fix === 'make_account'
+        ? 'Turn on Local accounts and make this account' : 'Set this password';
+    };
+    var turnOn = function () {
+      return post('/settings/away', {on: '1'}).then(function (j) {
+        if (j.ok) {
+          awaymsg.hidden = true;
+          awayfix.hidden = true;
+          awayon.checked = true;
+          drawCheck();
+        } else {
+          awayon.checked = false;
+          fixForm(j);
+        }
+        return j;
+      });
+    };
+    awayon.addEventListener('change', function () {
+      if (awayon.checked) { turnOn(); return; }
+      post('/settings/away', {on: '0'}).then(function () {
+        awaycheck.hidden = true;
+        awaymsg.hidden = true;
+        awayfix.hidden = true;
+      });
+    });
+    awayfix.addEventListener('submit', function (e) {
+      e.preventDefault();
+      var pw = away.querySelector('#awaypw').value;
+      var req = awayfor === 'make_account'
+        ? post('/settings/away/account',
+               {username: away.querySelector('#awayuser').value, password: pw})
+        : post('/settings/away/password',
+               {uid: away.querySelector('#awaysel').value, password: pw});
+      req.then(function (j) {
+        if (!j.ok) { awaymsg.textContent = j.error; awaymsg.hidden = false; return; }
+        away.querySelector('#awaypw').value = '';
+        return turnOn();
+      });
+    });
+    if (away.dataset.on === '1') drawCheck();
+  }
+
   // ---- Backup and restore -------------------------------------------
   //
   // Three panels over one idea: get your decisions out of this machine and
