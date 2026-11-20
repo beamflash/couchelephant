@@ -36,3 +36,16 @@ def test_the_welcome_page_shows_it_once_plex_is_set(page, plex_url):
     page.wait_for_selector("#wconnect", state="visible", timeout=30000)
     assert _drawn(page, "#wqr")
     assert "Scan with your iPhone or iPad camera" in page.locator("#wconnect").inner_text()
+
+
+def test_with_no_address_settings_says_so_where_the_qr_would_be(page, monkeypatch):
+    from app import announce
+    monkeypatch.setattr(announce, "_addresses", lambda: [])
+    # The browser reaches the server as localhost, which a phone cannot use.
+    page.goto("/settings")
+    page.wait_for_selector("#setnav .nav-item")
+    page.click('.nav-item[data-sec="recording"]')
+    page.click('#settabs .tab[data-tab="televisions"]')
+    sec = page.locator('section[data-tab="televisions"]')
+    sec.get_by_text("no home network address the apps can use").wait_for(timeout=15000)
+    assert not page.locator("#connectqr").is_visible()

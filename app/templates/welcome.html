@@ -54,7 +54,9 @@
   <div id="wconnect" class="setblock" hidden>
     <h3>Connect the app</h3>
     <img id="wqr" alt="QR code to connect the app" width="180" height="180"
-         class="connect-img">
+         class="connect-img"
+         onerror="this.style.display='none';this.nextElementSibling.textContent=this.dataset.fail"
+         data-fail="This server has no home network address the apps can use. Type its address in the app instead.">
     <p class="dim">Scan with your iPhone or iPad camera</p>
     <p><a class="primary" href="/" id="wgo">Open the guide</a></p>
   </div>

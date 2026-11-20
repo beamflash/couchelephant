@@ -196,18 +196,43 @@ def _is_lan_host(host: str) -> bool:
     return ip.is_private or ip.is_link_local
 
 
-def lan_url(request: Request) -> str:
-    """Where a phone should reach this server, with the port."""
+def _machine_address():
+    """This machine's best IPv4 for a phone: 192.168 first, then 10, then
+    172.16/12, then anything else (a VPN address is the last resort)."""
+    ips = [ipaddress.ip_address(socket.inet_ntoa(a)) for a in announce._addresses()]
+
+    def rank(ip):
+        if ip in ipaddress.ip_network("192.168.0.0/16"):
+            return 0
+        if ip in ipaddress.ip_network("10.0.0.0/8"):
+            return 1
+        if ip in ipaddress.ip_network("172.16.0.0/12"):
+            return 2
+        return 3
+    ips.sort(key=rank)             # stable: the list's own order breaks ties
+    return str(ips[0]) if ips else None
+
+
+def lan_url(request: Request):
+    """Where a phone should reach this server, or None when there is no
+    address it could use."""
     host = request.url.hostname or ""
-    port = request.url.port
-    if port is None:
-        server = request.scope.get("server")
-        port = server[1] if server and server[1] else (443 if request.url.scheme == "https" else 80)
-    if not _is_lan_host(host) or (host.startswith("172.17.") and paths._in_container()):
-        # Reached by localhost or a public name: use this machine's own address.
-        ips = [socket.inet_ntoa(a) for a in announce._addresses()]
-        host = ips[0] if ips else host
-    return f"{request.url.scheme}://{host}:{port}"
+    scheme = request.url.scheme
+    if _is_lan_host(host) and not (host.startswith("172.17.") and paths._in_container()):
+        # The port the browser used: the Host header's, else the scheme default.
+        port = request.url.port
+    else:
+        # Reached by localhost or a public name: use this machine's own address
+        # and the port this server is set to listen on.
+        host = _machine_address()
+        if host is None:
+            return None
+        port = paths.port()
+    return f"{scheme}://{host}" + (f":{port}" if port else "")
+
+
+NO_ADDRESS = ("This server has no home network address the apps can use. "
+              "Type its address in the app instead.")
 
 
 QR_LOOK = {"dark": "#000", "light": "#fff"}
@@ -217,7 +242,10 @@ QR_LOOK = {"dark": "#000", "light": "#fff"}
 def connect_svg(request: Request):
     """The QR code the apps scan to connect. Never carries a key or token."""
     # Part 4 adds &fp=<fingerprint> here once the server has TLS.
-    link = "couchelephant://connect?url=" + urllib.parse.quote(lan_url(request), safe="")
+    url = lan_url(request)
+    if url is None:
+        return JSONResponse({"ok": False, "detail": NO_ADDRESS}, status_code=409)
+    link = "couchelephant://connect?url=" + urllib.parse.quote(url, safe="")
     svg = segno.make(link).svg_inline(**QR_LOOK)
     # A standalone SVG file needs its namespace; svg_inline leaves it out.
     svg = svg.replace("<svg ", '<svg xmlns="http://www.w3.org/2000/svg" ', 1)

@@ -520,7 +520,9 @@
         {% endif %}
         <div class="field connect-qr" data-find="qr code scan connect iphone ipad phone app">
           <img id="connectqr" src="/api/connect.svg" alt="QR code to connect the app"
-               width="180" height="180" class="connect-img">
+               width="180" height="180" class="connect-img"
+               onerror="this.style.display='none';this.nextElementSibling.textContent=this.dataset.fail"
+               data-fail="This server has no home network address the apps can use. Type its address in the app instead.">
           <span class="help">Scan with your iPhone or iPad camera</span>
         </div>
         <form method="post" action="/settings/announce" class="setform">
