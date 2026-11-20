@@ -1,12 +1,21 @@
 """The QR code that connects a phone."""
 import urllib.parse
 
+import pytest
 import segno
 
 from app import announce, auth, db, paths
 from app.routes import tv
 
 THIS = "http://192.168.1.20:8710"
+
+
+@pytest.fixture(autouse=True)
+def _outside_a_container(monkeypatch):
+    # CI runs the suite inside a container. Tests that want the container
+    # case set it themselves.
+    from app import paths
+    monkeypatch.setattr(paths, "_in_container", lambda: False)
 
 
 def _expected(url):

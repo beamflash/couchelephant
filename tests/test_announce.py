@@ -9,6 +9,14 @@ from zeroconf import ServiceBrowser, ServiceListener, Zeroconf
 
 from app import announce, db
 
+
+@pytest.fixture(autouse=True)
+def _outside_a_container(monkeypatch):
+    # CI runs the suite inside a container. Tests that want the container
+    # case set it themselves.
+    from app import paths
+    monkeypatch.setattr(paths, "_in_container", lambda: False)
+
 TYPE = "_couchelephant._tcp.local."
 
 
