@@ -132,7 +132,23 @@ browser.
 
 ## Point it at Plex
 
-Open `http://your-host:8710` and go to **Settings, Plex**.
+Open `http://your-host:8710`. The welcome page, and later **Settings, Plex**,
+has a **Sign in with Plex** button.
+
+1. Press **Sign in with Plex**. A four-letter code shows on the page.
+2. Open [plex.tv/link](https://plex.tv/link), sign in to Plex if it asks, and
+   type the code.
+3. Back on the page, pick your Plex server by name if you have more than one.
+
+CouchElephant tries each address Plex lists for that server, nearest first,
+and keeps the first one that answers and has a DVR. If none answers it names
+every address it tried. The code runs out after about 15 minutes; press the
+button again for a new one. On a new install this also turns on Preview mode.
+
+### Enter it yourself
+
+If plex.tv cannot be reached, or you would rather not sign in, press **Enter
+it yourself** and type the address and token.
 
 **Address.** The address must work from inside the container. `127.0.0.1` only
 works if Plex is running in that same container, which it is not, so use the
@@ -159,6 +175,14 @@ one failed:
 Under **Settings, Plex, Guide**. Every time in the app is shown in this zone.
 The guide itself is stored as UTC timestamps, so changing this never moves a
 recording.
+
+## Recording folders
+
+Under **Settings, Recording, CouchElephant DVR**, CouchElephant suggests the TV
+and Movies folders from your Plex libraries, and checks it can write to each.
+Nothing is saved until you press **Use these folders**. A folder that belongs
+to another computer, such as Plex on a NAS, shows why it cannot be used here;
+type a folder this computer can reach instead.
 
 ## Preview mode
 

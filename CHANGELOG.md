@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.5.26 - 2026-11-19
+
+### Added
+
+- **Sign in with Plex.** The welcome page and Settings, Plex have one button.
+  It shows a four-letter code to type at plex.tv/link, lists your Plex
+  servers by name, and saves the first address of the chosen server that
+  answers and has a DVR. If none answers it lists every address it tried.
+  Typing the address and token yourself is still there, under "Enter it
+  yourself".
+- **Recording folders suggested from Plex.** Settings, Recording fills in the
+  TV and Movies folders from your Plex libraries and says whether CouchElephant
+  can write to each. Nothing is saved until you press "Use these folders".
+
+### Fixed
+
+- On the Windows, macOS and Linux installs, a full folder path for TV or
+  Movies recordings lost its leading slash when saved, so recordings were not
+  moved into Plex.
+
 ## 1.5.25 - 2026-11-19
 
 ### Added

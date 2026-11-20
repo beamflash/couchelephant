@@ -74,6 +74,7 @@ Recorded list.
 | `POST /api/tv/devices/{id}/settings` | Administrators. `allow_delete` for one television |
 | `GET /hls/{uid}/index.m3u8` | The viewing copy, as an HLS playlist. `?start=0` marks it to open at its first second, which is how a player starts a recording that is still growing from the beginning |
 | `GET /hls/{uid}/seg00000.ts` ... | Its segments |
+| `GET /api/recorder/library-suggest` | TV and Movies folders read from the Plex libraries, each with `writable` and `why`. Administrators only. Nothing is saved |
 | `GET /api/recorder/status` | What the CouchElephant DVR settings show: can it run, the tuner, the library folders and Plex libraries to choose from |
 | `POST /settings/recorder` | Save the CouchElephant DVR settings |
 
@@ -148,6 +149,9 @@ sync fills in its games.
 | | |
 | --- | --- |
 | `POST /settings` | Server address, token, timezone, sync interval, preview mode |
+| `POST /settings/plex/signin` | Start Sign in with Plex. `{ok, pin, code, link}`: show `code` and send the person to `link` |
+| `GET /settings/plex/signin/{pin}` | Poll it. `{ok, state}` where `state` is `waiting`, `servers` (with `servers: [{name, id}]`) or `expired` |
+| `POST /settings/plex/signin/{pin}/use` | Form `server` (an id from the poll), optional `timezone`. Tests each address and saves the first that works: `{ok, detail, address}`, or `{ok: false, detail, tried}` |
 | `POST /settings/test` | Check the Plex connection. Send `Accept: application/json` for `{ok, detail}` |
 | `POST /settings/auth` | Sign-in mode and the Cloudflare fields |
 | `POST /settings/logos` | Re-fetch every channel logo |
