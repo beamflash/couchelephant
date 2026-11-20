@@ -15,6 +15,12 @@
   on the welcome page once Plex is set. Scan it with the iPhone or iPad camera.
 - A switch under Settings, Recording, Televisions turns the announcement off.
 
+### Changed
+
+- The relay alert destination is now a general JSON webhook that you can point
+  at your own script, relay, Home Assistant or n8n. Existing relay destinations
+  move over by themselves.
+
 ### Notes
 
 - On Docker's default bridge network the server cannot announce itself, and
@@ -966,7 +972,7 @@ per sync, hourly.
 
 ### Added
 
-- **A relay on your own network as an alert destination**, speaking timmyd's
+- **A relay on your own network as an alert destination**, posting JSON to
   `/notify`. It is the only destination that names no channel. It is handed the
   severity and decides for itself, so a fault lands in the channel you watch
   while a recording that started, a pass that booked something, or a fault that

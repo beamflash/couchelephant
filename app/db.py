@@ -656,6 +656,7 @@ def init() -> None:
     _strip_recurring_only_prefs(conn)
     _recorder_default_to_auto(conn)
     _reslot_airing_ids(conn)
+    _timmyd_to_webhook(conn)
     # After the migration and the backfill, not inside SCHEMA: on an existing
     # install the column does not exist until _migrate has run.
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS passes_uid ON passes(uid)")
@@ -755,6 +756,21 @@ def _strip_recurring_only_prefs(conn):
         if len(kept) != len(cfg):
             conn.execute("UPDATE passes SET prefs = ? WHERE id = ?",
                          (json.dumps(kept), r["id"]))
+
+
+def _timmyd_to_webhook(conn):
+    """Once: the old relay destination becomes a generic webhook.
+
+    The relay kind stored a base address and always posted to `<base>/notify`.
+    The webhook kind stores the whole URL, so the old address gets `/notify`
+    added and the token stays. Nothing matches `timmyd` afterwards, so a second
+    run does nothing.
+    """
+    for r in conn.execute(
+            "SELECT id, webhook FROM destinations WHERE kind = 'timmyd'").fetchall():
+        base = (r["webhook"] or "").strip().rstrip("/")
+        conn.execute("UPDATE destinations SET kind = 'webhook', webhook = ? "
+                     "WHERE id = ?", (base + "/notify" if base else None, r["id"]))
 
 
 def _backfill_uids(conn):

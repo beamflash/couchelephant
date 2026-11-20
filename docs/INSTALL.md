@@ -224,7 +224,7 @@ recordings to another.
 | **Discord** | a webhook URL | Channel settings, Integrations, Webhooks, New Webhook, Copy URL. No bot, no application, no OAuth |
 | **Telegram** | a bot token, and a chat | Ask `@BotFather` for a token. Paste it, save, message your bot once, then press **Find chat** and it reads the id for you |
 | **Notifiarr** | your **global** API key, and a Discord channel id | The key is on your Notifiarr account. Integration-specific keys are rejected by the passthrough. For the channel: turn on Developer Mode in Discord, right-click the channel, Copy Channel ID |
-| **A relay on your network** | the relay's address and its API token | For a relay speaking [timmyd](https://github.com/datbird/timmyd)'s `/notify`. The address looks like `http://192.168.1.10:8791`. It needs no channel: it is handed the severity and picks the channel itself |
+| **Webhook (JSON)** | the full URL, and optionally a bearer token | For your own script, relay, Home Assistant or n8n. The URL looks like `http://192.168.1.10:8791/notify`. It needs no channel: it is handed the severity and picks the channel itself. One POST per message, with `Authorization: Bearer <token>` only when a token is set. Severity is `ok`, `warn` or `bad`. Any 2xx answer counts as delivered, unless the reply is JSON with `"ok": false` |
 
 All four are outbound only. Nothing listens, nothing polls, and nothing here
 ever needs a port forwarded, which matters on a home server with no public
@@ -233,14 +233,14 @@ address.
 **Press Send a test on each one before you trust it.** The verdict says what
 happened rather than only that it failed.
 
-Both the Discord webhook URL and the Telegram, Notifiarr or relay token are kept
+Both the Discord webhook URL and the Telegram, Notifiarr or webhook token are kept
 like passwords: masked in the page and never written to a log. A Discord webhook
 URL is a bearer credential, so anyone holding it can post into your channel. A
-relay's address is not a credential, so it is shown back to you rather than
+webhook's address is not a credential, so it is shown back to you rather than
 masked.
 
-**A relay picks the channel, not CouchElephant.** Every message carries its
-severity, and the relay routes on it: a fault goes to the channel you watch and
+**A webhook picks the channel, not CouchElephant.** Every message carries its
+severity, and your receiver can route on it: a fault goes to the channel you watch and
 everything else, a recording that started, a pass that booked something, a fault
 that cleared, goes to the channel you read later. Nothing has to be configured
 twice, and this end never learns which channels exist.

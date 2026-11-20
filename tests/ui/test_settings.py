@@ -177,3 +177,30 @@ def test_the_dvr_section_has_a_pause_switch_that_holds_and_resumes_recordings(se
     settings.click("#recpausebtn")
     settings.wait_for_selector("#recpausebtn:has-text('Pause recordings')")
     assert db.get_setting("recorder_paused") == "0"
+
+
+def _add_webhook(page, name, url):
+    page.click('.nav-item[data-sec="notify"]')
+    form = page.locator('.setblock:has(h3:has-text("Add a destination")) form')
+    form.locator('select[name="kind"]').select_option(label="Webhook (JSON)")
+    form.locator('input[name="name"]').fill(name)
+    form.locator('input[name="webhook"]').fill(url)
+    form.locator('input[name="events"][value="epg_stale"]').check()
+    form.locator("button.primary").click()
+    # The window saves in place; reload to see what the server kept.
+    page.wait_for_selector(".saved.on")
+    page.goto("/settings")
+    page.wait_for_selector("#setnav .nav-item")
+    page.click('.nav-item[data-sec="notify"]')
+
+
+def test_a_webhook_destination_can_be_added_and_is_listed(settings):
+    _add_webhook(settings, "Home script", "http://192.168.1.50:8791/notify")
+    settings.wait_for_selector('table.stack td:has-text("Home script")')
+    row = settings.locator('table.stack td:has-text("Home script")').first.locator("xpath=..")
+    assert "Webhook (JSON)" in row.inner_text()
+
+
+def test_a_webhook_with_a_bad_address_is_not_saved(settings):
+    _add_webhook(settings, "Broken", "not a url")
+    assert settings.locator('table.stack td:has-text("Broken")').count() == 0

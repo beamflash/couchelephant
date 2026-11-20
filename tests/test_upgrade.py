@@ -270,3 +270,47 @@ def test_re_keying_a_booking_does_not_re_announce_it(tmp_path, monkeypatch):
         "SELECT key FROM notify_state WHERE event = 'pass_booked'")]
     assert keys == [new_id], keys
     del db._local.conn
+
+
+def test_an_old_relay_destination_becomes_a_webhook_that_still_sends(
+        tmp_path, monkeypatch):
+    """The relay kind kept a base address and posted to `<base>/notify`. It is
+    now a webhook holding the whole URL, so the move adds `/notify` (after
+    dropping a trailing slash), keeps the token, and the destination sends to
+    the same place it always did."""
+    from app import notify
+    from tests import fake_chat
+
+    base = fake_chat.start()
+    try:
+        path = tmp_path / "old.db"
+        _old_install(path)
+        monkeypatch.setattr(db, "DB_PATH", str(path))
+        if hasattr(db._local, "conn"):
+            del db._local.conn
+        db.init()
+        # The old schema has no destinations table, so the row goes in after
+        # the first start, as it would have on the install it came from.
+        with db.tx() as c:
+            c.execute("""INSERT INTO destinations (uid, name, kind, webhook,
+                                                   token, events, remind_hours,
+                                                   enabled, created_at,
+                                                   updated_at)
+                         VALUES ('u1','Relay','timmyd',?, 'old-token',
+                                 'pass_booked',24,1,1,1)""", (base + "/",))
+        db.init()
+        db.init()
+
+        row = db.one("SELECT kind, webhook, token FROM destinations")
+        assert row["kind"] == "webhook"
+        assert row["webhook"] == base + "/notify"
+        assert row["token"] == "old-token"
+
+        fake_chat.reset()
+        assert notify.test(1).startswith("OK")
+        assert fake_chat.webhook_sent()[0]["title"] == "CouchElephant test"
+        assert fake_chat.WEBHOOK_AUTH == ["Bearer old-token"]
+    finally:
+        fake_chat.stop()
+        if hasattr(db._local, "conn"):
+            del db._local.conn

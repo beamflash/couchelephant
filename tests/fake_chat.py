@@ -16,10 +16,10 @@ parts that matter:
   - Telegram's getUpdates returns an empty list until somebody messages the bot
   - Notifiarr answers 200 with a text body, and says "error" in that body rather
     than in the status code, so a 200 alone never proves delivery
-  - a timmyd relay answers 401 without a bearer token, 400 for a message with
-    neither a title nor a body, and 202 with `{"ok": true}` once it has queued
-    one. 202 means queued, not delivered, and a full queue is 503 with
-    `{"ok": false}`, so the body is what decides
+  - a generic webhook at /notify answers 202 with `{"ok": true}` once it has
+    queued a message, and 400 for one with neither a title nor a body. It can be
+    told to demand a bearer token (401 without), to answer 500, or to answer a
+    success status with `{"ok": false}` in the body, so the body decides
 
 **No test may reach Discord or Telegram.** Every send is pointed here.
 
@@ -41,14 +41,19 @@ DISCORD_STATUS = 204
 DISCORD_BOT_OK = True
 TELEGRAM_OK = True
 NOTIFIARR_OK = True
-# The relay's queue. False makes it answer 503 with ok false, which is what a
-# relay that cannot keep up looks like.
-TIMMYD_OK = True
-# A relay that answers a success status and says no in the body. The relay this
-# was written against never does: it refuses with 503. This is here because the
-# app believes the body over the status line either way, and recording a
-# non-delivery as sent loses the alert for good.
-TIMMYD_LIES = False
+# False makes the webhook answer 503 with ok false, which is what a receiver
+# that cannot keep up looks like.
+WEBHOOK_OK = True
+# A webhook that answers a success status and says no in the body. The app
+# believes the body over the status line, and recording a non-delivery as sent
+# loses the alert for good.
+WEBHOOK_LIES = False
+# A webhook that falls over.
+WEBHOOK_STATUS = None
+# Demand a bearer token, as a receiver behind auth would.
+WEBHOOK_NEEDS_TOKEN = False
+# The Authorization header of each message that arrived, "" when none came.
+WEBHOOK_AUTH: list[str] = []
 # What getUpdates hands back. Empty is the honest default: a bot nobody has
 # messaged has no chat id to find.
 TELEGRAM_UPDATES: list[dict] = []
@@ -59,14 +64,18 @@ BAD_TOKEN = "000:revoked"
 
 def reset() -> None:
     global DISCORD_STATUS, TELEGRAM_OK, TELEGRAM_UPDATES, NOTIFIARR_OK
-    global DISCORD_BOT_OK, TIMMYD_OK, TIMMYD_LIES
+    global DISCORD_BOT_OK, WEBHOOK_OK, WEBHOOK_LIES, WEBHOOK_STATUS
+    global WEBHOOK_NEEDS_TOKEN
     DISCORD_BOT_OK = True
     SENT.clear()
     DISCORD_STATUS = 204
     TELEGRAM_OK = True
     NOTIFIARR_OK = True
-    TIMMYD_OK = True
-    TIMMYD_LIES = False
+    WEBHOOK_OK = True
+    WEBHOOK_LIES = False
+    WEBHOOK_STATUS = None
+    WEBHOOK_NEEDS_TOKEN = False
+    WEBHOOK_AUTH.clear()
     TELEGRAM_UPDATES = []
 
 
@@ -86,8 +95,8 @@ def telegram_sent() -> list[dict]:
     return [b for p, path, b in SENT if p == "telegram" and path.endswith("/sendMessage")]
 
 
-def timmyd_sent() -> list[dict]:
-    return [b for p, _, b in SENT if p == "timmyd"]
+def webhook_sent() -> list[dict]:
+    return [b for p, _, b in SENT if p == "webhook"]
 
 
 def notifiarr_sent() -> list[dict]:
@@ -159,23 +168,26 @@ class _Handler(BaseHTTPRequestHandler):
                 self._text(200, '{"result":"success","details":'
                                 '{"response":"notification sent"}}')
             return
-        # A timmyd relay: /notify, bearer token, 202 once queued.
+        # A generic webhook: /notify, optional bearer token, 202 once queued.
         if path == "/notify":
             auth = self.headers.get("Authorization", "")
-            if not auth.startswith("Bearer ") or not auth[7:].strip():
+            if WEBHOOK_NEEDS_TOKEN and (not auth.startswith("Bearer ")
+                                        or not auth[7:].strip()):
                 return self._json(401, {"ok": False,
                                         "error": "bad or missing token"})
             if not body.get("title") and not body.get("body"):
                 return self._json(400, {"ok": False,
                                         "error": "a title or a body is required"})
-            SENT.append(("timmyd", path, body))
-            if TIMMYD_LIES:
+            SENT.append(("webhook", path, body))
+            WEBHOOK_AUTH.append(auth)
+            if WEBHOOK_STATUS:
+                return self._json(WEBHOOK_STATUS, {"error": "it fell over"})
+            if WEBHOOK_LIES:
                 return self._json(202, {"ok": False, "error": "queue is full"})
-            if not TIMMYD_OK:
+            if not WEBHOOK_OK:
                 # A full queue. 503, and the refusal is in the body as well.
                 return self._json(503, {"ok": False, "error": "queue is full"})
-            return self._json(202, {"ok": True, "source": body.get("source"),
-                                    "channel": "1", "error": None})
+            return self._json(202, {"ok": True, "source": body.get("source")})
         # Telegram: /bot<token>/<method>
         if path.startswith("/bot"):
             token = path[4:].split("/")[0]

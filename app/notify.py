@@ -19,10 +19,12 @@ forwarded or a socket held open.
     and it buys one bot in one channel instead of a webhook per application.
     Whoever already routes Radarr, Sonarr and Plex through it wants this here
     too, rather than a fifteenth integration to set up and remember.
-  - **A relay on your own network** that speaks timmyd's `/notify`. It is the
-    only destination here that names no channel: it is handed the severity and
-    decides for itself, so what you have to act on and what you can read later
-    can land in two different places without this end knowing either exists.
+  - **A generic JSON webhook**, for your own script, relay, Home Assistant or
+    n8n. One POST of `{"source", "severity", "title", "body", "event",
+    "sent_at"}` to any http or https URL, with an optional bearer token. It
+    names no channel: the receiver is handed the severity and decides for
+    itself, so what you have to act on and what you can read later can land in
+    two different places without this end knowing either exists.
 
 Two kinds of thing are worth sending, and they behave differently.
 
@@ -45,6 +47,7 @@ you were never told it started.
 """
 import time
 import uuid
+from datetime import UTC, datetime
 from urllib.parse import urlparse
 
 import httpx
@@ -134,12 +137,12 @@ ACTIVITY_WINDOW = 7 * 86400
 # re-announce it, so the two can never meet.
 STATE_TTL = 30 * 86400
 
-KINDS = ("discord", "discord_bot", "telegram", "notifiarr", "timmyd")
+KINDS = ("discord", "discord_bot", "telegram", "notifiarr", "webhook")
 
 # The kinds whose `webhook` column holds a credential rather than an address.
 # A Discord webhook URL is the whole authorisation to post, so it is masked
-# like a password. A relay's address is a machine on your own network and
-# masking it only hides which relay a destination points at.
+# like a password. A webhook's address is a machine on your own network and
+# masking it only hides where a destination points.
 SECRET_WEBHOOK_KINDS = frozenset({"discord"})
 
 SEVERITY_COLOUR = {"bad": 0xD1453B, "warn": 0xD9822B, "ok": 0x3BA55D}
@@ -176,16 +179,16 @@ def _mask(v) -> str:
     return "*" * 12 if v else ""
 
 
-def valid_relay(url: str) -> bool:
+def valid_url(url: str) -> bool:
     """Is this an address this app could post to?
 
     Deliberately not a host allowlist. Discord and Telegram are one known
-    service each, so their hosts are pinned. A relay is a service YOU run, at
+    service each, so their hosts are pinned. A webhook is a service YOU run, at
     an address only you know, usually on the same network as this container, so
     there is nothing to pin it to. What is checked is that it is an ordinary
     http or https address with a host and no credentials smuggled into it.
 
-    Plain http is allowed on purpose. A relay on a home network commonly has no
+    Plain http is allowed on purpose. A receiver on a home network commonly has no
     certificate, and refusing http would push people to put the token in a
     query string somewhere worse.
     """
@@ -244,10 +247,10 @@ def save_destination(*, name, kind, events, remind_hours=24, webhook=None,
     if kind == "discord":
         if webhook and not valid_webhook(webhook, hosts=hosts, schemes=schemes):
             raise ValueError("That is not a Discord webhook URL.")
-    if kind == "timmyd":
-        if not valid_relay(webhook):
-            raise ValueError("That is not a relay address. It should look like "
-                             "http://192.168.1.10:8791.")
+    if kind == "webhook":
+        if not valid_url(webhook):
+            raise ValueError("That is not a web address. It should look like "
+                             "http://192.168.1.10:8791/notify.")
     now = _now()
     with db.tx() as c:
         if dest_id:
@@ -406,41 +409,39 @@ def _send_notifiarr(dest, title, detail, severity) -> None:
         raise SendError(f"Notifiarr refused it: {body[:200]}")
 
 
-def _send_timmyd(dest, title, detail, severity) -> None:
-    """Hand a message to a relay, which decides which channel it belongs in.
+def _send_webhook(dest, title, detail, severity) -> None:
+    """POST one JSON message to a URL somebody chose.
 
-    The severity goes out unchanged, and that is the whole contract. The relay
-    routes what somebody has to act on to the channel they watch, and
-    everything else to the channel they read later. So nothing here names a
-    channel, and this end never has to know which channels exist.
+    The severity goes out unchanged ("ok", "warn" or "bad") and nothing names a
+    channel, so the receiver decides where it lands. The token, when there is
+    one, goes in a bearer header and nowhere else.
 
-    No icon is sent either. The relay resolves one from the source name, and an
-    icon in the payload would override whatever the relay's owner configured.
-
-    It answers 202 once it has queued the message and 503 when its queue is
-    full, both with `ok` in a JSON body. Queued is not delivered, and it is the
-    strongest thing a relay can honestly say, but a 2xx alone still proves
-    nothing: the body is what is believed.
+    A 2xx is success unless the body is JSON with `ok: false`. Queued is not
+    delivered, but a receiver that says no in the body is believed over its
+    status line, because recording a non-delivery as sent loses the alert.
     """
     payload = {
         "source": "couchelephant",
         "severity": severity or "ok",
         "title": title[:256],
         "body": (detail or "")[:4000],
+        "event": dest.get("event"),
+        "sent_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
-    url = f"{dest['webhook'].rstrip('/')}/notify"
+    headers = {}
+    if dest.get("token"):
+        headers["Authorization"] = f"Bearer {dest['token']}"
     with httpx.Client(timeout=TIMEOUT) as http:
-        r = http.post(url, json=payload,
-                      headers={"Authorization": f"Bearer {dest['token']}"})
+        r = http.post(dest["webhook"].strip(), json=payload, headers=headers)
+    if r.status_code >= 400:
+        raise SendError(f"The webhook answered HTTP {r.status_code}")
     try:
         body = r.json() if r.content else {}
     except ValueError:
         body = {}
-    if not isinstance(body, dict):
-        body = {}
-    if r.status_code >= 400 or body.get("ok") is False:
-        why = body.get("error") or f"HTTP {r.status_code}"
-        raise SendError(f"The relay refused it: {why}")
+    if isinstance(body, dict) and body.get("ok") is False:
+        raise SendError("The webhook refused it: "
+                        f"{body.get('error') or 'no reason given'}")
 
 
 SENDERS = {
@@ -448,7 +449,7 @@ SENDERS = {
     "discord_bot": lambda *a: _send_discord_bot(*a),
     "telegram": lambda *a: _send_telegram(*a),
     "notifiarr": lambda *a: _send_notifiarr(*a),
-    "timmyd": lambda *a: _send_timmyd(*a),
+    "webhook": lambda *a: _send_webhook(*a),
 }
 
 
@@ -487,10 +488,7 @@ NEEDS = {
         (lambda d: d.get("token"), "No Notifiarr API key is set."),
         (_numeric_channel, _CHANNEL_HELP),
     ],
-    "timmyd": [
-        (lambda d: d.get("webhook"), "No relay address is set."),
-        (lambda d: d.get("token"), "No relay token is set."),
-    ],
+    "webhook": [(lambda d: d.get("webhook"), "No webhook URL is set.")],
 }
 
 
@@ -504,7 +502,7 @@ def not_ready(dest) -> str | None:
     return None
 
 
-def _deliver(dest, title, detail, severity) -> bool:
+def _deliver(dest, title, detail, severity, event=None) -> bool:
     """One message, one destination. Never raises.
 
     A notification that cannot be delivered must not break a sync, and it must
@@ -515,7 +513,8 @@ def _deliver(dest, title, detail, severity) -> bool:
         missing = not_ready(dest)
         if missing:
             raise SendError(missing)
-        SENDERS[dest["kind"]](dest, title, detail, severity)
+        # The event rides on the dest, so no sender's signature changes.
+        SENDERS[dest["kind"]]({**dest, "event": event}, title, detail, severity)
     except Exception as e:
         _mark(dest["id"], ok=False, error=f"{type(e).__name__}: {e}"
               if not isinstance(e, SendError) else str(e))
@@ -543,9 +542,9 @@ def test(dest_id: int) -> str:
     if missing:
         return missing
     try:
-        # Sent at `ok`. A relay routes on severity, and testing a destination
-        # is not an emergency.
-        SENDERS[dest["kind"]](dest, "CouchElephant test",
+        # Sent at `ok`. A receiver may route on severity, and testing a
+        # destination is not an emergency.
+        SENDERS[dest["kind"]]({**dest, "event": "test"}, "CouchElephant test",
                               "If you can read this, alerts will reach here.", "ok")
     except Exception as e:
         _mark(dest_id, ok=False, error=str(e))
@@ -649,7 +648,8 @@ def _faults(dest, wanted, now) -> int:
         st = _state(dest["id"], n["code"], n["code"])
         if n["resolved_at"] is None:
             if st is None:
-                if _deliver(dest, n["title"], n["detail"], n["severity"]):
+                if _deliver(dest, n["title"], n["detail"], n["severity"],
+                            n["code"]):
                     _record(dest["id"], n["code"], n["code"], now,
                             opened_at=n["first_seen"])
                     sent += 1
@@ -659,7 +659,7 @@ def _faults(dest, wanted, now) -> int:
                     age = health._days(now - (st["opened_at"] or now))
                     if _deliver(dest, f"Still open: {n['title']}",
                                 f"Open for {age}.\n{n['detail'] or ''}".strip(),
-                                n["severity"]):
+                                n["severity"], n["code"]):
                         _record(dest["id"], n["code"], n["code"], now,
                                 opened_at=st["opened_at"])
                         sent += 1
@@ -667,7 +667,7 @@ def _faults(dest, wanted, now) -> int:
             if st["last_sent_at"] is not None:
                 age = health._days((n["resolved_at"] or now) - (st["opened_at"] or now))
                 if not _deliver(dest, f"Cleared: {n['title']}",
-                                f"Was open for {age}.", "ok"):
+                                f"Was open for {age}.", "ok", n["code"]):
                     continue
                 sent += 1
             _forget(dest["id"], n["code"], n["code"])
@@ -684,7 +684,8 @@ def _activity(dest, wanted, now) -> int:
                 continue
             when = _clock(g["begins_at"])
             if _deliver(dest, "A pass booked a recording",
-                        f"{g['title']} on {g['channel_vcn']}{when}", "ok"):
+                        f"{g['title']} on {g['channel_vcn']}{when}", "ok",
+                        PASS_BOOKED):
                 _record(dest["id"], PASS_BOOKED, g["airing_id"], now)
                 sent += 1
 
@@ -694,7 +695,8 @@ def _activity(dest, wanted, now) -> int:
             if _state(dest["id"], RECORDING_STARTED, g["id"]):
                 continue
             if _deliver(dest, "Recording started",
-                        f"{g['title']} on {g['channel_vcn']}", "ok"):
+                        f"{g['title']} on {g['channel_vcn']}", "ok",
+                        RECORDING_STARTED):
                 _record(dest["id"], RECORDING_STARTED, g["id"], now)
                 sent += 1
 
@@ -714,7 +716,7 @@ def _activity(dest, wanted, now) -> int:
             if not done:
                 continue
             title = g["title"] if g else key
-            if _deliver(dest, "Recording finished", str(title), "ok"):
+            if _deliver(dest, "Recording finished", str(title), "ok", RECORDING_FINISHED):
                 _record(dest["id"], RECORDING_FINISHED, key, now)
                 sent += 1
 
@@ -724,7 +726,8 @@ def _activity(dest, wanted, now) -> int:
             key = str(s["id"])
             if _state(dest["id"], SYNC_FAILED, key):
                 continue
-            if _deliver(dest, "A sync failed", s["detail"] or "No detail.", "bad"):
+            if _deliver(dest, "A sync failed", s["detail"] or "No detail.", "bad",
+                        SYNC_FAILED):
                 _record(dest["id"], SYNC_FAILED, key, now)
                 sent += 1
 

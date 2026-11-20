@@ -221,8 +221,8 @@ def seed_destinations():
         token="0000000:example", chat_id="000000000",
         events=[health.EPG_STALE, notify.PASS_BOOKED])
     notify.save_destination(
-        name="Relay", kind="timmyd", remind_hours=24,
-        webhook="http://192.168.1.10:8791", token="example-token",
+        name="Home script", kind="webhook", remind_hours=24,
+        webhook="http://192.168.1.10:8791/notify", token="example-token",
         events=sorted(notify.CATALOG_CODES))
 
 

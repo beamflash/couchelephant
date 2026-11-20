@@ -179,11 +179,18 @@ own list of events, so faults can go to one channel and recordings to another.
 - **Notifiarr**, if you already run it. One bot in one channel, and everything
   you own arrives through it instead of through a webhook set up per
   application.
-- **A relay on your own network**, speaking
-  [timmyd](https://github.com/datbird/timmyd)'s `/notify`. The only destination
-  that names no channel: it is handed the severity and decides for itself, so a
+- **A JSON webhook**, for your own script, relay, Home Assistant or n8n. It
+  names no channel: it is handed the severity and decides for itself, so a
   fault lands in the channel you watch while a recording that started lands in
-  the one you read later.
+  the one you read later. It gets one POST per message, with an optional bearer
+  token:
+
+  ```json
+  {"source": "couchelephant", "severity": "bad", "title": "Plex has not refreshed its guide", "body": "Plex last refreshed 5 days ago.", "event": "epg_stale", "sent_at": "2026-11-20T15:04:05Z"}
+  ```
+
+  Severity is `ok`, `warn` or `bad`. Any 2xx answer counts as delivered,
+  unless the reply is JSON with `"ok": false`.
 
 A fault reports its whole life: once when it opens, a reminder on the interval
 you pick while it stays open, and once when it clears. A one-off event, like a
