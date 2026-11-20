@@ -168,3 +168,87 @@ def test_administrators_only_with_sign_in_on(client, tv):
 
 def db_user(name):
     return next(u["id"] for u in auth.list_users() if u["username"] == name)
+
+
+# ---- fix round 1 ----
+
+@pytest.fixture
+def silent_ports():
+    """Addresses that accept a connection and never answer."""
+    import socket
+    socks = []
+
+    def make():
+        s = socket.socket()
+        s.bind(("127.0.0.1", 0))
+        s.listen(5)
+        socks.append(s)
+        return f"http://127.0.0.1:{s.getsockname()[1]}"
+    yield make
+    for s in socks:
+        s.close()
+
+
+def test_addresses_that_hang_do_not_hold_use_past_the_cap(client, tv, silent_ports):
+    import time
+    urls = [silent_ports() for _ in range(4)]
+    pin = _approved(client, tv, [fake.server(
+        "Den", "cid-1", [(u, i == 0, False) for i, u in enumerate(urls)])])
+    t0 = time.monotonic()
+    j = client.post(f"/settings/plex/signin/{pin}/use", data={"server": "cid-1"}).json()
+    assert time.monotonic() - t0 < 11
+    assert j["ok"] is False and j["tried"] == urls
+    assert db.get_setting("plex_token") == ""
+
+
+def test_a_hanging_local_address_gives_way_to_a_working_remote(client, tv, silent_ports, plex_url):
+    dead = silent_ports()
+    pin = _approved(client, tv, [fake.server("Den", "cid-1", [
+        (dead, True, False), (plex_url, False, False)])])
+    j = client.post(f"/settings/plex/signin/{pin}/use", data={"server": "cid-1"}).json()
+    assert j["ok"] is True and j["address"] == plex_url
+
+
+def test_the_preferred_address_wins_even_if_another_answers_first(client, tv, plex_url, monkeypatch):
+    import time
+    seen = {}
+    real = routes._test_plex
+    other = plex_url.replace("127.0.0.1", "localhost")
+
+    def slow_first(url, token, timeout=None):
+        if url == plex_url:
+            time.sleep(0.5)
+        seen[url] = True
+        return real(url, token, timeout)
+    monkeypatch.setattr(routes, "_test_plex", slow_first)
+    pin = _approved(client, tv, [fake.server("Den", "cid-1", [
+        (plex_url, True, False), (other, False, False)])])
+    j = client.post(f"/settings/plex/signin/{pin}/use", data={"server": "cid-1"}).json()
+    assert j["address"] == plex_url
+
+
+def test_a_first_sign_in_starts_in_preview(client, tv, plex_url):
+    db.set_setting("dry_run", "0")
+    pin = _approved(client, tv, [fake.server("Den", "cid-1", [(plex_url, True, False)])])
+    client.post(f"/settings/plex/signin/{pin}/use", data={"server": "cid-1"})
+    assert db.get_setting("dry_run") == "1"
+
+
+def test_signing_in_again_keeps_the_current_preview_choice(client, tv, plex_url):
+    db.set_setting("plex_url", "http://old:32400")
+    db.set_setting("dry_run", "0")
+    pin = _approved(client, tv, [fake.server("Den", "cid-1", [(plex_url, True, False)])])
+    j = client.post(f"/settings/plex/signin/{pin}/use", data={"server": "cid-1"}).json()
+    assert j["ok"] is True and db.get_setting("plex_url") == plex_url
+    assert db.get_setting("dry_run") == "0"
+
+
+def test_a_late_poll_after_use_does_not_take_the_token_again(client, tv, plex_url):
+    pin = _approved(client, tv, [fake.server("Den", "cid-1", [(plex_url, True, False)])])
+    assert client.post(f"/settings/plex/signin/{pin}/use",
+                       data={"server": "cid-1"}).json()["ok"] is True
+    j = client.get(f"/settings/plex/signin/{pin}").json()
+    assert j == {"ok": False, "state": "expired"}
+    assert routes._held[pin]["token"] is None
+    again = client.post(f"/settings/plex/signin/{pin}/use", data={"server": "cid-1"}).json()
+    assert again["ok"] is False

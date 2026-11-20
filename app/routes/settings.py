@@ -1,5 +1,6 @@
 """Settings: the Plex connection, accounts, channel artwork, sync."""
 import asyncio
+import concurrent.futures as cf
 import os
 import threading
 import time
@@ -262,7 +263,7 @@ def settings_user_delete(request: Request, uid: int):
     return RedirectResponse("/settings", status_code=303)
 
 
-def _test_plex(url=None, token=None):
+def _test_plex(url=None, token=None, timeout=None):
     """Check a server, and say something useful when it does not answer.
 
     Each step is separate so the reason names the step that failed. A single
@@ -280,7 +281,7 @@ def _test_plex(url=None, token=None):
     if not token:
         return False, "No token set. Paste the token above and save."
 
-    with Plex(url, token) as plex:
+    with Plex(url, token, timeout=timeout) as plex:
         return _probe(plex, url)
 
 
@@ -331,6 +332,13 @@ def _drop(pin):
         _held.pop(pin, None)
 
 
+def _mark_used(pin):
+    """Keep the pin on record, without its token, so a late poll cannot
+    take the token again."""
+    with _held_lock:
+        _held[pin] = {"at": time.time(), "expires": 0, "token": None, "used": True}
+
+
 def _held_token(pin):
     with _held_lock:
         _prune(time.time())
@@ -341,11 +349,14 @@ def _held_token(pin):
 async def _save_and_sync(url, token, timezone=None):
     """Save a tested server and start the first guide pull. First run and
     Sign in with Plex both end here."""
+    first_run = not db.get_setting("plex_url")
     db.set_setting("plex_url", url)
     db.set_setting("plex_token", token)
     if timezone is not None:
         db.set_setting("timezone", timezone)
-    db.set_setting("dry_run", "1")
+    # Preview mode starts on for a new install. A configured one keeps its choice.
+    if first_run:
+        db.set_setting("dry_run", "1")
     # Pull the guide now rather than waiting for the loop's next turn. Without
     # this a new install lands on an empty grid and has no idea whether it is
     # broken or just early.
@@ -372,6 +383,8 @@ def plex_signin_poll(pin: int):
     if token is None:
         with _held_lock:
             e = _held.get(pin)
+            if e and e.get("used"):
+                return {"ok": False, "state": "expired"}
             if e and e["expires"] <= now:
                 del _held[pin]
                 return {"ok": False, "state": "expired"}
@@ -394,6 +407,46 @@ def plex_signin_poll(pin: int):
             "servers": [{"name": s.name, "id": s.client_id} for s in found]}
 
 
+ADDRESS_TIMEOUT = 4.0       # per request to one address
+USE_CAP = 10.0              # all addresses together
+
+
+def _safe_test(url, token):
+    try:
+        return _test_plex(url, token, ADDRESS_TIMEOUT)
+    except Exception as e:
+        return False, f"Could not reach {url}. {type(e).__name__}"
+
+
+def _try_all(urls, token):
+    """Test every address at once and answer in the order given. The first
+    that passes in that order wins, not the fastest, so a local address still
+    beats a relay. One that has not answered by the cap counts as failed."""
+    miss = "Could not reach {}. It did not answer in time."
+    pool = cf.ThreadPoolExecutor(max_workers=max(1, len(urls)))
+    futs = [pool.submit(_safe_test, u, token) for u in urls]
+    deadline = time.monotonic() + USE_CAP
+
+    def settled():
+        # Every address before the first pass has answered, or all have.
+        for f in futs:
+            if not f.done():
+                return False
+            if f.result()[0]:
+                return True
+        return True
+
+    try:
+        while not settled() and time.monotonic() < deadline:
+            cf.wait([f for f in futs if not f.done()],
+                    timeout=max(0.0, deadline - time.monotonic()),
+                    return_when=cf.FIRST_COMPLETED)
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+    return [f.result() if f.done() else (False, miss.format(u))
+            for u, f in zip(urls, futs)]
+
+
 @router.post("/settings/plex/signin/{pin}/use")
 async def plex_signin_use(pin: int, server: str = Form(""), timezone: str = Form("")):
     token = _held_token(pin)
@@ -408,17 +461,15 @@ async def plex_signin_use(pin: int, server: str = Form(""), timezone: str = Form
     if chosen is None:
         return JSONResponse({"ok": False, "tried": [],
                              "detail": "Plex no longer lists that server."})
-    tried, failures = [], []
-    for c in chosen.connections:
-        url = c.uri.rstrip("/")
-        tried.append(url)
-        ok, detail = await asyncio.to_thread(_test_plex, url, chosen.access_token)
+    urls = [c.uri.rstrip("/") for c in chosen.connections]
+    results = await asyncio.to_thread(_try_all, urls, chosen.access_token)
+    for url, (ok, detail) in zip(urls, results):
         if ok:
             await _save_and_sync(url, chosen.access_token,
                                  timezone if timezone in ZONES else None)
-            _drop(pin)
+            _mark_used(pin)
             return JSONResponse({"ok": True, "detail": detail, "address": url})
-        failures.append(detail)
+    tried, failures = urls, [d for _, d in results]
     # Prefer a reason from a server that answered over "could not reach".
     why = next((d for d in failures if not d.startswith("Could not reach")),
                failures[0] if failures else "Plex lists no address for this server.")

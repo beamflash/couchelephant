@@ -10,6 +10,23 @@
     var timer = null;
     var landing = box.getAttribute('data-after');   // 'guide' or 'reload'
 
+    // Every call has its own clock, so a stuck request ends in a plain message.
+    function api(url, opts, ms) {
+      var ctl = new AbortController();
+      var t = setTimeout(function () { ctl.abort(); }, ms || 15000);
+      opts = opts || {};
+      opts.signal = ctl.signal;
+      return fetch(url, opts).then(function (r) { clearTimeout(t); return r.json(); },
+                                   function (e) { clearTimeout(t); throw e; });
+    }
+
+    function oops(e) {
+      say('bad', e && e.name === 'AbortError'
+        ? 'That took too long. Try again.'
+        : 'Could not reach CouchElephant itself. Try again.');
+      reset();
+    }
+
     function say(kind, text) {
       out.hidden = false;
       out.innerHTML = '';
@@ -42,8 +59,7 @@
     function use(pin, id) {
       say('busy', 'Checking the server...');
       var body = new URLSearchParams({server: id, timezone: zone()});
-      fetch('/settings/plex/signin/' + pin + '/use', {method: 'POST', body: body})
-        .then(function (r) { return r.json(); })
+      api('/settings/plex/signin/' + pin + '/use', {method: 'POST', body: body})
         .then(function (j) {
           if (j.ok) return done(j);
           var d = say('bad', j.detail);
@@ -55,7 +71,7 @@
           }
           reset();
         })
-        .catch(function (e) { say('bad', 'Could not reach CouchElephant itself: ' + e); reset(); });
+        .catch(oops);
     }
 
     function pick(pin, servers) {
@@ -78,8 +94,7 @@
     }
 
     function poll(pin) {
-      fetch('/settings/plex/signin/' + pin, {headers: {Accept: 'application/json'}})
-        .then(function (r) { return r.json(); })
+      api('/settings/plex/signin/' + pin, {headers: {Accept: 'application/json'}})
         .then(function (j) {
           if (j.state === 'waiting') { timer = setTimeout(function () { poll(pin); }, 2000); return; }
           if (j.state === 'servers') return pick(pin, j.servers);
@@ -87,7 +102,7 @@
                                            : (j.detail || 'Something went wrong.'));
           reset();
         })
-        .catch(function (e) { say('bad', 'Could not reach CouchElephant itself: ' + e); reset(); });
+        .catch(oops);
     }
 
     go.addEventListener('click', function () {
@@ -95,8 +110,7 @@
       go.disabled = true;
       go.textContent = 'Waiting for Plex...';
       say('busy', 'Asking plex.tv for a code...');
-      fetch('/settings/plex/signin', {method: 'POST', headers: {Accept: 'application/json'}})
-        .then(function (r) { return r.json(); })
+      api('/settings/plex/signin', {method: 'POST', headers: {Accept: 'application/json'}})
         .then(function (j) {
           if (!j.ok) { say('bad', j.detail || 'Could not start the sign-in.'); reset(); return; }
           out.hidden = false;
@@ -115,7 +129,7 @@
           out.appendChild(w);
           poll(j.pin);
         })
-        .catch(function (e) { say('bad', 'Could not reach CouchElephant itself: ' + e); reset(); });
+        .catch(oops);
     });
   }
 

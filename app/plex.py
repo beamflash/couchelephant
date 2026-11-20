@@ -51,7 +51,7 @@ def is_starting(exc: BaseException) -> bool:
 
 
 class Plex:
-    def __init__(self, base_url: str, token: str):
+    def __init__(self, base_url: str, token: str, timeout=None):
         if not base_url:
             raise PlexError("no Plex server URL configured")
         if not token:
@@ -59,6 +59,7 @@ class Plex:
         self.base = base_url.rstrip("/")
         self.token = token
         self._http = None
+        self._timeout = timeout or TIMEOUT
 
     def _client(self):
         """One connection pool per server, reused.
@@ -70,7 +71,7 @@ class Plex:
         if self._http is None:
             # The token travels as a header, never in the URL. A URL ends up
             # in exception messages, logs and error pages; a header does not.
-            self._http = httpx.Client(timeout=TIMEOUT,
+            self._http = httpx.Client(timeout=self._timeout,
                                       headers={"Accept": "application/json",
                                                "X-Plex-Token": self.token})
         return self._http
