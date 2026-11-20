@@ -88,9 +88,13 @@ def login_form(request: Request, error: str = ""):
 
 @router.post("/login")
 def login_save(request: Request, username: str = Form(""), password: str = Form("")):
-    addr = str(exposure.client_address(request))
-    keys = ("addr:" + addr, "user:" + (username or "").strip().lower())
-    wait = max(ratelimit.check(k) for k in keys)
+    addr = exposure.client_address(request)
+    keys = [ratelimit.addr_key(addr)]
+    # An account's own lock is for people outside. Someone at home who mistypes
+    # must not be able to lock the owner out of it from the internet.
+    if not exposure.is_home(request):
+        keys.append("user:" + (username or "").strip().lower())
+    wait = ratelimit.reserve(keys)
     if wait:
         resp = page(request, "signin.html", setup=False, error=ratelimit.say(wait),
                     nav="")
@@ -99,13 +103,14 @@ def login_save(request: Request, username: str = Form(""), password: str = Form(
         return resp
     user = auth.verify(username, password)
     if not user:
-        for k in keys:
-            ratelimit.fail(k)
-        log.warning("sign-in failed for %r from %s", (username or "")[:60], addr)
+        who = (username or "").strip()[:60] if auth.user_exists(username) else "unknown account"
+        log.warning("sign-in failed for %s from %s", who, addr)
         return RedirectResponse(
             "/login?error=" + urllib.parse.quote("that username and password do not match"),
             status_code=303)
-    for k in keys:
+    # The address keeps what it was given, less this try; the account starts over.
+    ratelimit.refund(keys[0])
+    for k in keys[1:]:
         ratelimit.ok(k)
     return _set_session(RedirectResponse("/", status_code=303),
                         auth.create_session(user["id"]))

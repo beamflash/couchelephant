@@ -1,6 +1,8 @@
 """Sign-in limits. Five failures in ten minutes locks that key for a minute;
 each further lockout doubles it, up to an hour. A key is an address or an
 account, so guessing from many addresses at one account still runs dry."""
+import collections
+import ipaddress
 import threading
 import time
 
@@ -10,9 +12,11 @@ FIRST_LOCK = 60
 MAX_LOCK = 3600
 # A key left alone this long starts over from the short lock.
 FORGET = 24 * 3600
+# The oldest key goes when the table is full, so made-up names cannot grow it.
+MAX_KEYS = 10000
 
 _lock = threading.Lock()
-_keys: dict = {}
+_keys: collections.OrderedDict = collections.OrderedDict()
 
 
 def _now() -> float:
@@ -24,33 +28,89 @@ def reset() -> None:
         _keys.clear()
 
 
+def addr_key(addr) -> str:
+    """An address as a key. An IPv6 one is a whole /64, which is one household,
+    so changing the last 64 bits buys no new tries."""
+    try:
+        ip = ipaddress.ip_address(str(addr))
+    except ValueError:
+        return "addr:" + str(addr)
+    if ip.version == 6:
+        return "addr:" + str(ipaddress.ip_network(f"{ip}/64", strict=False))
+    return "addr:" + str(ip)
+
+
+def _left(key, now) -> float:
+    s = _keys.get(key)
+    return max(0.0, s["until"] - now) if s else 0.0
+
+
+def _lock_if_full(s, now) -> None:
+    if len(s["fails"]) >= FAILS and s["until"] <= now:
+        s["level"] += 1
+        s["until"] = now + min(FIRST_LOCK * 2 ** (s["level"] - 1), MAX_LOCK)
+        s["fails"] = []
+
+
+def _entry(key, now):
+    s = _keys.get(key)
+    if s and now - s["last"] > FORGET:
+        s = None
+    if not s:
+        s = _keys[key] = {"fails": [], "until": 0.0, "level": 0, "last": now}
+    _keys.move_to_end(key)
+    s["fails"] = [t for t in s["fails"] if now - t < WINDOW]
+    return s
+
+
+def _hit(key, now) -> None:
+    s = _entry(key, now)
+    s["last"] = now
+    s["fails"].append(now)
+    _lock_if_full(s, now)
+    while len(_keys) > MAX_KEYS:
+        _keys.popitem(last=False)
+
+
 def check(key: str) -> float:
     """Seconds still locked, 0 when free."""
     with _lock:
-        s = _keys.get(key)
-        if not s:
-            return 0.0
-        return max(0.0, s["until"] - _now())
+        return _left(key, _now())
 
 
 def fail(key: str) -> None:
-    now = _now()
+    with _lock:
+        _hit(key, _now())
+
+
+def reserve(keys) -> float:
+    """Take an attempt on every key, or answer how long to wait. The attempt
+    is counted before it is judged, so parallel requests cannot all slip past
+    one check. Five are allowed in the window; the next one finds the key full
+    and locks it. A right answer gives its attempt back with `refund`."""
+    with _lock:
+        now = _now()
+        wait = 0.0
+        for k in keys:
+            s = _entry(k, now)
+            _lock_if_full(s, now)
+            wait = max(wait, _left(k, now))
+        if wait:
+            return wait
+        for k in keys:
+            s = _keys[k]
+            s["last"] = now
+            s["fails"].append(now)
+        while len(_keys) > MAX_KEYS:
+            _keys.popitem(last=False)
+        return 0.0
+
+
+def refund(key: str) -> None:
     with _lock:
         s = _keys.get(key)
-        if s and now - s["last"] > FORGET:
-            s = None
-        if not s:
-            s = _keys[key] = {"fails": [], "until": 0.0, "level": 0, "last": now}
-        s["last"] = now
-        s["fails"] = [t for t in s["fails"] if now - t < WINDOW]
-        s["fails"].append(now)
-        if len(s["fails"]) >= FAILS and s["until"] <= now:
-            s["level"] += 1
-            s["until"] = now + min(FIRST_LOCK * 2 ** (s["level"] - 1), MAX_LOCK)
-            s["fails"] = []
-        if len(_keys) > 5000:       # a flood of made-up names must not grow forever
-            for k in [k for k, v in _keys.items() if now - v["last"] > WINDOW and v["until"] < now]:
-                del _keys[k]
+        if s and s["fails"]:
+            s["fails"].pop()
 
 
 def ok(key: str) -> None:

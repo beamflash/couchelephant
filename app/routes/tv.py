@@ -276,13 +276,11 @@ def pair_start(request: Request, name: str = Form("Apple TV")):
     into Settings. The key is handed over only to whoever holds the secret."""
     # From outside, every ask counts, so codes cannot be made by the thousand.
     if exposure.away_on() and not exposure.is_home(request):
-        key = "pair:" + str(exposure.client_address(request))
-        wait = ratelimit.check(key)
+        wait = ratelimit.reserve([ratelimit.addr_key(exposure.client_address(request))])
         if wait:
             return JSONResponse({"ok": False, "error": ratelimit.say(wait)},
                                 status_code=429,
                                 headers={"Retry-After": str(int(wait) + 1)})
-        ratelimit.fail(key)
     now = int(time.time())
     code = "".join(secrets.choice("ABCDEFGHJKMNPQRSTUVWXYZ23456789") for _ in range(6))
     secret = secrets.token_urlsafe(24)

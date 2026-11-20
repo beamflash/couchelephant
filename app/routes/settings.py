@@ -342,8 +342,12 @@ def settings_auth(request: Request, auth_mode: str = Form("none"),
     Cloudflare Access can still reach the box on the LAN and switch back.
     """
     mode = auth_mode if auth_mode in auth.MODES else "none"
-    if mode == "none" and exposure.away_on():
-        db.set_setting("away_mode", "0")     # nothing would guard the way in
+    # While the way in is open, sign-in cannot be weakened under it.
+    if exposure.away_on() and (mode == "none" or (
+            mode == "local" and _away_blocker("local"))):
+        return RedirectResponse(
+            "/settings?autherror=" + urllib.parse.quote(
+                "Turn off Use away from home first."), status_code=303)
     if mode == "cloudflare":
         ok, detail = cf_access.check(cf_team_domain.strip(), cf_aud.strip())
         if not ok:
@@ -355,9 +359,10 @@ def settings_auth(request: Request, auth_mode: str = Form("none"),
     return RedirectResponse("/settings", status_code=303)
 
 
-def _away_blocker():
-    """Why the switch may not turn on yet, or None."""
-    mode = auth.mode()
+def _away_blocker(mode=None):
+    """Why the switch may not turn on yet, or None. `mode` is the sign-in
+    mode to judge, the current one by default."""
+    mode = mode or auth.mode()
     if mode == "cloudflare":
         return None
     if mode == "none" or auth.user_count() == 0:
@@ -424,6 +429,14 @@ def away_check(request: Request):
     mode = auth.mode()
     signin = mode == "cloudflare" or (mode == "local" and users
                                      and all(u["has_password"] for u in users))
+    if mode == "cloudflare" and not (db.get_setting("trusted_proxies") or "").strip():
+        settings_item = {"name": "Settings", "ok": False,
+                         "say": "A Cloudflare tunnel on this network makes every visitor "
+                                "look home. Add the tunnel's address under trusted proxies."}
+    else:
+        settings_item = {"name": "Settings", "ok": True,
+                         "say": "Settings and setup only open from your home network. "
+                                "A paired TV can still change its own settings."}
     items = [
         {"name": "Sign-in", "ok": bool(signin),
          "say": "Everyone who comes from outside must sign in." if signin
@@ -431,8 +444,7 @@ def away_check(request: Request):
         {"name": "Guessing", "ok": True,
          "say": "Five wrong passwords in ten minutes lock sign-in for a minute, "
                 "then longer each time."},
-        {"name": "Settings", "ok": True,
-         "say": "Settings and setup only open from your home network."},
+        settings_item,
         {"name": "Paired devices", "ok": True,
          "say": "Paired TVs and phones keep working with their own keys."},
         {"name": "Encryption", "ok": request.url.scheme == "https",
@@ -453,6 +465,10 @@ def settings_user_delete(request: Request, uid: int):
         return RedirectResponse(
             "/settings?autherror=" + urllib.parse.quote("you cannot delete your own account"),
             status_code=303)
+    if exposure.away_on() and auth.mode() == "local" and auth.user_count() <= 1:
+        return RedirectResponse(
+            "/settings?autherror=" + urllib.parse.quote(
+                "Turn off Use away from home first."), status_code=303)
     auth.delete_user(uid)
     return RedirectResponse("/settings", status_code=303)
 

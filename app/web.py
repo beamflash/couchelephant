@@ -83,6 +83,10 @@ def _device_may(path):
             or path.startswith("/logo/"))
 
 
+# Starlette builds request.url from the Host header, so a Host of "x/login?"
+# makes request.url.path read "/login" while the router serves what was really
+# asked for. Every decision here reads the path the router uses.
+
 def _admin_only(path, method):
     if path.startswith("/api/theme"):
         return False
@@ -125,7 +129,9 @@ async def _same_origin(request: Request, call_next):
         except Exception:
             sent = ""
         here = (request.headers.get("host") or "").lower()
-        if sent and here and sent != here:
+        # "null" and anything that does not parse are cross-site too: a
+        # sandboxed page sends Origin: null.
+        if not sent or not here or sent != here:
             return JSONResponse(
                 {"ok": False,
                  "error": "That request came from another site and was refused."},
@@ -137,7 +143,7 @@ async def _same_origin(request: Request, call_next):
 async def _first_run(request: Request, call_next):
     """Nothing works before there is a server to talk to, so say so once,
     on a screen that asks for it, rather than a banner on every page."""
-    path = request.url.path
+    path = request.scope["path"]
     if (not _is_open(path) and not path.startswith("/settings")
             and not path.startswith("/api/") and not path.startswith("/partial/")
             and request.method == "GET" and not _configured()):
@@ -147,7 +153,7 @@ async def _first_run(request: Request, call_next):
 
 @app.middleware("http")
 async def _auth_gate(request: Request, call_next):
-    path = request.url.path
+    path = request.scope["path"]
     if auth.mode() == "none" or _is_open(path):
         return await call_next(request)
     if _device_may(path) and tv.device_for(request):
@@ -174,8 +180,14 @@ async def _auth_gate(request: Request, call_next):
 # Away from home. With the switch on, someone outside the home network gets
 # the sign-in page, pairing, and video links that carry their own pass. Not
 # the setup or settings pages, not even signed in, and not the API docs.
-_OUT_EXACT = frozenset(("/login", "/favicon.ico", "/api/tv/hello", "/api/tv/pair",
-                        "/api/tv/pair/poll"))
+_OUT_EXACT = frozenset(("/login", "/favicon.ico", "/api/tv/hello"))
+_PAIR_PATHS = ("/api/tv/pair", "/api/tv/pair/poll")
+
+
+def pairing_open_to_outsiders() -> bool:
+    """First pairing happens at home. A server with a certificate the system
+    trusts will say yes here, later."""
+    return False
 _OUT_NEVER = ("/setup", "/welcome", "/settings", "/partial/settings", "/api/away",
               "/docs", "/openapi.json", "/redoc")
 
@@ -188,11 +200,16 @@ def _out_never(path):
 @app.middleware("http")
 async def _away_gate(request: Request, call_next):
     """Registered after the sign-in gate, so it runs before it."""
-    path = request.url.path
+    path = request.scope["path"]
     if not exposure.away_on() or exposure.is_home(request):
         return await call_next(request)
     if _out_never(path):
         return PlainTextResponse("Not found", status_code=404)
+    if path in _PAIR_PATHS:
+        if pairing_open_to_outsiders():
+            return await call_next(request)
+        return JSONResponse({"ok": False, "error": "Pair this device at home first."},
+                            status_code=403)
     if path in _OUT_EXACT or path.startswith(_OPEN_PREFIX):
         return await call_next(request)
     if _device_may(path) and tv.device_for(request):
@@ -214,10 +231,7 @@ CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; "
        "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'")
 
 
-@app.middleware("http")
-async def _headers(request: Request, call_next):
-    """Outermost, so every answer carries them, a refusal included."""
-    resp = await call_next(request)
+def _secure(resp, request):
     h = resp.headers
     h["X-Content-Type-Options"] = "nosniff"
     h["X-Frame-Options"] = "SAMEORIGIN"   # the player frames the guide
@@ -228,6 +242,26 @@ async def _headers(request: Request, call_next):
     if "server" in h:
         del h["server"]
     return resp
+
+
+_BAD_HOST = re.compile(r"[/?#@\s]")
+
+
+@app.middleware("http")
+async def _headers(request: Request, call_next):
+    """Outermost, so every answer carries them, a refusal included. A Host
+    header that is not a host is refused here, before anything reads it."""
+    if _BAD_HOST.search(request.headers.get("host") or ""):
+        return _secure(PlainTextResponse("Bad request", status_code=400), request)
+    return _secure(await call_next(request), request)
+
+
+@app.exception_handler(Exception)
+async def _server_error(request: Request, exc: Exception):
+    """The last layer builds a 500 outside the middleware above, so it gets
+    the headers here."""
+    log.exception("unhandled error on %s", request.scope.get("path"))
+    return _secure(PlainTextResponse("Internal Server Error", status_code=500), request)
 
 
 # ---------- lifecycle ----------

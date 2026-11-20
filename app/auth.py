@@ -154,6 +154,11 @@ def verify(username: str, password: str) -> dict | None:
     return None
 
 
+def user_exists(username: str) -> bool:
+    return _con().execute("SELECT 1 FROM users WHERE username=? COLLATE NOCASE",
+                         ((username or "").strip(),)).fetchone() is not None
+
+
 def set_password(uid: int, password: str) -> None:
     if len(password or "") < MIN_PASSWORD:
         raise ValueError(f"the password must be at least {MIN_PASSWORD} characters")

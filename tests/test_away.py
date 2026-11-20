@@ -1,5 +1,7 @@
 """Use away from home: the switch, the gate, the sign-in limits, the headers."""
 
+import urllib.parse
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -221,12 +223,42 @@ def test_turning_it_off_from_home_works_and_from_outside_does_not():
     assert not exposure.away_on()
 
 
-def test_sign_in_cannot_be_turned_off_while_away_is_on():
+def test_sign_in_cannot_be_weakened_while_away_is_on():
     uid = _local_with_account()
     _away()
     c = _signed_in(at(HOME), uid)
-    c.post("/settings/auth", data={"auth_mode": "none"})
-    assert not exposure.away_on()
+    r = c.post("/settings/auth", data={"auth_mode": "none"})
+    assert "Turn off Use away from home first" in urllib.parse.unquote(r.headers["location"])
+    assert auth.mode() == "local" and exposure.away_on()
+    # A user with no password is the same hole.
+    auth._con().execute("INSERT INTO users (username, pw_hash, pw_salt, role, created_at) "
+                        "VALUES ('kid', '', '', 'user', 1)")
+    auth._con().commit()
+    db.set_setting("auth_mode", "cloudflare")
+    r = c.post("/settings/auth", data={"auth_mode": "local"})
+    assert "Turn off Use away from home first" in urllib.parse.unquote(r.headers["location"])
+    assert auth.mode() == "cloudflare"
+    # And the last account cannot be removed.
+    db.set_setting("auth_mode", "local")
+    auth._con().execute("DELETE FROM users WHERE username='kid'")
+    auth._con().commit()
+    other = auth.create_user("other", "another-password")
+    c2 = _signed_in(at(HOME), other)
+    c2.post(f"/settings/users/{uid}/delete")
+    assert auth.user_count() == 1
+
+
+def test_the_self_check_warns_about_a_cloudflare_tunnel_with_no_trusted_proxy():
+    uid = _local_with_account()
+    c = _signed_in(at(HOME), uid)
+    db.set_setting("auth_mode", "cloudflare")
+    item = next(i for i in c.get("/api/away/check").json()["items"] if i["name"] == "Settings")
+    assert item["ok"] is False
+    assert item["say"] == ("A Cloudflare tunnel on this network makes every visitor look "
+                           "home. Add the tunnel's address under trusted proxies.")
+    db.set_setting("trusted_proxies", "172.18.0.2")
+    item = next(i for i in c.get("/api/away/check").json()["items"] if i["name"] == "Settings")
+    assert item["ok"] is True and "paired TV" in item["say"]
 
 
 def test_the_self_check_lists_safe_and_unsafe():
@@ -298,15 +330,22 @@ def test_one_address_is_limited_across_many_accounts():
     assert _wrong(at("9.9.9.9"), "owner").status_code == 303
 
 
-def test_a_good_sign_in_clears_the_count():
+def test_a_good_sign_in_clears_the_account_count():
+    _local_with_account()
+    for _ in range(4):
+        _wrong(at("8.8.8.8"))
+    assert at("8.8.4.4").post("/login", data={"username": "owner",
+                                              "password": "a-good-password"}).status_code == 303
+    for _ in range(4):
+        assert _wrong(at("9.9.9.9")).status_code == 303
+
+
+def test_a_good_sign_in_gives_its_own_try_back_to_the_address():
     _local_with_account()
     c = at(OUT)
-    for _ in range(4):
-        _wrong(c)
-    assert c.post("/login", data={"username": "owner",
-                                  "password": "a-good-password"}).status_code == 303
-    for _ in range(4):
-        assert _wrong(c).status_code == 303
+    for _ in range(20):
+        assert c.post("/login", data={"username": "owner",
+                                      "password": "a-good-password"}).status_code == 303
 
 
 def test_a_failure_is_logged_with_the_address_and_never_the_password(caplog):
@@ -317,15 +356,167 @@ def test_a_failure_is_logged_with_the_address_and_never_the_password(caplog):
     assert OUT in text and "wrong-wrong" not in text
 
 
-def test_pairing_is_counted_from_outside_only():
+def test_pairing_is_closed_to_outsiders_while_away_is_on():
     _local_with_account()
     _away()
     out = at(OUT)
+    for p in ("/api/tv/pair", "/api/tv/pair/poll"):
+        r = out.post(p, data={"name": "x", "secret": "y"})
+        assert r.status_code == 403
+        assert r.json()["error"] == "Pair this device at home first."
+    assert at(HOME).post("/api/tv/pair", data={"name": "x"}).status_code == 200
+
+
+def test_pairing_opens_when_the_one_small_function_says_so(monkeypatch):
+    import app.web as web
+    _local_with_account()
+    _away()
+    monkeypatch.setattr(web, "pairing_open_to_outsiders", lambda: True)
+    out = at(OUT)
     codes = [out.post("/api/tv/pair", data={"name": "x"}).status_code for _ in range(7)]
     assert codes[:5] == [200] * 5 and codes[5] == 429
+
+
+# ---------- the Host header cannot move the gates ----------
+
+HOSTILE = ["x/login?", "a/static/?", "a/api/tv/hello?", "a/login#", "x@y", "a b"]
+
+
+@pytest.mark.parametrize("host", HOSTILE)
+def test_a_hostile_host_cannot_reach_settings_from_outside(host):
+    uid = _local_with_account("owner")
+    _away()
+    _local_signed = _signed_in(at(HOME), uid)
+    out = at(OUT)
+    out.headers["Host"] = host
+    out.headers["Origin"] = f"http://{host}"
+    for r in (out.get("/settings"), out.post("/settings/away", data={"on": "0"}),
+              out.post("/settings/auth", data={"auth_mode": "none"})):
+        assert r.status_code in (400, 401, 403, 404, 303) and r.status_code != 200
+    assert exposure.away_on() and auth.mode() == "local"
+
+
+@pytest.mark.parametrize("host", HOSTILE)
+def test_a_hostile_host_cannot_bypass_local_sign_in_with_away_off(host):
+    _local_with_account()
+    c = at(OUT)
+    c.headers["Host"] = host
+    for r in (c.get("/settings"), c.get("/partial/settings"),
+              c.post("/settings/auth", data={"auth_mode": "none"})):
+        assert r.status_code != 200
+    assert auth.mode() == "local"
+
+
+def test_a_host_that_is_not_a_host_is_a_bad_request():
+    c = at(HOME)
+    c.headers["Host"] = "x/login?"
+    r = c.get("/healthz")
+    assert r.status_code == 400
+    assert "content-security-policy" in r.headers
+
+
+def test_the_gates_read_the_path_the_router_uses():
+    import inspect
+
+    import app.web as web
+    for fn in (web._away_gate, web._auth_gate, web._first_run):
+        assert "request.url.path" not in inspect.getsource(fn)
+
+
+def test_the_stream_path_check_uses_the_real_path():
+    # A Host that fakes a pass address must not make a request look passed.
+    uid = _local_with_account()
+    _paired_signed(at(HOME), uid)
+    dev = db.one("SELECT * FROM tv_devices")
+    rec = "0" * 32
+    good = tv_routes.stream_pass(dev, rec)
+    c = at(OUT)
+    c.headers["Host"] = f"x/hlsk/{good}/{rec}/m.m3u8?"
+    assert c.get("/settings").status_code != 200
+
+
+# ---------- Origin: null ----------
+
+@pytest.mark.parametrize("origin", ["null", "not a url", "://", ""])
+def test_a_post_with_a_null_or_unparseable_origin_is_refused(origin):
+    c = at(HOME)
+    c.headers["Origin"] = origin
+    if origin == "":
+        del c.headers["Origin"]
+        c.headers["Referer"] = "null"
+    r = c.post("/settings/away/account", data={"username": "me", "password": "a-good-password"})
+    assert r.status_code == 403
+    assert auth.mode() == "none"
+
+
+# ---------- limits, round two ----------
+
+def test_the_account_lock_does_not_apply_to_home():
+    _local_with_account()
+    for _ in range(5):
+        _wrong(at(OUT))                    # outside: the account is now locked
+    assert _wrong(at("9.9.9.9")).status_code == 429
     home = at(HOME)
-    assert all(home.post("/api/tv/pair", data={"name": "x"}).status_code == 200
-               for _ in range(7))
+    r = home.post("/login", data={"username": "owner", "password": "a-good-password"})
+    assert r.status_code == 303 and "/login" not in r.headers["location"]
+
+
+def test_home_failures_do_not_lock_the_account_for_the_owner_outside():
+    _local_with_account()
+    for i in range(8):
+        _wrong(at(f"192.168.1.{i + 10}"))
+    r = at(OUT).post("/login", data={"username": "owner", "password": "a-good-password"})
+    assert r.status_code == 303 and "/login" not in r.headers["location"]
+
+
+def test_an_ipv6_address_is_keyed_by_its_64():
+    assert ratelimit.addr_key("2001:db8:1:2:aaaa::1") == ratelimit.addr_key("2001:db8:1:2:bbbb::9")
+    assert ratelimit.addr_key("2001:db8:1:3::1") != ratelimit.addr_key("2001:db8:1:2::1")
+    assert ratelimit.addr_key("8.8.8.8") != ratelimit.addr_key("8.8.8.9")
+    _local_with_account()
+    for i in range(5):
+        _wrong(at(f"2001:db8:1:2::{i + 1}"), f"n{i}")
+    assert _wrong(at("2001:db8:1:2:ffff::1"), "other").status_code == 429
+
+
+def test_parallel_attempts_cannot_all_pass_the_check():
+    import threading
+    admitted = []
+
+    def go():
+        admitted.append(ratelimit.reserve(["addr:t", "user:t"]) == 0)
+    threads = [threading.Thread(target=go) for _ in range(40)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sum(admitted) == 5
+
+
+def test_a_right_answer_gives_its_try_back():
+    for _ in range(4):
+        assert ratelimit.reserve(["k"]) == 0
+    assert ratelimit.reserve(["k"]) == 0
+    ratelimit.refund("k")
+    assert ratelimit.reserve(["k"]) == 0
+    assert ratelimit.reserve(["k"]) > 0
+
+
+def test_the_table_is_capped_and_drops_the_oldest(monkeypatch):
+    monkeypatch.setattr(ratelimit, "MAX_KEYS", 50)
+    for i in range(200):
+        ratelimit.fail(f"k{i}")
+    assert len(ratelimit._keys) == 50
+    assert "k199" in ratelimit._keys and "k0" not in ratelimit._keys
+
+
+def test_an_unknown_name_is_not_written_to_the_log(caplog):
+    _local_with_account()
+    with caplog.at_level("WARNING"):
+        _wrong(at(OUT), "hunter2-typed-in-the-name-box")
+        _wrong(at(OUT), "owner")
+    assert "hunter2-typed-in-the-name-box" not in caplog.text
+    assert "unknown account" in caplog.text and "'owner'" not in caplog.text and "owner" in caplog.text
 
 
 # ---------- headers ----------
@@ -348,3 +539,26 @@ def test_hsts_only_on_https_answers():
     r = at(HOME, "https").get("/healthz")
     assert r.headers["strict-transport-security"] == "max-age=31536000"
     assert "strict-transport-security" not in at(HOME).get("/healthz").headers
+
+
+def test_a_server_error_carries_the_headers_too():
+    from fastapi import APIRouter
+    r = APIRouter()
+
+    @r.get("/boom-for-test")
+    def boom():
+        raise RuntimeError("no")
+    app.include_router(r)
+    try:
+        async def shim(scope, receive, send):
+            await app(scope, receive, send)
+        c = TestClient(shim, base_url="https://testserver", raise_server_exceptions=False)
+        resp = c.get("/boom-for-test")
+    finally:
+        app.router.routes[:] = [x for x in app.router.routes
+                                if getattr(x, "path", "") != "/boom-for-test"]
+    assert resp.status_code == 500
+    assert resp.headers["x-content-type-options"] == "nosniff"
+    assert "content-security-policy" in resp.headers
+    assert resp.headers["strict-transport-security"] == "max-age=31536000"
+    assert "server" not in resp.headers

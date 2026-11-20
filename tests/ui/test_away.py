@@ -57,7 +57,7 @@ def test_the_pages_work_under_the_security_policy(browser, base_url, synced):
                       bypass_csp=False)
     try:
         seen = []
-        for path in ("/", "/guide", "/recordings", "/login", "/settings"):
+        for path in ("/", "/guide", "/home", "/recordings", "/login", "/settings"):
             resp = page.goto(path)
             page.wait_for_load_state("networkidle")
             assert "default-src 'self'" in resp.headers["content-security-policy"]
@@ -72,6 +72,29 @@ def test_the_pages_work_under_the_security_policy(browser, base_url, synced):
             items.nth(i).click()
             seen.append(i)
         assert len(seen) > 3
+        assert page.csp_violations == []
+    finally:
+        ctx.close()
+
+
+def test_the_player_and_its_guide_work_under_the_security_policy(browser, base_url, synced):
+    """The live player, opened from Home, with the guide framed over it."""
+    import json
+
+    from tests.ui.conftest import _page
+    from tests.ui.test_player_guide import LIVE
+    ctx, page = _page(browser, base_url, viewport={"width": 1440, "height": 900},
+                      bypass_csp=False)
+    try:
+        page.route("**/api/tv/live/**", lambda r: r.fulfill(json={"ok": True}))
+        page.goto("/home")
+        page.wait_for_load_state("networkidle")
+        page.evaluate("(p) => CE.Player.play(p, 'live')", json.loads(json.dumps(LIVE)))
+        page.wait_for_selector(".tvplayer:not([hidden])")
+        page.keyboard.press("ArrowDown")
+        page.wait_for_selector("#tvpguidebox iframe")
+        page.frame_locator("#tvpguidebox iframe").locator(".gprog").first.wait_for(
+            timeout=15000)
         assert page.csp_violations == []
     finally:
         ctx.close()
