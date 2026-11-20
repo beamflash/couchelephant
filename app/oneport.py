@@ -119,20 +119,12 @@ def _the_watcher():
         return _watcher
 
 
-async def peek_first_byte(loop, conn, deadline=None):
-    """The first byte of the connection, left in place. None when the client
-    sent nothing by the deadline (monotonic, default 5 s from now) or went
-    away."""
-    if deadline is None:
-        deadline = time.monotonic() + FIRST_BYTE_SECONDS
-    try:
-        data = conn.recv(1, socket.MSG_PEEK)
-        return data[0] if data else None
-    except (BlockingIOError, InterruptedError):
-        pass
+async def _wait_readable(loop, conn, deadline) -> bool:
+    """Sleep until the socket can be read, or the deadline. No polling: a
+    reader on the loop, or the one select() thread where the loop has none."""
     left = deadline - time.monotonic()
     if left <= 0:
-        return None
+        return False
     fut = None
     if not NO_READER:
         fut = loop.create_future()
@@ -145,15 +137,29 @@ async def peek_first_byte(loop, conn, deadline=None):
         except NotImplementedError:
             fut = None
     if fut is None:
-        if not await _the_watcher().wait(loop, conn, deadline):
-            return None
-    else:
-        try:
-            await asyncio.wait_for(fut, left)
-        except TimeoutError:
-            return None
-        finally:
-            loop.remove_reader(conn.fileno())
+        return bool(await _the_watcher().wait(loop, conn, deadline))
+    try:
+        await asyncio.wait_for(fut, left)
+        return True
+    except TimeoutError:
+        return False
+    finally:
+        loop.remove_reader(conn.fileno())
+
+
+async def peek_first_byte(loop, conn, deadline=None):
+    """The first byte of the connection, left in place. None when the client
+    sent nothing by the deadline (monotonic, default 5 s from now) or went
+    away."""
+    if deadline is None:
+        deadline = time.monotonic() + FIRST_BYTE_SECONDS
+    try:
+        data = conn.recv(1, socket.MSG_PEEK)
+        return data[0] if data else None
+    except (BlockingIOError, InterruptedError):
+        pass
+    if not await _wait_readable(loop, conn, deadline):
+        return None
     try:
         data = conn.recv(1, socket.MSG_PEEK)
     except (BlockingIOError, InterruptedError):
@@ -161,11 +167,20 @@ async def peek_first_byte(loop, conn, deadline=None):
     return data[0] if data else None
 
 
+NO_LOWAT = False             # tests: act like a system without SO_RCVLOWAT
+
+
 async def peek_hello(loop, conn, deadline):
     """The whole first TLS record (the ClientHello), left in place. It may
     arrive in pieces, so peek until the record's own length is there; stop at
     the deadline or at 16 KB and give back what there is (the parser then
-    says no, and the connection is served as it always was)."""
+    says no, and the connection is served as it always was).
+
+    Waiting costs nothing: the socket is told (SO_RCVLOWAT) not to count as
+    readable until the bytes still missing are there, so a thousand slow
+    clients are a thousand idle sockets. Where that is not available
+    (Windows), a short sleep that doubles to a quarter second stands in."""
+    nap = 0.02
     while True:
         try:
             data = conn.recv(5 + tls.MAX_HELLO, socket.MSG_PEEK)
@@ -175,13 +190,32 @@ async def peek_hello(loop, conn, deadline):
             data = b""
         except OSError:
             return b""
+        need = 5
         if len(data) >= 5:
             want = 5 + int.from_bytes(data[3:5], "big")
             if want > 5 + tls.MAX_HELLO or len(data) >= want:
                 return data[:want]
+            need = want
         if time.monotonic() >= deadline:
             return data
-        await asyncio.sleep(0.01)
+        if _set_lowat(conn, need):
+            try:
+                await _wait_readable(loop, conn, deadline)
+            finally:
+                _set_lowat(conn, 1)
+        else:
+            await asyncio.sleep(min(nap, max(0.0, deadline - time.monotonic())))
+            nap = min(nap * 2, 0.25)
+
+
+def _set_lowat(conn, n: int) -> bool:
+    if NO_LOWAT:
+        return False
+    try:
+        conn.setsockopt(socket.SOL_SOCKET, socket.SO_RCVLOWAT, n)
+        return True
+    except (OSError, AttributeError):
+        return False
 
 
 class _Redirector:

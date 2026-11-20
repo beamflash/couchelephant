@@ -820,3 +820,76 @@ def test_pebble_order_completes_on_the_one_port(at_pebble):
         acme_tls.request(name)
         assert acme_tls._account_key().thumbprint() == first
         assert acme_tls.status()["state"] == "ok"
+
+
+# ---------- fix round 2 ----------
+
+def test_the_saved_punycode_form_comes_back_through_the_box():
+    saved = acme_tls.clean_domain("bücher.example.com")
+    assert saved == "xn--bcher-kva.example.com"
+    assert acme_tls.clean_domain(saved) == saved                # Settings pre-fills this
+    assert acme_tls.clean_domain(saved.upper()) == saved
+    db.set_setting("away_mode", "1")
+    r = _client().post("/settings/away/domain", data={"domain": saved})
+    assert r.json()["ok"] is True or "minutes" in r.json()["error"]
+    with pytest.raises(ValueError):
+        acme_tls.clean_domain("xn--.example.com")               # still checked as a name
+
+
+def test_a_wait_in_the_future_is_capped():
+    db.set_setting("away_domain_last_name", "tv.example.com")
+    db.set_setting("away_domain_last_try", str(int(time.time()) + 10 * 86400))
+    assert acme_tls.too_soon("tv.example.com") == acme_tls.RETRY_WAIT
+    db.set_setting("away_domain_last_try", str(int(time.time()) - 600))
+    assert 0 < acme_tls.too_soon("tv.example.com") <= acme_tls.RETRY_WAIT - 590
+
+
+def _raise_fd_limit(n):
+    import resource
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    if soft >= n:
+        return True
+    if hard != resource.RLIM_INFINITY and hard < n:
+        return False
+    resource.setrlimit(resource.RLIMIT_NOFILE, (n, hard))
+    return True
+
+
+@pytest.mark.parametrize("mode", ["reader", "no_reader", "no_lowat"])
+def test_a_thousand_slow_clients_do_not_slow_a_normal_handshake(monkeypatch, mode):
+    """Each holds a ClientHello that never finishes, during an order."""
+    if not _raise_fd_limit(2600):
+        pytest.skip("cannot raise the open file limit to 2600")
+    monkeypatch.setattr(oneport, "NO_READER", mode == "no_reader")
+    monkeypatch.setattr(oneport, "NO_LOWAT", mode == "no_lowat")
+    db.set_setting("away_mode", "1")
+    db.set_setting("away_domain", "tv.example.com")
+    held = []
+    try:
+        with Running() as srv:
+            cert_pem, key_pem = acme_tls.challenge_cert("tv.example.com", "tok.thumb")
+            tls.challenge_set("tv.example.com", cert_pem, key_pem)
+            hello = a_hello()
+            # The select() thread (Windows) watches 500 at most by design, so
+            # that path is held to 450; the others take 1000.
+            for _ in range(450 if mode == "no_reader" else 1000):
+                c = socket.create_connection(("127.0.0.1", srv.port), timeout=5)
+                c.sendall(hello[:9])                 # a record header and a few bytes
+                held.append(c)
+            time.sleep(0.5)                          # let them all reach the server
+            cpu0, t0 = time.process_time(), time.monotonic()
+            took = []
+            for _ in range(3):
+                t = time.monotonic()
+                got, proto = peer(srv.port, "tv.example.com", alpn=["acme-tls/1"])
+                took.append(time.monotonic() - t)
+                assert proto == "acme-tls/1"
+            time.sleep(1.5)
+            cpu = time.process_time() - cpu0
+            wall = time.monotonic() - t0
+            assert max(took) < 1.0, took
+            # Polling at 10 ms burnt a whole core (cpu ~ wall); waiting is near idle.
+            assert cpu < 0.5 * wall, (cpu, wall)
+    finally:
+        for c in held:
+            c.close()

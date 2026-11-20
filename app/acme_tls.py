@@ -112,7 +112,9 @@ def clean_domain(text: str) -> str:
     name = raw.lower().rstrip(".")
     try:
         ascii_name = name.encode("idna").decode("ascii")
-        same = ascii_name.encode("ascii").decode("idna") == name
+        # A name already in its xn-- form is what Settings shows back; it is
+        # kept as it is. Anything else must come back from IDNA unchanged.
+        same = ascii_name == name or ascii_name.encode("ascii").decode("idna") == name
     except UnicodeError:
         raise ValueError("That is not a valid domain name.") from None
     if not same:
@@ -282,7 +284,7 @@ def too_soon(name: str) -> int:
         last = int(db.get_setting("away_domain_last_try") or 0)
     except ValueError:
         return 0
-    return max(0, last + RETRY_WAIT - int(time.time()))
+    return min(RETRY_WAIT, max(0, last + RETRY_WAIT - int(time.time())))
 
 
 def request(name: str) -> None:
