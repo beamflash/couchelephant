@@ -11,3 +11,6 @@ tzdata==2026.2
 psycopg[binary]==3.2.3
 PyMySQL==1.1.1
 pyzipper==0.3.6
+# Lets the apps on the home network find this server (mDNS). Has compiled
+# parts, so the frozen builds import it at module level from app/announce.py.
+zeroconf==0.154.0

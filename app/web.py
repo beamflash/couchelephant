@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import (
     adskip,
+    announce,
     auth,
     backingstore,
     backups,
@@ -19,6 +20,7 @@ from . import (
     handover,
     overtime,
     passes,
+    paths,
     recorder,
     sync,
     tuner,
@@ -179,6 +181,8 @@ async def startup():
     backups.init()
     if os.environ.get("COUCHELEPHANT_NO_SYNC_LOOP") == "1":
         return
+    # Here, past the test early-return, so a test never announces by accident.
+    announce.start(paths.port())
     asyncio.create_task(sync_loop())
     asyncio.create_task(backup_loop())
     asyncio.create_task(updates.update_loop())
@@ -189,6 +193,7 @@ async def startup():
 
 @app.on_event("shutdown")
 async def shutdown():
+    announce.stop()
     recorder.shutdown()
     adskip.shutdown()
 

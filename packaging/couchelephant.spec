@@ -19,6 +19,8 @@ hidden = [
     "uvicorn.protocols.websockets.wsproto_impl",
     "uvicorn.lifespan.on", "uvicorn.lifespan.off",
     "app.web",
+    "app.announce",
+    "zeroconf", "zeroconf.asyncio", "ifaddr",
 ]
 
 wanted = ("ffmpeg", "ffprobe", "comskip")

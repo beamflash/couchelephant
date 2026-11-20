@@ -10,7 +10,20 @@ import urllib.parse
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from .. import auth, cf_access, db, handover, health, notify, passes, plextv, recorder, sync, tuner
+from .. import (
+    announce,
+    auth,
+    cf_access,
+    db,
+    handover,
+    health,
+    notify,
+    passes,
+    plextv,
+    recorder,
+    sync,
+    tuner,
+)
 from ..plex import Plex, PlexError
 from ._shared import ZONES, current_user, page
 
@@ -79,7 +92,7 @@ NUMBERS = {
 KEYS = ("plex_url", "plex_token", "timezone", "dry_run", "tuner_url",
         "recorder_shows_folder", "recorder_movies_folder",
         "recorder_shows_section", "recorder_movies_section",
-        "sportsdb_key", "adskip_live", "adskip_final", "sports_overtime", "recorder_paused", *CHOICES, *NUMBERS)
+        "sportsdb_key", "adskip_live", "adskip_final", "sports_overtime", "recorder_paused", "announce", *CHOICES, *NUMBERS)
 
 
 def apply(values: dict) -> list[str]:
@@ -105,7 +118,7 @@ def apply(values: dict) -> list[str]:
                 refused.append(key)
                 continue
         elif key in ("dry_run", "adskip_live", "adskip_final", "sports_overtime",
-                     "recorder_paused"):
+                     "recorder_paused", "announce"):
             value = "1" if value in ("1", "true", "on") else "0"
         elif key in ("plex_url", "tuner_url"):
             value = value.rstrip("/")
@@ -124,7 +137,10 @@ def apply(values: dict) -> list[str]:
                     refused.append(key)     # "/" alone is the whole disk
                     continue
                 value = "/" + value
+        before = db.get_setting(key)
         db.set_setting(key, value)
+        if key == "announce" and before != value:
+            announce.refresh()
     return refused
 
 
@@ -134,6 +150,12 @@ def settings_save(plex_url: str = Form(""), plex_token: str = Form(""),
                   dry_run: str = Form("0")):
     apply({"plex_url": plex_url, "plex_token": plex_token, "timezone": timezone,
            "sync_minutes": sync_minutes, "dry_run": dry_run})
+    return RedirectResponse("/settings", status_code=303)
+
+
+@router.post("/settings/announce")
+def settings_announce(announce_on: str = Form("0")):
+    apply({"announce": announce_on})
     return RedirectResponse("/settings", status_code=303)
 
 

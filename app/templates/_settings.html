@@ -518,6 +518,16 @@
           </label>
         </div>
         {% endif %}
+        <form method="post" action="/settings/announce" class="setform">
+          <div class="field" data-find="announce find server apps home network discovery">
+            <label class="row">
+              <input type="checkbox" name="announce_on" value="1"
+                     {{ 'checked' if settings.announce != '0' }}>
+              <span>Let the apps find this server on the home network</span>
+            </label>
+          </div>
+          <div class="row"><button class="primary">Save</button><span class="saved"></span></div>
+        </form>
         {# Listed with sign-in on or off: each television has its own settings. #}
         <div id="tvlist" data-auth="{{ auth_mode }}" data-find="television devices remove settings allow delete permissions"></div>
       </section>
