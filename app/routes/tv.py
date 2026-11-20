@@ -41,6 +41,7 @@ from .. import (
     ratelimit,
     recorder,
     sync,
+    tls,
     tuner,
 )
 from . import passes as pass_routes
@@ -245,7 +246,8 @@ def lan_url(request: Request):
         if not host:
             return None
         port = paths.port()
-        scheme = "http"            # the server's own port speaks plain http
+        # The server's own port speaks both. Away on means the apps pin HTTPS.
+        scheme = "https" if exposure.away_on() else "http"
     return f"{scheme}://{host}" + (f":{port}" if port else "")
 
 
@@ -259,11 +261,13 @@ QR_LOOK = {"dark": "#000", "light": "#fff"}
 @router.get("/api/connect.svg")
 def connect_svg(request: Request):
     """The QR code the apps scan to connect. Never carries a key or token."""
-    # Part 4 adds &fp=<fingerprint> here once the server has TLS.
     url = lan_url(request)
     if url is None:
         return JSONResponse({"ok": False, "detail": NO_ADDRESS}, status_code=409)
     link = "couchelephant://connect?url=" + urllib.parse.quote(url, safe="")
+    fp = tls.fingerprint_if_away()
+    if fp:
+        link += "&fp=" + fp
     svg = segno.make(link).svg_inline(**QR_LOOK)
     # A standalone SVG file needs its namespace; svg_inline leaves it out.
     svg = svg.replace("<svg ", '<svg xmlns="http://www.w3.org/2000/svg" ', 1)

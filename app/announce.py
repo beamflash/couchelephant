@@ -76,7 +76,10 @@ def txt(install_id=None) -> dict:
     """What goes in the record. Never a key, token or password."""
     out = {"id": (install_id or paths.install_id)(), "v": VERSION,
            "name": machine_name(), "tls": "0"}
-    # Part 4 adds TLS and sets out["fp"] here when tls is "1".
+    from . import tls
+    fp = tls.fingerprint_if_away()
+    if fp:
+        out["tls"], out["fp"] = "1", fp
     return out
 
 

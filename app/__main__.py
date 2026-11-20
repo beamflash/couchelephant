@@ -6,10 +6,10 @@ import webbrowser
 
 import uvicorn
 
-from . import db, paths
+from . import db, oneport, paths
 
 OPEN_DELAY = 2          # seconds, so the page is not asked for before it exists
-_server: uvicorn.Server | None = None
+_server: oneport.Server | None = None
 
 
 def first_run() -> bool:
@@ -47,8 +47,8 @@ def main(argv: list[str]) -> int:
     paths.data_dir()                      # make the folder before anything uses it
     if args.open and first_run():
         threading.Thread(target=_open_later, args=(args.port,), daemon=True).start()
-    _server = uvicorn.Server(make_config(args.port))
-    _server.run()
+    _server = oneport.Server(make_config(args.port))
+    oneport.serve(_server.config, _server)
     return 0
 
 

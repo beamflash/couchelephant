@@ -383,11 +383,13 @@ def settings_away(on: str = Form("0")):
     from outside has no password."""
     if on != "1":
         db.set_setting("away_mode", "0")
+        announce.refresh(retry=True)
         return {"ok": True}
     blocked = _away_blocker()
     if blocked:
         return blocked
     db.set_setting("away_mode", "1")
+    announce.refresh(retry=True)
     return {"ok": True}
 
 
