@@ -12,6 +12,13 @@ on:
       - "app/menubar.py"
       - "app/updates.py"
       - "app/version.py"
+      # How the server listens and what it imports at start: a frozen build
+      # must prove these on every system.
+      - "app/oneport.py"
+      - "app/tls.py"
+      - "app/announce.py"
+      - "app/exposure.py"
+      - "requirements.txt"
       - "requirements-menubar.txt"
       - ".github/workflows/installers.yml"
   pull_request:
