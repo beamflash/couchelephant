@@ -2,6 +2,7 @@
 import asyncio
 import concurrent.futures as cf
 import os
+import tempfile
 import threading
 import time
 import urllib.parse
@@ -114,8 +115,12 @@ def apply(values: dict) -> list[str]:
                 continue
         elif key in ("recorder_shows_folder", "recorder_movies_folder"):
             # A folder inside the library mount, and nothing that climbs out of it.
+            # Without a mount the folder is a full path, so it keeps its start.
+            whole = value.startswith("/") and not handover.LIB_DIR
             value = "/".join(p for p in value.strip("/").split("/")
                              if p and p not in (".", ".."))
+            if whole:
+                value = "/" + value
         db.set_setting(key, value)
     return refused
 
@@ -213,6 +218,73 @@ def recorder_status():
     except Exception as e:
         out["library"]["plex_error"] = f"Could not ask Plex for its libraries: {e}"
     return JSONResponse(out)
+
+
+def _writable(path: str) -> str:
+    """Empty when a file can be made in the folder, else the reason it cannot."""
+    if not os.path.isdir(path):
+        return "That folder does not exist on this computer."
+    try:
+        fd, name = tempfile.mkstemp(dir=path, prefix=".couchelephant-check-")
+    except OSError:
+        return "CouchElephant cannot write to that folder."
+    os.close(fd)
+    os.remove(name)
+    return ""
+
+
+def _inside_mount(plex_path: str) -> str | None:
+    """Where Plex's folder is under the library mount, as a name inside it.
+
+    Plex and this container may see the disk at different places. Try the
+    path's tail under the mount: /data/media/TV becomes TV, then media/TV,
+    and the first one that is a folder wins.
+    """
+    parts = [p for p in plex_path.split("/") if p]
+    for i in range(len(parts) - 1, -1, -1):
+        rel = "/".join(parts[i:])
+        if os.path.isdir(os.path.join(handover.LIB_DIR, rel)):
+            return rel
+    return None
+
+
+@router.get("/api/recorder/library-suggest")
+def recorder_library_suggest():
+    """The library folders Plex reports, and whether each can be written here."""
+    try:
+        with Plex(db.get_setting("plex_url"), db.get_setting("plex_token")) as plex:
+            sections = plex.library_sections()
+    except Exception as e:
+        return JSONResponse({"ok": False,
+                             "error": f"Could not ask Plex for its libraries: {e}"})
+    out = []
+    for d in sections:
+        kind = {"show": "shows", "movie": "movies"}.get(d.get("type"))
+        places = [p.get("path") for p in d.get("Location") or [] if p.get("path")]
+        if not kind or not places:
+            continue
+        path, why = places[0], ""
+        if handover.LIB_DIR:
+            # The first place that maps into the mount, else the first one Plex lists.
+            for p in places:
+                rel = _inside_mount(p)
+                if rel is not None:
+                    path = rel
+                    break
+            else:
+                why = "That folder does not exist on this computer."
+            if not why:
+                why = _writable(os.path.join(handover.LIB_DIR, path))
+        else:
+            for p in places:
+                if os.path.isdir(p):
+                    path = p
+                    break
+            why = _writable(path)
+        out.append({"kind": kind, "section_id": str(d.get("key")),
+                    "section": d.get("title") or "", "path": path,
+                    "writable": not why, "why": why})
+    return JSONResponse({"ok": True, "suggestions": out})
 
 
 @router.post("/settings/sources")

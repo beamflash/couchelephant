@@ -818,6 +818,39 @@ window.wireSettings = function (root) {
       fill(root.querySelector('#recss'), secs('show'));
       fill(root.querySelector('#recms'), secs('movie'));
     });
+    // What Plex says its libraries are. Nothing is saved until the button is pressed.
+    fetch('/api/recorder/library-suggest').then(CE.readJson).then(function (d) {
+      var box = root.querySelector('#recsuggest');
+      if (!d.ok || !box || !(d.suggestions || []).length) return;
+      var use = d.suggestions.filter(function (x) { return x.writable; });
+      var h = '';
+      d.suggestions.forEach(function (x) {
+        h += '<li><b>' + (x.kind === 'shows' ? 'TV and sports' : 'Movies') + '</b>: ' +
+             CE.esc(x.path) + ' in ' + CE.esc(x.section) +
+             (x.writable ? '' : ' <span class="dim">(' + CE.esc(x.why) + ')</span>') + '</li>';
+      });
+      root.querySelector('#recsuglist').innerHTML = h;
+      var btn = root.querySelector('#recsugbtn');
+      btn.hidden = !use.length;
+      box.hidden = false;
+      btn.addEventListener('click', function () {
+        var put = function (id, value) {
+          var sel = root.querySelector(id);
+          if (!Array.prototype.some.call(sel.options, function (o) { return o.value === value; })) {
+            var o = document.createElement('option');
+            o.value = value; o.textContent = value;
+            sel.appendChild(o);
+          }
+          sel.value = value;
+        };
+        use.forEach(function (x) {
+          var s = x.kind === 'shows';
+          put(s ? '#recsf' : '#recmf', x.path);
+          put(s ? '#recss' : '#recms', x.section_id);
+        });
+        recform.requestSubmit();
+      });
+    });
   }
 
   // ---- Televisions ---------------------------------------------------

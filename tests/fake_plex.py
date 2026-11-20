@@ -289,6 +289,7 @@ class State:
         self.scans = []         # (section, path) of every scan asked for
         self.library = {}       # file name -> ratingKey, as of the last scan
         self.scan_blind = False
+        self.sections = None    # a test's own library sections, instead of the two below
         self.positions = {}     # ratingKey -> milliseconds
         self.library_deleted = []   # ratingKeys a client asked to delete
         # What the guide has since done to its own listings. A refresh re-times
@@ -630,6 +631,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._container(MediaSubscription=[sub])
 
         if p == "/library/sections":
+            if STATE.sections is not None:
+                return self._container(Directory=STATE.sections)
             return self._container(Directory=[
                 {"key": "1", "type": "movie", "title": "Films",
                  "Location": [{"id": 1, "path": "/media/video/films"}]},
