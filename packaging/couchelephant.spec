@@ -20,12 +20,15 @@ hidden = [
     "uvicorn.lifespan.on", "uvicorn.lifespan.off",
     "app.web",
     "app.announce",
-    "zeroconf", "zeroconf.asyncio", "ifaddr",
 ]
+# zeroconf has compiled parts and loads some modules by name.
+from PyInstaller.utils.hooks import collect_dynamic_libs, collect_submodules
+hidden += collect_submodules("zeroconf") + collect_submodules("ifaddr")
 
 wanted = ("ffmpeg", "ffprobe", "comskip")
 exe_suffix = ".exe" if sys.platform == "win32" else ""
 binaries = [(str(tools_bin / (n + exe_suffix)), "bin") for n in wanted]
+binaries += collect_dynamic_libs("zeroconf")
 missing = [src for src, _ in binaries if not Path(src).is_file()]
 if missing:
     raise SystemExit("missing tools, run fetch_tools.py / build_comskip.sh first: " + ", ".join(missing))

@@ -182,7 +182,8 @@ async def startup():
     if os.environ.get("COUCHELEPHANT_NO_SYNC_LOOP") == "1":
         return
     # Here, past the test early-return, so a test never announces by accident.
-    announce.start(paths.port())
+    await asyncio.to_thread(announce.start, paths.port())
+    asyncio.create_task(announce_loop())
     asyncio.create_task(sync_loop())
     asyncio.create_task(backup_loop())
     asyncio.create_task(updates.update_loop())
@@ -193,7 +194,7 @@ async def startup():
 
 @app.on_event("shutdown")
 async def shutdown():
-    announce.stop()
+    await asyncio.to_thread(announce.stop)
     recorder.shutdown()
     adskip.shutdown()
 
@@ -255,6 +256,13 @@ async def sync_loop():
             if ok:
                 await asyncio.to_thread(passes.run_passes)
         await asyncio.sleep(max(5, minutes) * 60)
+
+
+async def announce_loop():
+    """Notice a new address or a machine rename, and retry a failed announce."""
+    while True:
+        await asyncio.sleep(60)
+        await asyncio.to_thread(announce.check)
 
 
 async def backup_loop():

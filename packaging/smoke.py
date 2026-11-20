@@ -79,6 +79,8 @@ def main(exe_arg: str) -> int:
         proc = subprocess.Popen([str(exe), "--port", str(port), "--no-open"], env=env)
         try:
             base = f"http://127.0.0.1:{port}"
+            # app.web imports zeroconf at module level, so a build that lost
+            # it never answers here.
             _wait_for(f"{base}/api/tv/hello", proc)
             if _get(f"{base}/static/css/app.css") != 200:
                 raise SystemExit("static files are missing from the build")

@@ -163,11 +163,11 @@ def test_failure_logs_one_line_and_does_not_raise(caplog, monkeypatch):
 def test_setting_change_calls_refresh(monkeypatch):
     from app.routes import settings
     calls = []
-    monkeypatch.setattr(announce, "refresh", lambda: calls.append(1))
+    monkeypatch.setattr(announce, "refresh", lambda retry=False: calls.append(retry))
     settings.apply({"announce": "0"})
     settings.apply({"announce": "0"})
     settings.apply({"announce": "1"})
-    assert len(calls) == 2
+    assert calls == [True, True]
     assert db.get_setting("announce") == "1"
 
 
@@ -179,3 +179,155 @@ def test_tray_does_not_import_announce():
          "import sys, app.tray; print('app.announce' in sys.modules or 'zeroconf' in sys.modules)"],
         capture_output=True, text=True, check=True).stdout.strip()
     assert out == "False"
+
+
+def _fake_zc(monkeypatch):
+    """A stand-in for zeroconf that records what it was asked, with no network."""
+    seen = {"registered": [], "unregistered": 0}
+
+    class Fake:
+        def __init__(self, *a, **k):
+            pass
+
+        async def async_register_service(self, info, allow_name_change=False):
+            seen["registered"].append(info)
+
+        async def async_update_service(self, info):
+            seen["registered"].append(info)
+
+        async def async_unregister_service(self, info):
+            seen["unregistered"] += 1
+
+        async def async_close(self):
+            pass
+    monkeypatch.setattr(announce, "AsyncZeroconf", Fake)
+    return seen
+
+
+def test_failed_start_is_retried_after_the_wait(monkeypatch, caplog):
+    seen = _fake_zc(monkeypatch)
+    real = announce.AsyncZeroconf
+    tries = []
+
+    def flaky(*a, **k):
+        tries.append(1)
+        if len(tries) == 1:
+            raise OSError("network not up yet")
+        return real(*a, **k)
+    monkeypatch.setattr(announce, "AsyncZeroconf", flaky)
+    a = announce.Announcer()
+    with caplog.at_level(logging.INFO, logger="couchelephant.announce"):
+        a.start(18776)
+        assert not a.running()
+        a.check()                      # too soon: nothing happens
+        assert not a.running()
+        monkeypatch.setattr(announce, "RETRY_SECONDS", 0)
+        a.check()
+    try:
+        assert a.running()
+        assert len(seen["registered"]) == 1
+        assert len([r for r in caplog.records
+                    if r.name == "couchelephant.announce"]) == 1
+    finally:
+        a.stop()
+
+
+def test_toggling_the_setting_lifts_a_failure(monkeypatch):
+    _fake_zc(monkeypatch)
+    a = announce.Announcer()
+    a._failed = True
+    a.start(18777)
+    assert not a.running()
+    a.refresh(retry=True)
+    try:
+        assert a.running()
+    finally:
+        a.stop()
+
+
+def test_new_address_re_registers(monkeypatch):
+    seen = _fake_zc(monkeypatch)
+    addrs = [[socket.inet_aton("192.0.2.10")]]
+    monkeypatch.setattr(announce, "_addresses", lambda: addrs[0])
+    a = announce.Announcer()
+    a.start(18778)
+    try:
+        a.check()
+        assert len(seen["registered"]) == 1        # nothing moved
+        addrs[0] = [socket.inet_aton("192.0.2.77")]
+        a.check()
+        assert len(seen["registered"]) == 2
+        assert seen["unregistered"] == 1
+        assert seen["registered"][1].addresses == [socket.inet_aton("192.0.2.77")]
+    finally:
+        a.stop()
+
+
+def test_docker_bridge_address_is_left_out(monkeypatch):
+    import ifaddr
+    from app import paths
+
+    class Ip:
+        def __init__(self, ip):
+            self.ip, self.is_IPv4 = ip, True
+
+    class Ad:
+        ips = [Ip("172.17.0.2"), Ip("192.0.2.5")]
+    monkeypatch.setattr(ifaddr, "get_adapters", lambda: [Ad()])
+    monkeypatch.setattr(paths, "_in_container", lambda: True)
+    assert announce._addresses() == [socket.inet_aton("192.0.2.5")]
+
+
+def test_container_on_the_bridge_alone_does_not_announce(monkeypatch, caplog):
+    import ifaddr
+    from app import paths
+
+    class Ip:
+        ip, is_IPv4 = "172.17.0.2", True
+
+    class Ad:
+        ips = [Ip()]
+    seen = _fake_zc(monkeypatch)
+    monkeypatch.setattr(ifaddr, "get_adapters", lambda: [Ad()])
+    monkeypatch.setattr(paths, "_in_container", lambda: True)
+    a = announce.Announcer()
+    with caplog.at_level(logging.INFO, logger="couchelephant.announce"):
+        a.start(18779)
+        a.refresh()
+    a.stop()
+    assert not seen["registered"]
+    lines = [r.getMessage() for r in caplog.records
+             if r.name == "couchelephant.announce"]
+    assert lines == ["Not announcing on the network: this container is on Docker's "
+                     "bridge network. Use host networking to let the apps find it, "
+                     "or type the address."]
+
+
+def test_startup_does_not_wait_for_a_slow_announce(monkeypatch):
+    import asyncio
+
+    from app import web
+    monkeypatch.delenv("COUCHELEPHANT_NO_SYNC_LOOP", raising=False)
+    for name in ("sync_loop", "backup_loop", "outside_loop", "recorder_loop",
+                 "backingstore_loop", "announce_loop"):
+        monkeypatch.setattr(web, name, lambda: asyncio.sleep(0), raising=False)
+    monkeypatch.setattr(web.updates, "update_loop", lambda: asyncio.sleep(0))
+    monkeypatch.setattr(web.announce, "start", lambda port: time.sleep(1.0))
+
+    async def go():
+        ticks = []
+
+        async def ticker():
+            for _ in range(5):
+                await asyncio.sleep(0.05)
+                ticks.append(1)
+        t = asyncio.create_task(ticker())
+        began = time.time()
+        await web.startup()
+        took = time.time() - began
+        await t
+        return took, len(ticks)
+    took, ticks = asyncio.run(go())
+    # The loop kept turning while start slept, so it ran off the loop.
+    assert ticks == 5
+    assert took >= 0.9

@@ -140,7 +140,7 @@ def apply(values: dict) -> list[str]:
         before = db.get_setting(key)
         db.set_setting(key, value)
         if key == "announce" and before != value:
-            announce.refresh()
+            announce.refresh(retry=True)
     return refused
 
 
