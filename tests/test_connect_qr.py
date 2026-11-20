@@ -135,3 +135,11 @@ def test_with_sign_in_on_only_an_administrator_gets_it(client, monkeypatch):
     assert client.get("/api/connect.svg").status_code == 403
     client.cookies.set(auth.SESSION_COOKIE, auth.create_session(admin))
     assert client.get("/api/connect.svg").status_code == 200
+
+
+def test_an_https_proxy_name_gives_the_machines_plain_http_address(client, monkeypatch):
+    # Reached through a proxy at https://tv.example.org, the phone should use
+    # the server's own port, which speaks plain http.
+    _machine(monkeypatch, "192.168.1.20")
+    r = client.get("https://tv.example.org/api/connect.svg")
+    assert _body(r) == _expected("http://192.168.1.20:8710")

@@ -228,6 +228,7 @@ def lan_url(request: Request):
         if host is None:
             return None
         port = paths.port()
+        scheme = "http"            # the server's own port speaks plain http
     return f"{scheme}://{host}" + (f":{port}" if port else "")
 
 
