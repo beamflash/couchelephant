@@ -20,6 +20,7 @@ import josepy as jose
 import requests
 from acme import challenges, client, crypto_util, errors, messages
 from cryptography import x509
+from cryptography.exceptions import UnsupportedAlgorithm
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
@@ -31,8 +32,10 @@ PRODUCTION = "https://acme-v02.api.letsencrypt.org/directory"
 RENEW_DAYS = 30
 ORDER_SECONDS = 120
 DAY = 86400
+HOUR = 3600
 
 _lock = threading.Lock()
+_wlock = threading.Lock()    # guards _wanted and the hand-back of _lock
 _wanted: list = []          # a domain asked for while an order was running
 _state = {"domain": None, "working": False}
 
@@ -90,18 +93,38 @@ def challenge_cert(domain: str, key_auth: str):
 # ---------- the domain ----------
 
 _LABEL = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
+_HOME_ONLY = (".local", ".home.arpa", ".lan", ".internal")
+_INVISIBLE = re.compile("[\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180b-\u180f"
+                        "\u200b-\u200f\u202a-\u202e\u2060-\u206f\u3164\ufe00-\ufe0f"
+                        "\ufeff\uffa0]")
 
 
 def clean_domain(text: str) -> str:
-    """A host name Let's Encrypt can use, or ValueError with plain words."""
-    name = (text or "").strip().lower().rstrip(".")
+    """A host name Let's Encrypt can use, or ValueError with plain words.
+    Case, spaces around it and a trailing dot are tidied; anything else that
+    would have to change is refused, so what is saved is what was typed."""
+    raw = (text or "").strip()
+    if _INVISIBLE.search(raw):
+        raise ValueError("The name has an invisible character in it. Type it again "
+                         "by hand.")
+    name = raw.lower().rstrip(".")
     try:
-        name = name.encode("idna").decode("ascii")
+        ascii_name = name.encode("idna").decode("ascii")
+        same = ascii_name.encode("ascii").decode("idna") == name
     except UnicodeError:
         raise ValueError("That is not a valid domain name.") from None
+    if not same:
+        raise ValueError("That name has characters that change when saved. Type it "
+                         "in plain letters.")
+    name = ascii_name
+    for tail in _HOME_ONLY:
+        if name.endswith(tail):
+            raise ValueError(f"A name ending in {tail} only works inside your home. "
+                             "Use a domain you own.")
     labels = name.split(".")
-    if (len(name) > 253 or len(labels) < 2
-            or not all(_LABEL.match(x) for x in labels) or labels[-1].isdigit()):
+    if len(labels) >= 2 and labels[-1].isdigit():
+        raise ValueError("The name must end with a word like .com, not a number.")
+    if len(name) > 253 or len(labels) < 2 or not all(_LABEL.match(x) for x in labels):
         raise ValueError("That is not a valid domain name. Use something like "
                          "tv.example.com.")
     return name
@@ -118,20 +141,44 @@ def _files(name: str):
     return d / (name + ".cert.pem"), d / (name + ".key.pem")
 
 
+_cert_cache: dict = {}
+
+
+def _stamp(*paths_):
+    out = []
+    for p in paths_:
+        try:
+            st = p.stat()
+        except OSError:
+            return None
+        out.append((st.st_mtime_ns, st.st_size))
+    return tuple(out)
+
+
 def real_cert(name: str):
     """The certificate for this name if the files are whole, the key is the
-    certificate's, the name is on it and it has not run out; else None."""
+    certificate's, the name is on it and it has not run out; else None. The
+    parsed certificate is kept until the files change."""
     if not name:
         return None
     cert_path, key_path = _files(name)
-    try:
-        cert = tls._load(cert_path, key_path)
-        names = cert.extensions.get_extension_for_class(
-            x509.SubjectAlternativeName).value.get_values_for_type(x509.DNSName)
-    except Exception:
+    stamp = _stamp(cert_path, key_path)
+    if stamp is None:
         return None
-    now = datetime.datetime.now(datetime.UTC)
-    if name not in names or cert.not_valid_after_utc <= now:
+    hit = _cert_cache.get(name)
+    if hit and hit[0] == stamp:
+        cert = hit[1]
+    else:
+        try:
+            cert = tls._load(cert_path, key_path)
+            names = cert.extensions.get_extension_for_class(
+                x509.SubjectAlternativeName).value.get_values_for_type(x509.DNSName)
+            if name not in names:
+                cert = None
+        except Exception:
+            cert = None
+        _cert_cache[name] = (stamp, cert)
+    if cert is None or cert.not_valid_after_utc <= datetime.datetime.now(datetime.UTC):
         return None
     return cert
 
@@ -151,9 +198,12 @@ def trusted_for(host: str) -> bool:
 
 def _account_key():
     path = tls._dir() / "acme-account.pem"
+    key = None
     try:
         key = serialization.load_pem_private_key(path.read_bytes(), password=None)
-    except (OSError, ValueError):
+    except (OSError, ValueError, TypeError, UnsupportedAlgorithm):
+        pass
+    if not isinstance(key, ec.EllipticCurvePrivateKey):
         key = ec.generate_private_key(ec.SECP256R1())
         tls._write(path, key.private_bytes(serialization.Encoding.PEM,
                                            serialization.PrivateFormat.PKCS8,
@@ -220,23 +270,58 @@ def _set_error(text: str) -> None:
 
 # ---------- the order ----------
 
+def too_soon(name: str) -> int:
+    """Seconds still to wait before this name may be tried again: one attempt
+    an hour, except for a name that was not the last one tried. The time is in
+    the database, so a restart does not order again at once."""
+    if (db.get_setting("away_domain_last_name") or "") != name:
+        return 0
+    try:
+        last = int(db.get_setting("away_domain_last_try") or 0)
+    except ValueError:
+        return 0
+    return max(0, last + HOUR - int(time.time()))
+
+
 def request(name: str) -> None:
     """Get a certificate for this name. One order runs at a time: a second
     call while one runs returns at once, and if it names a different domain
-    that one is ordered when the first is done."""
-    if not _lock.acquire(blocking=False):
-        _wanted[:] = [name]
-        return
-    try:
-        while True:
+    that one is ordered when the first is done. Nothing is ordered while the
+    certificate is good, or within an hour of the last try for the same name."""
+    with _wlock:
+        if not _lock.acquire(blocking=False):
+            _wanted[:] = [name]
+            return
+    while True:
+        try:
             _state["domain"] = name
-            _run(name)
+            if not _skip(name):
+                db.set_setting("away_domain_last_name", name)
+                db.set_setting("away_domain_last_try", int(time.time()))
+                _run(name)
+        except BaseException:
+            _release()
+            raise
+        with _wlock:                 # the queue is read and the lock let go as one step
             nxt = _wanted.pop() if _wanted else None
             if not nxt or nxt == name:
-                break
-            name = nxt
-    finally:
+                _lock.release()
+                return
+        name = nxt
+
+
+def _release():
+    with _wlock:
+        _wanted.clear()
         _lock.release()
+
+
+def _skip(name: str) -> bool:
+    until = valid_until(name)
+    if until and until - datetime.datetime.now(datetime.UTC) >= \
+            datetime.timedelta(days=RENEW_DAYS):
+        return True
+    return too_soon(name) > 0
 
 
 def _run(name: str) -> None:

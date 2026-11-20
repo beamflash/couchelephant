@@ -167,6 +167,96 @@ def challenge_clear() -> None:
     _challenge.clear()
 
 
+def challenge_for(hello: bytes):
+    """The challenge context when this ClientHello offers acme-tls/1 for the
+    name of an order that is running (RFC 8737 section 6), else None."""
+    if not _challenge:
+        return None
+    parsed = parse_client_hello(hello)
+    if not parsed or not parsed[0] or ACME_ALPN not in parsed[1]:
+        return None
+    return _challenge.get(parsed[0].lower().rstrip("."))
+
+
+ACME_ALPN = "acme-tls/1"
+MAX_HELLO = 16384
+
+
+class _Short(Exception):
+    pass
+
+
+class _Reader:
+    def __init__(self, data: bytes):
+        self.d, self.i = data, 0
+
+    def take(self, n: int) -> bytes:
+        if n < 0 or self.i + n > len(self.d):
+            raise _Short
+        out = self.d[self.i:self.i + n]
+        self.i += n
+        return out
+
+    def num(self, n: int) -> int:
+        return int.from_bytes(self.take(n), "big")
+
+    def done(self) -> bool:
+        return self.i == len(self.d)
+
+
+def parse_client_hello(data: bytes):
+    """(server name or None, [alpn protocols]) from the first TLS record, or
+    None for anything that is not one whole, well formed ClientHello. Strict:
+    every length must fit exactly. Never raises."""
+    try:
+        r = _Reader(data)
+        if r.num(1) != 0x16 or r.num(1) != 3:
+            return None
+        r.num(1)
+        body = _Reader(r.take(r.num(2)))
+        if body.num(1) != 1:
+            return None
+        hs = _Reader(body.take(body.num(3)))
+        if not body.done():
+            return None                      # more than one message: not a plain hello
+        hs.take(2 + 32)
+        hs.take(hs.num(1))                   # session id
+        suites = hs.num(2)                   # cipher suites
+        if suites % 2:
+            return None
+        hs.take(suites)
+        hs.take(hs.num(1))                   # compression methods
+        if hs.done():
+            return (None, [])
+        exts = _Reader(hs.take(hs.num(2)))
+        if not hs.done():
+            return None
+        name, alpn = None, []
+        while not exts.done():
+            typ = exts.num(2)
+            e = _Reader(exts.take(exts.num(2)))
+            if typ == 0:                     # server_name
+                lst = _Reader(e.take(e.num(2)))
+                while not lst.done():
+                    kind, host = lst.num(1), lst.take(lst.num(2))
+                    if kind == 0 and name is None:
+                        name = host.decode("ascii")
+                if not e.done():
+                    return None
+            elif typ == 16:                  # ALPN
+                lst = _Reader(e.take(e.num(2)))
+                while not lst.done():
+                    n = lst.num(1)
+                    if n == 0:
+                        return None
+                    alpn.append(lst.take(n).decode("ascii"))
+                if not e.done():
+                    return None
+        return (name, alpn)
+    except (_Short, UnicodeError, ValueError):
+        return None
+
+
 def _new_context() -> ssl.SSLContext:
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.minimum_version = ssl.TLSVersion.TLSv1_2
@@ -190,18 +280,16 @@ def _real_context(domain: str):
 
 
 def _chooser(domain: str, real):
-    """The SNI callback: the throwaway certificate while an order runs for
-    that name, the real certificate for that name, the own one for anything
-    else (including no name at all)."""
+    """The SNI callback: the real certificate for that name, the own one for
+    anything else (including no name at all). It never serves the challenge:
+    that goes only to a client that offers acme-tls/1, decided before the
+    handshake in oneport (see challenge_for)."""
     def pick(sslobj, name, _ctx):
         name = (name or "").lower().rstrip(".")
         if not name or name != domain:
             return None
         try:
-            chall = _challenge.get(name)
-            if chall is not None:
-                sslobj.context = chall
-            elif real is not None:
+            if real is not None:
                 sslobj.context = real
         except Exception as e:
             log.warning("could not pick a certificate for %s: %s", name, e)

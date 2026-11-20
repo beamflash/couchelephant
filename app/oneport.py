@@ -161,6 +161,29 @@ async def peek_first_byte(loop, conn, deadline=None):
     return data[0] if data else None
 
 
+async def peek_hello(loop, conn, deadline):
+    """The whole first TLS record (the ClientHello), left in place. It may
+    arrive in pieces, so peek until the record's own length is there; stop at
+    the deadline or at 16 KB and give back what there is (the parser then
+    says no, and the connection is served as it always was)."""
+    while True:
+        try:
+            data = conn.recv(5 + tls.MAX_HELLO, socket.MSG_PEEK)
+            if not data:
+                return b""                  # the client went away
+        except (BlockingIOError, InterruptedError):
+            data = b""
+        except OSError:
+            return b""
+        if len(data) >= 5:
+            want = 5 + int.from_bytes(data[3:5], "big")
+            if want > 5 + tls.MAX_HELLO or len(data) >= want:
+                return data[:want]
+        if time.monotonic() >= deadline:
+            return data
+        await asyncio.sleep(0.01)
+
+
 class _Redirector:
     """Plain HTTP from outside, while away is on, goes to the same URL on
     HTTPS. Home keeps plain HTTP. A request that came
@@ -292,6 +315,9 @@ class _Listener:
                 if ssl_ctx is None:             # away is off: TLS is refused
                     conn.close()
                     return
+                if tls._challenge:              # an order is running: look at the hello
+                    hello = await peek_hello(self.loop, conn, accepted + FIRST_BYTE_SECONDS)
+                    ssl_ctx = tls.challenge_for(hello) or ssl_ctx
             await self.loop.connect_accepted_socket(
                 self.server.create_protocol, conn, ssl=ssl_ctx,
                 ssl_handshake_timeout=HANDSHAKE_SECONDS if ssl_ctx else None,

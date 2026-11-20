@@ -83,6 +83,18 @@ def test_domain_is_cleaned(text, out):
     assert acme_tls.clean_domain(text) == out
 
 
+@pytest.mark.parametrize("text,words", [
+    ("tv.local", ".local"), ("tv.home.arpa", ".home.arpa"), ("tv.lan", ".lan"),
+    ("tv.internal", ".internal"), ("tv.example.123", "not a number"),
+    ("tv\u200b.example.com", "invisible"), ("tv\u2060.example.com", "invisible"),
+    ("\uff54\uff56.example.com", "plain letters"),
+])
+def test_names_that_cannot_work_are_refused_with_the_reason(text, words):
+    with pytest.raises(ValueError) as e:
+        acme_tls.clean_domain(text)
+    assert words in str(e.value)
+
+
 @pytest.mark.parametrize("text", ["", "localhost", "a b.com", "1.2.3.4", "-x.example.com",
                                   "x..com", "https://x.com", "x/y.com", "a" * 64 + ".com"])
 def test_bad_domain_is_refused(text):
@@ -413,6 +425,12 @@ def test_the_challenge_certificate_answers_acme_tls_only_during_an_order():
             x509.ObjectIdentifier("1.3.6.1.5.5.7.1.31"))
         assert ext.critical and ext.value.value[2:] == \
             __import__("hashlib").sha256(b"tok.thumb").digest()
+        # only a client that offers acme-tls/1 gets the challenge (RFC 8737)
+        own_serial = x509.load_pem_x509_certificate(
+            tls.ensure_own().cert_path.read_bytes()).serial_number
+        for alpn in (None, ["h2", "http/1.1"], ["http/1.1"]):
+            got, proto = peer(srv.port, "tv.example.com", alpn=alpn)
+            assert got.serial_number == own_serial and proto != "acme-tls/1"
         # another name still gets the own certificate, with no acme protocol
         got, proto = peer(srv.port, "other.example.com", alpn=["acme-tls/1"])
         assert proto is None and "tv.example.com" not in sans(got)
@@ -420,6 +438,241 @@ def test_the_challenge_certificate_answers_acme_tls_only_during_an_order():
         _, proto = peer(srv.port, "tv.example.com", alpn=["acme-tls/1"])
         assert proto is None
     assert not list((paths.data_dir() / "tls").glob("challenge.*"))
+
+
+# ---------- the ClientHello ----------
+
+def a_hello(sni="tv.example.com", alpn=("acme-tls/1",), version=None):
+    """A real ClientHello, the bytes a TLS client sends first."""
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    if alpn:
+        ctx.set_alpn_protocols(list(alpn))
+    inc, out = ssl.MemoryBIO(), ssl.MemoryBIO()
+    obj = ctx.wrap_bio(inc, out, server_hostname=sni)
+    with pytest.raises(ssl.SSLWantReadError):
+        obj.do_handshake()
+    return out.read()
+
+
+def test_the_parser_reads_name_and_protocols():
+    assert tls.parse_client_hello(a_hello()) == ("tv.example.com", ["acme-tls/1"])
+    assert tls.parse_client_hello(a_hello(alpn=("h2", "http/1.1"))) == \
+        ("tv.example.com", ["h2", "http/1.1"])
+    assert tls.parse_client_hello(a_hello(alpn=None)) == ("tv.example.com", [])
+    assert tls.parse_client_hello(a_hello(sni=None)) == (None, ["acme-tls/1"])
+
+
+def test_the_parser_never_crashes_on_junk():
+    import random
+    good = a_hello()
+    for n in range(len(good)):                       # every truncation
+        assert tls.parse_client_hello(good[:n]) is None
+    rng = random.Random(7)
+    for _ in range(3000):
+        junk = bytearray(good)
+        for _ in range(rng.randint(1, 6)):           # a few flipped bytes
+            junk[rng.randrange(len(junk))] = rng.randrange(256)
+        tls.parse_client_hello(bytes(junk))          # None or a tuple, no exception
+    for _ in range(500):
+        tls.parse_client_hello(bytes(rng.randrange(256) for _ in range(rng.randint(0, 400))))
+    assert tls.parse_client_hello(good + b"trailing") == ("tv.example.com", ["acme-tls/1"])
+    # lengths that lie
+    lie = bytearray(good)
+    lie[3:5] = (len(good) + 500).to_bytes(2, "big")
+    assert tls.parse_client_hello(bytes(lie)) is None
+
+
+def _split_handshake(port, hello_chunks, alpn, sni, pause=0.3):
+    """A client that sends its ClientHello in pieces, slowly."""
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    ctx.set_alpn_protocols(alpn)
+    inc, out = ssl.MemoryBIO(), ssl.MemoryBIO()
+    obj = ctx.wrap_bio(inc, out, server_hostname=sni)
+    with socket.create_connection(("127.0.0.1", port), timeout=10) as raw:
+        try:
+            obj.do_handshake()
+        except ssl.SSLWantReadError:
+            pass
+        hello = out.read()
+        pos = 0
+        for n in hello_chunks:
+            raw.sendall(hello[pos:pos + n])
+            pos += n
+            time.sleep(pause)
+        raw.sendall(hello[pos:])
+        while True:
+            try:
+                obj.do_handshake()
+                break
+            except ssl.SSLWantReadError:
+                data = out.read()
+                if data:
+                    raw.sendall(data)
+                chunk = raw.recv(65536)
+                assert chunk, "the server closed the connection"
+                inc.write(chunk)
+        return (x509.load_der_x509_certificate(obj.getpeercert(binary_form=True)),
+                obj.selected_alpn_protocol())
+
+
+def test_a_hello_sent_in_pieces_still_gets_the_challenge():
+    db.set_setting("away_mode", "1")
+    db.set_setting("away_domain", "tv.example.com")
+    with Running() as srv:
+        cert_pem, key_pem = acme_tls.challenge_cert("tv.example.com", "tok.thumb")
+        tls.challenge_set("tv.example.com", cert_pem, key_pem)
+        got, proto = _split_handshake(srv.port, [3, 2, 40], ["acme-tls/1"],
+                                      "tv.example.com")
+        assert proto == "acme-tls/1" and sans(got) == ["tv.example.com"]
+        got, proto = _split_handshake(srv.port, [3, 2, 40], ["h2"], "tv.example.com")
+        assert proto != "acme-tls/1" and "tv.example.com" not in sans(got)
+
+
+def test_a_broken_hello_does_not_hurt_the_port():
+    db.set_setting("away_mode", "1")
+    with Running() as srv:
+        good = a_hello()
+        evil = [good[:7], b"\x16\x03\x01\xff\xff" + b"x" * 100,    # 64 KB claimed, then nothing
+                b"\x16\x03\x01\x00\x10" + b"\x00" * 16, b"\x16", b"\x16\x03"]
+        for junk in evil:
+            with socket.create_connection(("127.0.0.1", srv.port), timeout=5) as c:
+                c.sendall(junk)
+                c.shutdown(socket.SHUT_WR)
+                try:
+                    c.recv(100)
+                except OSError:
+                    pass
+        assert peer(srv.port, "other.example.com")[0] is not None
+
+
+# ---------- the queue, the throttle, small guards ----------
+
+def test_a_name_queued_during_the_hand_back_is_not_lost(monkeypatch):
+    calls = []
+    monkeypatch.setattr(acme_tls, "_run", calls.append)
+
+    class Slow(list):
+        def __len__(self):                   # the moment the first order checks the queue
+            time.sleep(0.4)
+            return list.__len__(self)
+    monkeypatch.setattr(acme_tls, "_wanted", Slow())
+    a = threading.Thread(target=acme_tls.request, args=("one.example.com",))
+    a.start()
+    time.sleep(0.15)
+    acme_tls.request("two.example.com")      # arrives while the first is finishing
+    a.join(10)
+    for _ in range(100):
+        if "two.example.com" in calls and not acme_tls._lock.locked():
+            break
+        time.sleep(0.05)
+    assert calls == ["one.example.com", "two.example.com"]
+
+
+def _count_orders(monkeypatch):
+    calls = []
+    monkeypatch.setattr(acme_tls, "_order", calls.append)
+    db.set_setting("away_mode", "1")
+    return calls
+
+
+def test_no_order_when_the_certificate_is_good(monkeypatch):
+    calls = _count_orders(monkeypatch)
+    db.set_setting("away_domain", "tv.example.com")
+    make_real("tv.example.com", 80)
+    acme_tls.request("tv.example.com")
+    assert calls == []
+    make_real("tv.example.com", 10)               # due: it orders
+    acme_tls.request("tv.example.com")
+    assert calls == ["tv.example.com"]
+
+
+def test_one_attempt_an_hour_unless_the_name_changed(monkeypatch):
+    calls = _count_orders(monkeypatch)
+    acme_tls.request("tv.example.com")
+    acme_tls.request("tv.example.com")            # a restart leaves only the database
+    assert calls == ["tv.example.com"]
+    assert 0 < acme_tls.too_soon("tv.example.com") <= 3600
+    assert acme_tls.too_soon("other.example.com") == 0
+    acme_tls.request("other.example.com")         # a new name goes at once
+    assert calls == ["tv.example.com", "other.example.com"]
+    db.set_setting("away_domain_last_try", str(int(time.time()) - 3601))
+    acme_tls.request("other.example.com")
+    assert calls[-1] == "other.example.com" and len(calls) == 3
+
+
+def test_the_save_says_how_long_to_wait(monkeypatch):
+    _count_orders(monkeypatch)
+    started = []
+    monkeypatch.setattr(acme_tls, "start_in_background", started.append)
+    acme_tls.request("tv.example.com")
+    r = _client().post("/settings/away/domain", data={"domain": "tv.example.com"}).json()
+    assert r["ok"] is False and "minute" in r["error"] and started == []
+    r = _client().post("/settings/away/domain", data={"domain": "new.example.com"}).json()
+    assert r["ok"] is True and started == ["new.example.com"]
+
+
+def test_one_error_does_not_end_the_loop(monkeypatch):
+    from app import web
+    seen = []
+
+    def boom_check():
+        seen.append("check")
+        raise RuntimeError("no network")
+
+    def boom_renew():
+        seen.append("renew")
+        raise RuntimeError("no disk")
+    monkeypatch.setattr(announce, "check", boom_check)
+    monkeypatch.setattr(acme_tls, "renew_daily", boom_renew)
+    web._announce_tick()                          # must not raise
+    assert seen == ["check", "renew"]
+
+
+def test_an_unusable_account_key_is_replaced():
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    path = paths.data_dir() / "tls" / "acme-account.pem"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    enc = ec.generate_private_key(ec.SECP256R1()).private_bytes(      # needs a password
+        serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+        serialization.BestAvailableEncryption(b"x"))
+    rsa_key = rsa.generate_private_key(65537, 2048).private_bytes(   # not an EC key
+        serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption())
+    for bad in (enc, rsa_key, b"junk", b""):
+        path.write_bytes(bad)
+        jwk = acme_tls._account_key()
+        assert jwk.key.curve.name == "secp256r1"
+        assert path.read_bytes().startswith(b"-----BEGIN PRIVATE KEY")
+
+
+def test_the_hot_path_parses_no_pem(monkeypatch):
+    db.set_setting("away_mode", "1")
+    db.set_setting("away_domain", "tv.example.com")
+    make_real("tv.example.com", 90)
+    calls = []
+    real_load = tls._load
+    monkeypatch.setattr(tls, "_load", lambda *a: calls.append(1) or real_load(*a))
+    for _ in range(50):
+        assert acme_tls.trusted_for("tv.example.com")
+    assert len(calls) == 1
+    make_real("tv.example.com", 80)                # new files: parsed again
+    assert acme_tls.trusted_for("tv.example.com")
+    assert len(calls) == 2
+    calls.clear()
+    tls.context()
+    for _ in range(50):
+        tls.context()
+    assert len(calls) <= 1
+
+
+def test_the_pebble_image_is_pinned():
+    ci = (HERE.parent / ".github" / "workflows" / "ci.yml").read_text()
+    assert "pebble:latest" not in ci and "ghcr.io/letsencrypt/pebble:" in ci
+    assert ":latest" not in IMAGE
 
 
 # ---------- the order itself, against Pebble ----------
@@ -433,7 +686,7 @@ def test_the_challenge_certificate_answers_acme_tls_only_during_an_order():
 #     starts and removes again.
 
 MINICA = str(HERE / "pebble.minica.pem")
-IMAGE = "ghcr.io/letsencrypt/pebble:latest"
+IMAGE = "ghcr.io/letsencrypt/pebble:2.10.3"
 
 
 def _docker(*args, timeout=120):

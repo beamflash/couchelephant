@@ -188,7 +188,9 @@ _PAIR_PATHS = ("/api/tv/pair", "/api/tv/pair/poll")
 def pairing_open_to_outsiders(request) -> bool:
     """First pairing happens at home, unless the connection is HTTPS to the
     domain whose real certificate this server holds. Then a device can check
-    who it is talking to with the system's own trust."""
+    who it is talking to with the system's own trust. The name is the Host
+    header: uvicorn's ASGI scope carries no TLS transport, so the SNI is out
+    of reach without patching its protocol classes, and a client picks both."""
     host = (request.headers.get("host") or "").split(":")[0]
     return request.url.scheme == "https" and acme_tls.trusted_for(host)
 
@@ -357,13 +359,24 @@ async def sync_loop():
         await asyncio.sleep(max(5, minutes) * 60)
 
 
+def _announce_tick():
+    """One pass. Each step has its own try, so a failed announce never stops
+    the daily certificate renewal and the other way round."""
+    try:
+        announce.check()
+    except Exception:
+        log.exception("the announce check failed")
+    try:
+        acme_tls.renew_daily()
+    except Exception:
+        log.exception("the certificate renewal check failed")
+
+
 async def announce_loop():
     """Notice a new address or a machine rename, and retry a failed announce."""
     while True:
         await asyncio.sleep(60)
-        await asyncio.to_thread(announce.check)
-        # Once a day, from here: a real certificate with 30 days left is renewed.
-        await asyncio.to_thread(acme_tls.renew_daily)
+        await asyncio.to_thread(_announce_tick)
 
 
 async def backup_loop():

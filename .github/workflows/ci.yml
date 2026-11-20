@@ -27,7 +27,7 @@ jobs:
       # checks TLS-ALPN, so it connects back to this job on port 5001 by the
       # job container's own host name (both are on one Docker network).
       pebble:
-        image: ghcr.io/letsencrypt/pebble:latest
+        image: ghcr.io/letsencrypt/pebble:2.10.3
         env:
           PEBBLE_VA_ALWAYS_VALID: "0"
           PEBBLE_VA_NOSLEEP: "1"

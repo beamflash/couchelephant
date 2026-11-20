@@ -410,6 +410,11 @@ def settings_away_domain(domain: str = Form("")):
     if not exposure.away_on():
         return JSONResponse({"ok": False,
                              "error": "Turn on Use away from home first."})
+    wait = acme_tls.too_soon(name)
+    if wait:
+        return JSONResponse({"ok": False, "error":
+                             f"Let's Encrypt was asked a little while ago. Try again in "
+                             f"{max(1, wait // 60)} minutes."})
     db.set_setting("away_domain", name)
     acme_tls.drop_error()
     acme_tls.start_in_background(name)
