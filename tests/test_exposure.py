@@ -20,10 +20,12 @@ def _pinned(monkeypatch):
     exposure.clear_cache()
 
 
-def req(peer, xff=None):
+def req(peer, xff=None, forwarded=None):
     """xff may be one line or a list of lines."""
     lines = [xff] if isinstance(xff, str) else (xff or [])
     raw = [(b"x-forwarded-for", x.encode()) for x in lines]
+    if forwarded:
+        raw.append((b"forwarded", forwarded.encode()))
     return SimpleNamespace(client=SimpleNamespace(host=peer), headers=Headers(raw=raw))
 
 
@@ -40,10 +42,41 @@ def test_outside_addresses(ip):
     assert not exposure.is_home(req(ip))
 
 
-def test_xff_ignored_from_an_untrusted_peer():
-    assert exposure.is_home(req("192.168.1.1", "8.8.8.8"))
-    assert exposure.client_address(req("192.168.1.1", "8.8.8.8")) == ipaddress.ip_address("192.168.1.1")
-    assert exposure.is_home(req("192.168.1.1", ["8.8.8.8", "9.9.9.9"]))
+def test_a_forward_header_from_an_untrusted_peer_is_never_home():
+    # A proxy we were not told about: its visitors all look like the proxy,
+    # so nobody it carries is trusted to be home.
+    assert not exposure.is_home(req("192.168.1.1", "8.8.8.8"))
+    assert not exposure.is_home(req("127.0.0.1", ["8.8.8.8", "9.9.9.9"]))
+    assert not exposure.is_home(req("192.168.1.1", "192.168.1.9"))
+    assert not exposure.is_home(req("127.0.0.1", forwarded="for=8.8.8.8"))
+    assert exposure.is_home(req("192.168.1.1"))          # no header: the peer
+
+
+def test_an_untrusted_forward_is_remembered_for_the_self_check():
+    assert exposure.untrusted_forward() is None
+    exposure.is_home(req("127.0.0.1", "8.8.8.8"))
+    assert exposure.untrusted_forward() == "127.0.0.1"
+
+
+@pytest.mark.parametrize("text", ["0.0.0.0/0", "::/0", "::/31", "4.0.0.0/7", "0.0.0.0/1",
+                                  "10.0.0.1, 0.0.0.0/0", "nonsense", "10.0.0.0/33"])
+def test_trusted_proxies_refuse_wide_or_bad_lists(text):
+    nets, error = exposure.parse_trusted(text)
+    assert error and nets == []
+
+
+@pytest.mark.parametrize("text", ["10.0.0.0/8", "192.168.1.5", "2001:db8::/32",
+                                  "127.0.0.1, ::1", ""])
+def test_trusted_proxies_accept_narrow_lists(text):
+    nets, error = exposure.parse_trusted(text)
+    assert error == ""
+    assert len(nets) == len([p for p in text.split(",") if p.strip()])
+
+
+def test_a_too_wide_entry_already_stored_is_ignored():
+    db.set_setting("trusted_proxies", "0.0.0.0/0")
+    assert exposure._trusted() == []
+    assert not exposure.is_home(req("192.168.1.1", "192.168.1.9"))
 
 
 def test_xff_counts_from_a_trusted_proxy():
@@ -73,6 +106,7 @@ def test_all_proxies_in_chain_gives_the_leftmost():
 def test_trusted_peer_without_a_header_is_outside():
     db.set_setting("trusted_proxies", "192.168.1.1")
     assert not exposure.is_home(req("192.168.1.1"))
+    assert not exposure.is_home(req("192.168.1.1", forwarded="for=192.168.1.9"))
 
 
 def test_every_header_line_is_read():
@@ -207,16 +241,16 @@ def test_container_gateway_outside_the_docker_range_is_still_not_home(monkeypatc
 
 
 def test_veth_container_subnet_is_not_home_even_at_a_lan_address(monkeypatch):
-    _container(monkeypatch, gateways=("192.168.64.1",),
-               nics=[_nic("eth0", _IP("192.168.64.2", 24))])
-    assert not exposure.is_home(req("192.168.64.9"))
+    _container(monkeypatch, gateways=("192.0.2.1",),
+               nics=[_nic("eth0", _IP("192.0.2.2", 24))])
+    assert not exposure.is_home(req("192.0.2.9"))
     assert exposure.is_home(req("192.168.1.9"))
 
 
 def test_unknown_driver_is_the_strict_side(monkeypatch):
-    _container(monkeypatch, veth=None, gateways=("192.168.64.1",),
-               nics=[_nic("eth0", _IP("192.168.64.2", 24))])
-    assert not exposure.is_home(req("192.168.64.9"))
+    _container(monkeypatch, veth=None, gateways=("192.0.2.1",),
+               nics=[_nic("eth0", _IP("192.0.2.2", 24))])
+    assert not exposure.is_home(req("192.0.2.9"))
 
 
 def test_macvlan_keeps_the_lan_home_but_not_the_router(monkeypatch):

@@ -25,6 +25,7 @@ _cache: dict = {}
 
 def clear_cache() -> None:
     _cache.clear()
+    _forwarded.clear()
 
 
 def _cached(fn):
@@ -186,22 +187,48 @@ def local_subnets() -> list:
     return out
 
 
-def _trusted():
-    """Setting trusted_proxies: comma-separated addresses or CIDRs."""
+# A trusted proxy is one address or a small block, never "everyone".
+MIN_PREFIX = {4: 8, 6: 32}
+
+
+def _too_wide(net) -> bool:
+    return net.prefixlen < MIN_PREFIX[net.version]
+
+
+def parse_trusted(text):
+    """(networks, error) for a comma-separated list. Any bad or too wide entry
+    refuses the whole list, so nothing half-saved is trusted."""
     out = []
-    for part in (db.get_setting("trusted_proxies") or "").split(","):
+    for part in (text or "").split(","):
         part = part.strip()
         if not part:
             continue
         try:
             net = ipaddress.ip_network(part, strict=False)
         except ValueError:
-            log.warning("trusted_proxies: ignoring %r", part)
-            continue
+            return [], f"{part} is not an address or a block like 10.0.0.0/8."
         if net.version == 6 and net.network_address.ipv4_mapped and net.prefixlen >= 96:
             net = ipaddress.ip_network(
                 (net.network_address.ipv4_mapped, net.prefixlen - 96))
+        if _too_wide(net):
+            return [], (f"{part} is too wide. Name the proxy's own address, or a "
+                        f"block no wider than /{MIN_PREFIX[net.version]}.")
         out.append(net)
+    return out, ""
+
+
+def _trusted():
+    """Setting trusted_proxies: comma-separated addresses or CIDRs. An entry
+    that is bad or too wide is skipped, whatever put it there."""
+    out = []
+    for part in (db.get_setting("trusted_proxies") or "").split(","):
+        if not part.strip():
+            continue
+        nets, error = parse_trusted(part)
+        if error:
+            log.warning("trusted_proxies: ignoring %r", part.strip())
+            continue
+        out += nets
     return out
 
 
@@ -216,14 +243,38 @@ def _is_trusted(addr, trusted) -> bool:
 _NOBODY = ipaddress.ip_address("0.0.0.0")
 
 
+# The last proxy we saw that nobody told us to trust: (peer, time). The
+# self-check reads it.
+_forwarded: list = []
+FORWARD_MEMORY = 24 * 3600
+
+
+def untrusted_forward():
+    """The peer of a recent request that carried a forward header but was not
+    from a trusted proxy, or None."""
+    if _forwarded and time.time() - _forwarded[1] < FORWARD_MEMORY:
+        return _forwarded[0]
+    return None
+
+
+def clear_forward() -> None:
+    _forwarded.clear()
+
+
 def client_address(request):
     """The real client. The direct peer, unless it is a trusted proxy, then
-    the right-most X-Forwarded-For entry that is not a trusted proxy."""
+    the right-most X-Forwarded-For entry that is not a trusted proxy. A
+    forward header from any other peer means a proxy we were not told about:
+    every visitor looks like it, so none is home (fail safe)."""
     peer = _parse(getattr(getattr(request, "client", None), "host", None))
     if peer is None:
         return _NOBODY
     trusted = _trusted()
     if not trusted or not _is_trusted(peer, trusted):
+        if request.headers.get("x-forwarded-for") is not None or \
+                request.headers.get("forwarded") is not None:
+            _forwarded[:] = [str(peer), time.time()]
+            return _NOBODY
         return peer
     lines = request.headers.getlist("x-forwarded-for")
     if not lines:

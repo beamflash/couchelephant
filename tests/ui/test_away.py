@@ -136,3 +136,25 @@ def test_a_domain_for_a_real_certificate(signin_tab, monkeypatch):
     page.wait_for_selector("#awaydomainsay", state="hidden")
     assert db.get_setting("away_domain") == ""
     assert page.csp_violations == []
+
+
+def test_trusted_proxies_are_saved_and_wide_ones_refused(signin_tab):
+    from app import db
+    page = signin_tab
+    page.fill("#awayproxies", "0.0.0.0/0")
+    page.click("#awayproxiesgo")
+    page.wait_for_selector("#awayproxiessay:not([hidden])")
+    assert "too wide" in page.inner_text("#awayproxiessay").lower()
+    assert not db.get_setting("trusted_proxies")
+
+    page.fill("#awayproxies", "192.0.2.10, 10.0.0.0/8")
+    page.click("#awayproxiesgo")
+    page.wait_for_function(
+        "document.querySelector('#awayproxiessay').textContent.indexOf('Saved') >= 0")
+    assert db.get_setting("trusted_proxies") == "192.0.2.10, 10.0.0.0/8"
+    page.reload()
+    page.wait_for_selector('#setnav .nav-item[data-sec="accounts"]')
+    page.click('.nav-item[data-sec="accounts"]')
+    page.click('#settabs .tab[data-tab="signin"]')
+    assert page.input_value("#awayproxies") == "192.0.2.10, 10.0.0.0/8"
+    assert page.csp_violations == []

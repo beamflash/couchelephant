@@ -195,8 +195,12 @@ def pairing_open_to_outsiders(request) -> bool:
     return request.url.scheme == "https" and acme_tls.trusted_for(host)
 
 
+# Admin work stays home. What the apps call (the /api/tv lists, pairing,
+# /hls video) is not here.
 _OUT_NEVER = ("/setup", "/welcome", "/settings", "/partial/settings", "/api/away",
-              "/docs", "/openapi.json", "/redoc")
+              "/docs", "/openapi.json", "/redoc",
+              "/api/import", "/api/export", "/api/backups", "/api/backingstore",
+              "/api/update/apply", "/api/tv/devices", "/api/connect.svg")
 
 
 def _out_never(path):
@@ -212,6 +216,10 @@ async def _away_gate(request: Request, call_next):
         return await call_next(request)
     if _out_never(path):
         return PlainTextResponse("Not found", status_code=404)
+    # A request with no Host has no business here (HTTP/1.0, a probe), and
+    # the redirect to HTTPS has nothing to go on.
+    if not (request.headers.get("host") or "").strip():
+        return PlainTextResponse("Bad request", status_code=400)
     if path in _PAIR_PATHS:
         if pairing_open_to_outsiders(request):
             return await call_next(request)
@@ -223,6 +231,10 @@ async def _away_gate(request: Request, call_next):
         return await call_next(request)
     if path.startswith("/hlsk/") and tv.stream_path_ok(path):
         return await call_next(request)
+    # TV settings change the Plex connection: a paired device with its
+    # key, or at home. A signed-in person outside has Settings at home.
+    if path.startswith("/api/tv/settings"):
+        return PlainTextResponse("Not found", status_code=404)
     if current_user(request):
         return await call_next(request)
     if path.startswith("/api/") or path.startswith("/partial/") or auth.mode() == "none":

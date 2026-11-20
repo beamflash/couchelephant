@@ -353,3 +353,56 @@ def test_tls_one_two_ciphers_are_the_modern_ones():
     names = [c["name"] for c in ctx.get_ciphers() if c["protocol"] != "TLSv1.3"]
     assert names and all(n.startswith("ECDHE") for n in names)
     assert not any("CBC" in n or "RC4" in n for n in names)
+
+
+# ---------- slow clients after the hand-over, and the connection cap ----------
+
+def test_headers_that_trickle_are_cut_off_after_the_deadline(monkeypatch):
+    monkeypatch.setattr(oneport, "HEADER_SECONDS", 1)
+    with Running() as r:
+        s = socket.create_connection(("127.0.0.1", r.port))
+        try:
+            s.sendall(b"GET /api/tv/hello HTTP/1.1\r\nHost: x\r\n")
+            time.sleep(0.5)
+            s.sendall(b"X-A: 1\r\n")                     # still no blank line
+            time.sleep(1.5)
+            s.settimeout(3)
+            try:
+                got = s.recv(100)
+            except ConnectionError:
+                got = b""
+            assert got == b""                            # closed, no answer
+        finally:
+            s.close()
+
+
+def test_a_slow_but_finishing_request_and_keep_alive_still_work(monkeypatch):
+    monkeypatch.setattr(oneport, "HEADER_SECONDS", 2)
+    with Running() as r:
+        with httpx.Client() as c:
+            assert c.get(r.url()).status_code == 200
+            time.sleep(2.5)                              # idle, not mid-header
+            assert c.get(r.url()).status_code == 200
+
+
+def test_connections_past_the_cap_are_refused_at_once(monkeypatch):
+    monkeypatch.setattr(oneport, "MAX_CONNECTIONS", 5)
+    with Running() as r:
+        held = [socket.create_connection(("127.0.0.1", r.port)) for _ in range(5)]
+        try:
+            time.sleep(0.3)
+            extra = socket.create_connection(("127.0.0.1", r.port))
+            extra.settimeout(2)
+            assert extra.recv(10) == b""                 # closed by the server
+            extra.close()
+        finally:
+            for h in held:
+                h.close()
+        time.sleep(0.3)
+        assert httpx.get(r.url(), timeout=3).status_code == 200      # room again
+
+
+def test_the_cap_sits_below_the_descriptor_limit():
+    assert oneport.connection_cap(256) < 256 // 2 + 1
+    assert oneport.connection_cap(1024) > 100
+    assert oneport.connection_cap(None) > 0

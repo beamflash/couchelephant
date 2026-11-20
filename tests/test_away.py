@@ -255,7 +255,7 @@ def test_the_self_check_warns_about_a_cloudflare_tunnel_with_no_trusted_proxy():
     item = next(i for i in c.get("/api/away/check").json()["items"] if i["name"] == "Settings")
     assert item["ok"] is False
     assert item["say"] == ("A Cloudflare tunnel on this network makes every visitor look "
-                           "home. Add the tunnel's address under trusted proxies.")
+                           "home. Add the tunnel's address under Trusted proxies, just above.")
     db.set_setting("trusted_proxies", "172.18.0.2")
     item = next(i for i in c.get("/api/away/check").json()["items"] if i["name"] == "Settings")
     assert item["ok"] is True and "paired TV" in item["say"]
@@ -581,3 +581,70 @@ def test_a_flood_of_made_up_names_cannot_push_out_a_locked_account(monkeypatch):
     assert len(ratelimit._keys) <= 50
     assert ratelimit.reserve(["addr:192.0.2.1", "user:owner"]) > 0
     ratelimit.reset()
+
+
+# ---------- the final review round ----------
+
+@pytest.mark.parametrize("method,path", [
+    ("post", "/api/import"), ("post", "/api/import/inspect"), ("get", "/api/export"),
+    ("post", "/api/backups/restore"), ("get", "/api/backups/jobs"),
+    ("post", "/api/backingstore/run"), ("get", "/api/backingstore/config"),
+    ("post", "/api/update/apply"),
+    ("get", "/api/tv/devices"), ("post", "/api/tv/devices/approve"),
+    ("post", "/api/tv/devices/1/delete"), ("get", "/api/connect.svg")])
+def test_admin_apis_are_not_found_from_outside_even_signed_in(method, path):
+    uid = _local_with_account()
+    _away()
+    c = _signed_in(at(OUT), uid)
+    assert getattr(c, method)(path).status_code == 404
+
+
+def test_a_signed_in_person_outside_cannot_change_tv_settings_but_a_device_can():
+    uid = _local_with_account()
+    key = _paired_signed(at(HOME), uid)
+    _away()
+    person = _signed_in(at(OUT), uid)
+    assert person.post("/api/tv/settings", data={"dry_run": "1"}).status_code == 404
+    assert person.get("/api/tv/settings").status_code == 404
+    assert at(OUT).get("/api/tv/settings", headers=key).status_code == 200
+
+
+def test_no_host_header_from_outside_is_refused_while_away_is_on():
+    _local_with_account()
+    _away()
+    c = at(OUT)
+    assert c.get("/login", headers={"Host": ""}).status_code == 400
+    assert c.get("/login").status_code == 200
+    _away(False)
+    assert c.get("/login", headers={"Host": ""}).status_code == 200
+
+
+def test_a_flood_of_locked_keys_cannot_grow_the_table_past_a_ceiling(monkeypatch):
+    monkeypatch.setattr(ratelimit, "MAX_KEYS", 50)
+    for i in range(400):
+        for _ in range(ratelimit.FAILS):
+            ratelimit.fail(f"k{i}")          # every one of them ends up locked
+    assert len(ratelimit._keys) <= 50 * 6 // 5
+    assert "k399" in ratelimit._keys and "k0" not in ratelimit._keys
+
+
+def test_the_proxies_route_saves_and_refuses():
+    c = at(HOME)
+    bad = c.post("/settings/away/proxies", data={"proxies": "::/0"}).json()
+    assert bad["ok"] is False and "wide" in bad["error"].lower()
+    assert not db.get_setting("trusted_proxies")
+    ok = c.post("/settings/away/proxies", data={"proxies": "192.0.2.10"}).json()
+    assert ok["ok"] is True and db.get_setting("trusted_proxies") == "192.0.2.10"
+
+
+def test_the_self_check_warns_about_a_proxy_nobody_trusted():
+    c = _signed_in(at(HOME), _local_with_account())
+    plain = c.get("/api/away/check").json()["items"]
+    assert not any("Proxy" == i["name"] for i in plain)
+    exposure.is_home(type("R", (), {
+        "client": type("C", (), {"host": "127.0.0.1"})(),
+        "headers": __import__("starlette.datastructures", fromlist=["Headers"]).Headers(
+            raw=[(b"x-forwarded-for", b"8.8.8.8")])})())
+    items = c.get("/api/away/check").json()["items"]
+    warn = next(i for i in items if i["name"] == "Proxy")
+    assert warn["ok"] is False and "Trusted proxies" in warn["say"]

@@ -772,6 +772,18 @@ window.wireSettings = function (root) {
     dretry.addEventListener('click', saveDomain);
     if (dbox && dbox.dataset.domain) drawDomain();
 
+    var psay = away.querySelector('#awayproxiessay');
+    away.querySelector('#awayproxiesform').addEventListener('submit', function (e) {
+      e.preventDefault();
+      post('/settings/away/proxies', {proxies: away.querySelector('#awayproxies').value})
+        .then(function (j) {
+          psay.hidden = false;
+          psay.className = 'help' + (j.ok ? '' : ' bad');
+          psay.textContent = j.ok ? 'Saved.' : j.error;
+          if (j.ok && !awaycheck.hidden) drawCheck();
+        });
+    });
+
     awayon.addEventListener('change', function () {
       dbox.hidden = !awayon.checked;
       if (awayon.checked) { turnOn(); return; }

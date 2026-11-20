@@ -63,16 +63,27 @@ def _entry(key, now):
     return s
 
 
+def _hard() -> int:
+    """The most the table may hold, locked keys or not."""
+    return MAX_KEYS * 6 // 5
+
+
 def _trim(now) -> None:
-    """Drop the oldest keys past the cap, but never one that is locked: a flood
-    of made-up names must not push a real lock out of the table."""
+    """Drop the oldest keys past the cap, but not one that is locked: a flood
+    of made-up names must not push a real lock out of the table. Locked keys
+    have a ceiling too, though: past it the oldest go, locked or not, so a big
+    block of addresses cannot grow the table or slow every new key down."""
     if len(_keys) <= MAX_KEYS:
         return
+    newest = next(reversed(_keys))          # the one being counted right now
     for k in list(_keys):
         if len(_keys) <= MAX_KEYS:
             break
-        if _keys[k]["until"] <= now:
+        if k != newest and _keys[k]["until"] <= now:
             del _keys[k]
+    if len(_keys) > _hard():
+        while len(_keys) > MAX_KEYS:
+            _keys.popitem(last=False)
 
 
 def _hit(key, now) -> None:

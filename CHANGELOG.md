@@ -22,6 +22,18 @@
 
 ### Security
 
+- **Trusted proxies.** A field under the Use away from home switch (Settings,
+  Accounts, Sign-in) takes the address of a reverse proxy or tunnel in front of
+  the server (a block no wider than /8, or /32 for IPv6). A request that carries
+  `X-Forwarded-For` or `Forwarded` from any other address is never treated as
+  home, and the self-check says so.
+- Admin APIs (`/api/import`, `/api/export`, `/api/backups`, `/api/backingstore`,
+  `/api/update/apply`, `/api/tv/devices`, `/api/connect.svg`) answer 404 from
+  outside, and `/api/tv/settings` from outside is for a paired device only.
+- A request with no Host header from outside is refused while away is on.
+- Headers must be complete within 10 seconds, and open connections are capped
+  below the descriptor limit.
+- The sign-in limiter has a hard ceiling that also drops the oldest locked keys.
 - The first request over HTTPS is told apart from HTTP by its first byte
   alone. A client that says nothing is dropped after five seconds.
 - The challenge certificate is served only to a client that offers

@@ -619,7 +619,7 @@
               <div class="field">
                 <label for="awaydomain">Domain</label>
                 <input id="awaydomain" value="{{ settings.away_domain or '' }}"
-                       placeholder="tv.example.com" autocomplete="off">
+                       placeholder="tv.example.org" autocomplete="off">
               </div>
               <div class="row">
                 <button class="primary" id="awaydomaingo">Get a certificate</button>
@@ -627,6 +627,21 @@
               </div>
             </form>
             <div id="awaydomainsay" class="help" hidden></div>
+          </div>
+          <div id="awayproxybox">
+            <h4>Trusted proxies</h4>
+            <span class="help">Only if a reverse proxy or tunnel sits in front of this
+              server: its address, or a block no wider than /8. Visitors it carries are
+              judged by their real address. Leave empty otherwise.</span>
+            <form id="awayproxiesform" autocomplete="off">
+              <div class="field">
+                <label for="awayproxies">Addresses</label>
+                <input id="awayproxies" value="{{ settings.trusted_proxies or '' }}"
+                       placeholder="192.0.2.10, 10.0.0.0/8" autocomplete="off">
+              </div>
+              <div class="row"><button class="primary" id="awayproxiesgo">Save</button></div>
+            </form>
+            <div id="awayproxiessay" class="help" hidden></div>
           </div>
           <div id="awaycheck" hidden></div>
         </div>

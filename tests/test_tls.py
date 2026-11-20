@@ -155,7 +155,7 @@ def test_a_broken_pair_is_mended(damage, caplog):
 
 
 def test_a_non_ascii_host_name_does_not_break_the_certificate(monkeypatch):
-    monkeypatch.setattr(socket, "gethostname", lambda: "Robert\u2019s-PC")
+    monkeypatch.setattr(socket, "gethostname", lambda: "Owner\u2019s-PC")
     own = tls.ensure_own()
     cert = x509.load_pem_x509_certificate(own.cert_path.read_bytes())
     san = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value

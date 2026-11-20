@@ -149,7 +149,7 @@ def _renew_setup(monkeypatch, days):
     if days is not None:
         make_real("tv.example.com", days)
     calls = []
-    monkeypatch.setattr(acme_tls, "request", calls.append)
+    monkeypatch.setattr(acme_tls, "start_in_background", calls.append)
     return calls
 
 
@@ -615,6 +615,46 @@ def test_the_save_says_how_long_to_wait(monkeypatch):
     assert r["ok"] is True and started == ["new.example.com"]
 
 
+def test_a_renewal_order_runs_on_its_own_thread(monkeypatch):
+    """Not in the announce thread: an order can take minutes."""
+    db.set_setting("away_mode", "1")
+    db.set_setting("away_domain", "tv.example.com")
+    seen = []
+    done = threading.Event()
+
+    def fake_request(name):
+        seen.append(threading.get_ident())
+        done.set()
+    monkeypatch.setattr(acme_tls, "request", fake_request)
+    acme_tls.renew_if_due()
+    assert done.wait(5)
+    assert seen[0] != threading.get_ident()
+
+
+def _failed_setup(monkeypatch, ago):
+    calls = _renew_setup(monkeypatch, None)
+    db.set_setting("away_domain_error", "It did not work.")
+    db.set_setting("away_domain_last_name", "tv.example.com")
+    db.set_setting("away_domain_last_try", int(time.time()) - ago)
+    monkeypatch.setattr(acme_tls, "_last_renew", [0.0])
+    return calls
+
+
+def test_a_failed_order_is_retried_every_retry_wait(monkeypatch):
+    calls = _failed_setup(monkeypatch, acme_tls.RETRY_WAIT + 5)
+    # Pretend the daily check ran a minute ago: the retry must not wait for it.
+    acme_tls._last_renew[0] = time.monotonic() - 60
+    acme_tls.renew_daily()
+    assert calls == ["tv.example.com"]
+
+
+def test_a_failed_order_waits_out_the_retry_time(monkeypatch):
+    calls = _failed_setup(monkeypatch, 60)
+    acme_tls._last_renew[0] = time.monotonic() - 60
+    acme_tls.renew_daily()
+    assert calls == []
+
+
 def test_one_error_does_not_end_the_loop(monkeypatch):
     from app import web
     seen = []
@@ -863,6 +903,7 @@ def test_a_thousand_slow_clients_do_not_slow_a_normal_handshake(monkeypatch, mod
     """Each holds a ClientHello that never finishes, during an order."""
     if not _raise_fd_limit(2600):
         pytest.skip("cannot raise the open file limit to 2600")
+    monkeypatch.setattr(oneport, "MAX_CONNECTIONS", 5000)      # this test is about slow ones, not the cap
     monkeypatch.setattr(oneport, "NO_READER", mode == "no_reader")
     monkeypatch.setattr(oneport, "NO_LOWAT", mode == "no_lowat")
     db.set_setting("away_mode", "1")

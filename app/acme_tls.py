@@ -130,7 +130,7 @@ def clean_domain(text: str) -> str:
         raise ValueError("The name must end with a word like .com, not a number.")
     if len(name) > 253 or len(labels) < 2 or not all(_LABEL.match(x) for x in labels):
         raise ValueError("That is not a valid domain name. Use something like "
-                         "tv.example.com.")
+                         "tv.example.org.")
     return name
 
 
@@ -395,15 +395,26 @@ def renew_if_due() -> None:
     until = valid_until(name)
     now = datetime.datetime.now(datetime.UTC)
     if until is None or until - now < datetime.timedelta(days=RENEW_DAYS):
-        request(name)
+        # Its own thread: an order can take minutes and the caller is a
+        # loop that has other work.
+        start_in_background(name)
 
 
 _last_renew = [0.0]
 
 
+def _failed_and_due() -> bool:
+    """A failed order is tried again every RETRY_WAIT, not once a day."""
+    name = domain()
+    return bool(name and (db.get_setting("away_domain_error") or "")
+                and not valid_until(name) and too_soon(name) == 0)
+
+
 def renew_daily() -> None:
-    """Called from a loop that ticks often; does the work once a day."""
-    if time.monotonic() - _last_renew[0] < DAY and _last_renew[0]:
+    """Called from a loop that ticks often; does the work once a day, and
+    retries a failed order as soon as RETRY_WAIT has passed."""
+    if time.monotonic() - _last_renew[0] < DAY and _last_renew[0] \
+            and not _failed_and_due():
         return
     _last_renew[0] = time.monotonic()
     renew_if_due()

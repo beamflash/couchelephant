@@ -421,6 +421,19 @@ def settings_away_domain(domain: str = Form("")):
     return {"ok": True, "domain": name}
 
 
+@router.post("/settings/away/proxies")
+def settings_away_proxies(proxies: str = Form("")):
+    """Trusted proxies: the addresses of a reverse proxy or tunnel that sits in
+    front of this server. Only these may say who the real visitor is."""
+    nets, error = exposure.parse_trusted(proxies)
+    if error:
+        return JSONResponse({"ok": False, "error": error})
+    db.set_setting("trusted_proxies", ", ".join(p.strip() for p in proxies.split(",")
+                                                if p.strip()))
+    exposure.clear_forward()
+    return {"ok": True, "count": len(nets)}
+
+
 @router.get("/api/away/domain")
 def away_domain_state():
     return acme_tls.status()
@@ -479,6 +492,17 @@ def _encryption_item(request):
                    "internet in the clear until HTTPS is on."}
 
 
+def _proxy_items():
+    """A proxy nobody listed: its visitors are treated as outside."""
+    peer = exposure.untrusted_forward()
+    if not peer:
+        return []
+    return [{"name": "Proxy", "ok": False,
+             "say": f"A request came through a proxy at {peer} that is not listed. "
+                    "It was treated as coming from outside. If you trust that proxy, "
+                    "add its address under Trusted proxies, just above."}]
+
+
 @router.get("/api/away/check")
 def away_check(request: Request):
     """What is safe and what is not, in plain words, for the self-check."""
@@ -489,7 +513,8 @@ def away_check(request: Request):
     if mode == "cloudflare" and not (db.get_setting("trusted_proxies") or "").strip():
         settings_item = {"name": "Settings", "ok": False,
                          "say": "A Cloudflare tunnel on this network makes every visitor "
-                                "look home. Add the tunnel's address under trusted proxies."}
+                                "look home. Add the tunnel's address under Trusted "
+                                "proxies, just above."}
     else:
         settings_item = {"name": "Settings", "ok": True,
                          "say": "Settings and setup only open from your home network. "
@@ -505,6 +530,7 @@ def away_check(request: Request):
         {"name": "Paired devices", "ok": True,
          "say": "Paired TVs and phones keep working with their own keys."},
         _encryption_item(request),
+        *_proxy_items(),
         {"name": "Router", "ok": False,
          "say": "Your router may send home devices through the internet address; "
                 "they will be asked to sign in."},

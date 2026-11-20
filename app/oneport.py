@@ -36,8 +36,64 @@ TLS_HELLO = 0x16
 _BAD_HOST = re.compile(r"[/\\?#@\s]")
 IS_WINDOWS = sys.platform == "win32"
 NO_READER = False            # tests: act like a loop with no add_reader
+HEADER_SECONDS = 10          # after hand-over, a request's headers must be whole by then
+MAX_CONNECTIONS = None       # tests set it; None means from the descriptor limit
 MAX_WATCHED = 500            # select() on Windows takes 512 at most
 _SLEEP_ERRNOS = {errno.EMFILE, errno.ENFILE, errno.ENOBUFS}
+
+
+def connection_cap(soft=None) -> int:
+    """How many connections to hold at once: half the descriptor limit (256 on
+    a Mac), so files, the database and the recorder keep room. Windows has no
+    such limit to ask; its select() takes 512."""
+    if soft is None:
+        try:
+            import resource
+            soft = resource.getrlimit(resource.RLIMIT_NOFILE)[0]
+        except (ImportError, OSError, ValueError):
+            return 400
+    return max(16, min(soft // 2, 1000))
+
+
+def _with_header_deadline(base):
+    """The protocol uvicorn would use, plus a deadline: after a request is done
+    (or the connection is new) the next one's headers must be complete within
+    HEADER_SECONDS, or the connection is closed. uvicorn waits for them with no
+    limit of its own, and a few hundred trickling sockets would use every
+    descriptor."""
+
+    class Guarded(base):
+        _timer = None
+
+        def _arm(self):
+            if self._timer:
+                self._timer.cancel()
+            seen = getattr(self, "cycle", None)
+            self._timer = asyncio.get_running_loop().call_later(
+                HEADER_SECONDS, self._header_deadline, seen)
+
+        def _header_deadline(self, seen):
+            self._timer = None
+            t = getattr(self, "transport", None)
+            if t is None or t.is_closing() or t.get_protocol() is not self:
+                return
+            if getattr(self, "cycle", None) is seen:     # no new request began
+                t.close()
+
+        def connection_made(self, transport):
+            super().connection_made(transport)
+            self._arm()
+
+        def on_response_complete(self):
+            super().on_response_complete()
+            self._arm()
+
+        def connection_lost(self, exc):
+            if self._timer:
+                self._timer.cancel()
+            super().connection_lost(exc)
+
+    return Guarded
 
 
 class _Watcher:
@@ -331,6 +387,10 @@ class _Listener:
                 if _accept_failed(e):
                     await asyncio.sleep(0.1)   # out of descriptors: do not spin
                 continue
+            if len(self.pending) + len(self.server.server_state.connections) >= (
+                    MAX_CONNECTIONS or connection_cap()):
+                conn.close()                  # full: keep room for the ones we have
+                continue
             t = self.loop.create_task(self._hand_over(conn, time.monotonic()))
             self.pending.add(t)
             t.add_done_callback(self.pending.discard)
@@ -383,7 +443,9 @@ class Server(uvicorn.Server):
 
     def create_protocol(self):
         config = self.config
-        return config.http_protocol_class(
+        if not hasattr(self, "_guarded"):
+            self._guarded = _with_header_deadline(config.http_protocol_class)
+        return self._guarded(
             config=config, server_state=self.server_state,
             app_state=self.lifespan.state, _loop=None)
 

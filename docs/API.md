@@ -152,9 +152,20 @@ reaches only `/login`, `/favicon.ico`, `/api/tv/hello`, static files, paired
 device routes and `/hlsk/` video links that carry a valid pass. Everything
 else answers 401 (API paths) or redirects to `/login`. `/setup`, `/welcome`,
 `/settings`, `/partial/settings`, `/api/away`, `/docs`, `/openapi.json` and
-`/redoc` answer 404 from outside, signed in or not. `/api/tv/pair` and
+`/redoc` answer 404 from outside, signed in or not, and so do the admin APIs:
+`/api/import`, `/api/export`, `/api/backups`, `/api/backingstore`,
+`/api/update/apply`, `/api/tv/devices` and `/api/connect.svg`. `/api/tv/settings`
+from outside is for a paired device with its key only. A request with no `Host`
+header from outside answers 400. `/api/tv/pair` and
 `/api/tv/pair/poll` answer 403 "Pair this device at home first." from outside,
 unless the request is HTTPS to the domain that holds a real certificate.
+
+From outside, `POST /login` and `POST /api/tv/pair` answer **429** with a
+`Retry-After` header (seconds) after repeated failures or asks, per address and,
+for `/login`, per account.
+
+A request that carries `X-Forwarded-For` or `Forwarded` from a peer that is not
+under Trusted proxies is never treated as home.
 
 The Bonjour record carries `tls=1` and `fp=<fingerprint>` while away is on,
 and `tls=0` otherwise. `GET /api/tv/hello` has no new fields.
