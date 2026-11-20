@@ -45,7 +45,7 @@ Recorded list.
 | | |
 | --- | --- |
 | `GET /api/tv/hello` | Open. Who this server is (`id` is the install id, the same as in its Bonjour record), and whether a client must pair first |
-| `GET /api/connect.svg` | Administrators only once sign-in is on. A QR code of `couchelephant://connect?url=<address>`, the address a phone on the home network can reach. 409 with `detail` when there is none |
+| `GET /api/connect.svg` | Administrators only once sign-in is on. A QR code of `couchelephant://connect?url=<address>`, the address a phone on the home network can reach. With Use away from home on, the address is `https://` and the link ends `&fp=<fingerprint>`, the server's key (SHA-256 of the public key, base64url). 409 with `detail` when there is none |
 | `POST /api/tv/pair` | Open. A client asks to be let in. `name`. Answers a six-letter `code` to show and a `secret` to poll with |
 | `POST /api/tv/pair/poll` | Open. `secret`. Answers `approved`, and the client's `key` exactly once |
 | `GET /api/tv/schedule` | Paired device. `offset`, `limit`, `start`, `end`. The schedule the web Agenda and Calendar draw: bookings and failed ones, with `more` for paging |
@@ -145,6 +145,20 @@ sync fills in its games.
 | `GET /api/series?q=` | Programmes still to air, grouped by show |
 | `GET /api/sources` | Networks and channels a rule can be limited to |
 
+## Away from home
+
+With **Use away from home** on, a request from outside the home network
+reaches only `/login`, `/favicon.ico`, `/api/tv/hello`, static files, paired
+device routes and `/hlsk/` video links that carry a valid pass. Everything
+else answers 401 (API paths) or redirects to `/login`. `/setup`, `/welcome`,
+`/settings`, `/partial/settings`, `/api/away`, `/docs`, `/openapi.json` and
+`/redoc` answer 404 from outside, signed in or not. `/api/tv/pair` and
+`/api/tv/pair/poll` answer 403 "Pair this device at home first." from outside,
+unless the request is HTTPS to the domain that holds a real certificate.
+
+The Bonjour record carries `tls=1` and `fp=<fingerprint>` while away is on,
+and `tls=0` otherwise. `GET /api/tv/hello` has no new fields.
+
 ## Settings
 
 | | |
@@ -154,7 +168,13 @@ sync fills in its games.
 | `GET /settings/plex/signin/{pin}` | Poll it. `{ok, state}` where `state` is `waiting`, `servers` (with `servers: [{name, id}]`, owned servers only, and a `detail` when the list is empty), `expired` (also for a pin this install did not start) or `error` (with `detail`: plex.tv did not answer or refused; the pin is still good, so keep polling) |
 | `POST /settings/plex/signin/{pin}/use` | Form `server` (an id from the poll), optional `timezone`. Tests each address (for a local server, the `plex.direct` name then the plain `http://host:port`) and saves the first direct one that works; a relay is never saved: `{ok, detail, address}`, or `{ok: false, detail, tried}` |
 | `POST /settings/test` | Check the Plex connection. Send `Accept: application/json` for `{ok, detail}` |
-| `POST /settings/auth` | Sign-in mode and the Cloudflare fields |
+| `POST /settings/auth` | Sign-in mode and the Cloudflare fields. Turning sign-in off is refused while away is on |
+| `POST /settings/away` | `on` is `1` or `0`. Use away from home. Refused with the reason while any way in has no password |
+| `POST /settings/away/domain` | `domain`. Saves the name and starts a Let's Encrypt order in the background. Empty drops back to the own certificate. `{ok, domain}` or `{ok: false, error}`. Needs away on |
+| `GET /api/away/domain` | How the order is going: `{domain, state, say, until}`, `state` being `none`, `working`, `ok`, `error` or `waiting` |
+| `GET /api/away/check` | The self-check in plain words: a list of `{name, ok, say}`, with an Encryption item |
+| `POST /settings/away/account` | `username`, `password`. Turns on Local accounts and makes the first administrator, the fix for a switch with no sign-in |
+| `POST /settings/away/password` | `uid`, `password`. Sets a password for an account that has none |
 | `POST /settings/logos` | Re-fetch every channel logo |
 | `POST /settings/channels/{vcn}/logo` | Upload your own logo for a channel. Multipart, field `logo` |
 | `POST /settings/channels/{vcn}/logo/reset` | Go back to the guide's logo |

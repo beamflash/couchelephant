@@ -79,7 +79,7 @@ up.
 | `COUCHELEPHANT_LOGOS` | `/data/logos` | Cached channel artwork |
 | `COUCHELEPHANT_RECORDINGS` | `/recordings` | Where CouchElephant DVR keeps its files. It is off unless this folder exists |
 | `COUCHELEPHANT_LIBRARY` | `/library` | The Plex library folder a finished recording is moved into |
-| `COUCHELEPHANT_ADDRESS` | none | The address of this machine on your home network, such as `192.168.1.20`. The QR code under Settings carries it. Set it when the container is on Docker's bridge network, where it cannot see that address itself |
+| `COUCHELEPHANT_ADDRESS` | none | The address of this machine on your home network, such as `192.168.1.20`. The QR code under Settings carries it. Set it when the container is on Docker's bridge network, where it cannot see that address itself. With **Use away from home** on, the QR code is an `https://` address |
 | `TZ` | `UTC` | The container's clock |
 
 Everything else is a setting in the app, not an environment variable, because
@@ -253,6 +253,23 @@ A destination added today is not sent a backlog of what is already open.
 
 Suggestions are never sent. Only a fault, or something that actually happened,
 is worth interrupting you for.
+
+## Use it away from home
+
+Not needed if you reach the box over a VPN or an existing tunnel. Leave
+**Use away from home** off and nothing below applies.
+
+To open it to the internet, see [AUTH.md](AUTH.md) first. Then, on your
+router, forward:
+
+- **The CouchElephant port** (8710 unless you changed it) to this computer.
+  Plain HTTP and HTTPS both arrive here.
+- **Port 443** to this computer, only if you want a real certificate for a
+  domain. Let's Encrypt must reach the same CouchElephant port from the
+  outside on 443, so forward external 443 to the CouchElephant port, for
+  example 443 to 8710. No port 80 is needed.
+
+Give the computer a fixed address on your router so the forward keeps working.
 
 ## Sign-in
 

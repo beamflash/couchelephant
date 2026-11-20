@@ -1,5 +1,37 @@
 # Changelog
 
+## 1.5.30 - 2026-11-20
+
+### Added
+
+- **HTTPS on the same port.** With Use away from home on, the one port
+  speaks HTTPS as well as HTTP. Nothing else needs forwarding. The server makes
+  its own certificate. Browsers warn about it; the apps check its key.
+- **A real certificate for a domain.** Under Settings, Accounts, Sign-in, enter
+  a domain and CouchElephant gets a free Let's Encrypt certificate with
+  TLS-ALPN-01 on port 443, then renews it. A failed try is retried every 15
+  minutes. Over HTTPS to that domain a device can pair from outside.
+- **The apps pin the server's key.** The phone and TV apps learn the key at
+  home (Bonjour record and QR code) and trust only it, or a certificate the
+  system trusts, away from home. Video plays through a small proxy inside the
+  app that listens on `127.0.0.1` only. A link never replaces a stored pin. If
+  the key changes, the app asks you to pair again at home.
+- The QR code is an `https://` address and carries `&fp=` while away is on.
+- docs/AUTH.md has an "Away from home" section, and docs/INSTALL.md says what
+  to forward on the router.
+
+### Security
+
+- The first request over HTTPS is told apart from HTTP by its first byte
+  alone. A client that says nothing is dropped after five seconds.
+- The challenge certificate is served only to a client that offers
+  `acme-tls/1`.
+
+### Changed
+
+- The self-check's Encryption line now says whether the connection uses this
+  server's own certificate or a real one.
+
 ## 1.5.29 - 2026-11-20
 
 ### Security
