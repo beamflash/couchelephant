@@ -82,6 +82,14 @@ found" (pairing answers "Pair this device at home first"), even for a signed
 in administrator. The one exception is pairing over HTTPS to your own domain
 once it holds a real certificate (see below).
 
+The admin tools behind Settings stay home only too: import and export,
+backups, the backing store, updates, the device list, the connect QR code and
+the library folder suggestions. `/api/tv/settings` answers from outside only to
+a paired device with its key.
+
+A request from outside with no `Host` header is refused while the switch is
+on.
+
 It will not turn on while any way in has no password. If sign-in is Off, the
 page offers to make the first account. While away is on, turning sign-in Off
 is refused. Turn away off first.
@@ -104,15 +112,33 @@ whose subnet is your real LAN. On a plain Docker install, a browser on the
 host itself or a LAN client that reaches the container through Docker's IPv6
 proxy therefore signs in too.
 
-Forwarding headers are read in one place and only from a trusted proxy.
-Cloudflare Access and a reverse proxy you configured keep working. Nothing
-else can claim to be someone at home.
+Forwarding headers (`X-Forwarded-For`, `Forwarded`, `X-Real-IP`) are read in
+one place and only from a trusted proxy. List your proxies under the switch, in
+**Trusted proxies**, one address or range per line. Ranges wider than /8 for
+IPv4 or /32 for IPv6 are refused. A request that carries a forwarding header
+from a peer that is not listed is never home, and the self-check warns about
+it for a day.
+
+If a reverse proxy runs on the same machine (nginx, Caddy, a tunnel), add its
+address, often `127.0.0.1`, and have it send `X-Forwarded-For`. Without the
+header, every visitor arrives from the proxy and looks like home. Stock nginx
+`proxy_pass` sends no forwarding header until you add one. The same holds for
+a sidecar proxy that shares a container's network.
 
 ### Sign-in limits
 
 Five wrong passwords in ten minutes, from one address or at one account,
 lock that address or account for a minute. Each further lock doubles, up to an
-hour. IPv6 is counted by /64. Tries from home never lock an account.
+hour. IPv6 is counted by /64. Tries from home never lock an account. A locked
+`/login` or `/api/tv/pair` answers 429 with `Retry-After`.
+
+Connections are limited for outsiders only. One outside address (IPv6 by /64)
+may hold 16 at a time, and all outsiders together share a cap set from the
+open file limit. A home device is never refused by it. On a Docker bridge
+network every visitor arrives from the gateway, so the gateway is held only to
+the shared cap. Each request's headers must arrive within 10 seconds of the
+connection going idle. A stream or download that is still running is never
+cut.
 
 ### HTTPS on the same port
 
@@ -124,7 +150,9 @@ to `https://`; home keeps plain HTTP. With the switch off the port speaks plain 
 The server makes its own certificate the first time it needs one, kept under
 `tls/` in the data folder, valid for ten years. Browsers warn about it. The
 apps do not mind: they check the key, not the name (see below). Replies over
-HTTPS carry `Strict-Transport-Security`.
+HTTPS carry `Strict-Transport-Security`. With a real certificate, browsers
+then remember to use HTTPS for that domain for a year. Turning the switch off
+closes HTTPS, so those browsers cannot open the domain until it is on again.
 
 ### A real certificate for a domain
 
@@ -135,8 +163,9 @@ certificate from Let's Encrypt with TLS-ALPN-01: Let's Encrypt connects to the
 domain on port 443 and the server answers on the same port it always uses.
 Nothing else listens, and no port 80 is needed.
 
-- A failed try is retried every 15 minutes, which keeps under Let's Encrypt's
-  limit on failed checks. **Try again** asks now, within that limit.
+- A failed try, or a failed renewal while the old certificate is still
+  valid, is retried by itself every 15 minutes, which keeps under Let's
+  Encrypt's limit on failed checks. **Try again** asks now, within that limit.
 - The certificate renews itself 30 days before it ends.
 - Until it works, or if it breaks, the own certificate still answers and the
   apps still connect.
