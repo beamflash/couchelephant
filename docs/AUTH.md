@@ -151,13 +151,32 @@ under Settings carry its fingerprint (`fp`, the SHA-256 of the public key,
 base64url) whenever the switch is on. The app stores it in its keychain, per
 server.
 
-Away from home the app accepts a certificate the system trusts, or a
-certificate whose key matches the stored pin. Nothing else gets the device
-key.
+The app checks the certificate on every connection to its server: the system
+must trust it, or its key must match the stored pin. Whether the device key may
+go to an address is a separate rule, and system trust is not enough for it.
+
+The device key goes only to:
+
+- the address the app has stored, or
+- a new https address whose key matches the pin stored for that server, checked
+  on that same connection.
+
+With no pin stored, only an address Bonjour found at home, over plain HTTP on a
+private network range, may take the key. That is how a server that moves at
+home is found again.
+
+A link, a QR code, a switch or a typed address to a different address never
+carries the key. The app asks before it switches, and then pairs again with a
+code.
 
 - A link or QR code never replaces a stored pin. A pin that differs from the
-  stored one is refused. A new pin is taken only when none is stored for that
-  server.
+  stored one is refused. A new pin is kept only when none is stored for that
+  server, and only if the server's key really matches it. The system trusting
+  the certificate does not count. A pin on an `http://` link is ignored.
+- A refused link leaves the app where it was and shows the reason there.
+  Whenever an address is stored, the app asks before it switches, in every
+  screen.
+- A server with no install id has no pin.
 - If the key changes (you deleted the `tls/` folder, or restored onto a new
   machine), the app says "This is not the server you paired with. Pair again
   at home." Forget the server in the app and pair again at home.

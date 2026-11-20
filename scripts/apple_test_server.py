@@ -21,11 +21,16 @@ talks to replaced:
     so the pinning tests can connect with it. Sign-in stays off, and the
     tests come from the local network, so the gate lets them in.
     GET /test/keyseen says how many requests carried the device key
-    (?reset=1 starts the count again).
+    (?reset=1 starts the count again). GET /test/requests lists every request
+    that carried a key, with the port it came to and a short tag of the key,
+    so a test can tell one key from another. The same app also answers
+    plain HTTP on ALIAS_PORT (default 8791), a second address for the same
+    install, which is what a link to "another address" needs.
 
 Everything it writes goes to a scratch folder, checked by the same guard the
 test suite uses. Stop it and nothing is left.
 """
+import hashlib
 import os
 import sys
 import tempfile
@@ -59,6 +64,7 @@ isolation.assert_isolated()
 from app import db, oneport, recorder, sync, tls, web  # noqa: E402
 
 PORT = int(os.environ.get("PORT", "8790"))
+ALIAS_PORT = int(os.environ.get("ALIAS_PORT", "8791"))
 AD_BREAK = (20.0, 50.0)
 
 
@@ -105,12 +111,23 @@ def main():
         # Test only: counts the requests that carried the device key, so a
         # test can say the key never reached an address it must not.
         keys_seen = []
+        requests_seen = []
 
         @web.app.middleware("http")
         async def _watch_key(request, call_next):
-            if request.headers.get("authorization") and not request.url.path.startswith("/test/"):
+            auth = request.headers.get("authorization")
+            if auth and not request.url.path.startswith("/test/"):
                 keys_seen.append(f"{request.url.scheme} {request.url.path}")
+                requests_seen.append({"port": request.url.port, "path": request.url.path,
+                                      "key": hashlib.sha256(auth.encode()).hexdigest()[:8]})
             return await call_next(request)
+
+        @web.app.get("/test/requests")
+        def _requests(reset: int = 0):
+            seen = list(requests_seen)
+            if reset:
+                requests_seen.clear()
+            return {"requests": seen}
 
         @web.app.get("/test/keyseen")
         def _keyseen(reset: int = 0):
@@ -137,6 +154,10 @@ def main():
     config = uvicorn.Config(web.app, host="0.0.0.0", port=PORT, log_level="warning",
                             proxy_headers=False, server_header=False)
     if AWAY:
+        # A second address for the same install: plain HTTP on its own port.
+        alias = uvicorn.Server(uvicorn.Config(web.app, host="0.0.0.0", port=ALIAS_PORT, log_level="warning",
+                                              proxy_headers=False, server_header=False))
+        threading.Thread(target=alias.run, daemon=True).start()
         oneport.serve(config)       # HTTP and HTTPS on the one port
     else:
         uvicorn.Server(config).run()

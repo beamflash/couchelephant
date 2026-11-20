@@ -6,10 +6,11 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 PORT=${PORT:-8790}
+ALIAS_PORT=${ALIAS_PORT:-8791}
 docker build -q -t couchelephant-apple-test . >/dev/null
 docker rm -f couchelephant-apple-test >/dev/null 2>&1 || true
 # The working tree's app, scripts and fakes, read only, over the image's copy.
-docker run -d --name couchelephant-apple-test -p "$PORT:$PORT" -e PORT="$PORT" -e AWAY="${AWAY:-}" \
+docker run -d --name couchelephant-apple-test -p "$PORT:$PORT" -p "$ALIAS_PORT:$ALIAS_PORT" -e PORT="$PORT" -e ALIAS_PORT="$ALIAS_PORT" -e AWAY="${AWAY:-}" \
   -v "$PWD/app:/app/app:ro" -v "$PWD/tests:/app/tests:ro" -v "$PWD/scripts:/app/scripts:ro" \
   --entrypoint python couchelephant-apple-test scripts/apple_test_server.py >/dev/null
 for _ in $(seq 1 60); do
