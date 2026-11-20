@@ -1197,6 +1197,7 @@ window.wireSettings = function (root) {
     });
   }
 
+  if (window.wirePlexSignin) window.wirePlexSignin(root);
   show('plex');
 };
 

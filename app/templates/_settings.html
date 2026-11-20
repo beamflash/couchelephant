@@ -194,6 +194,14 @@
         {% if tested %}
           <div class="banner {{ 'ok' if tested.startswith('OK') else 'bad' }}">{{ tested }}</div>
         {% endif %}
+        <div class="setblock" data-find="sign in with plex account servers">
+          <div id="settingsplexsignin" data-plex-signin data-after="reload">
+            <button class="psi-go" type="button">Sign in with Plex</button>
+            <div class="psi-out" hidden></div>
+            <span class="help">Pick your server from your Plex account instead of typing
+              its address and token below.</span>
+          </div>
+        </div>
         <form method="post" action="/settings" class="setform">
           <div class="field" data-find="plex server address url">
             <label>Address</label>

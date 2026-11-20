@@ -10,7 +10,9 @@ def fresh(page):
     page.goto("/")
     # By id: the header carries a form of its own now, hidden in the notice
     # panel, and it resolves first.
-    page.wait_for_selector("#wform")
+    page.wait_for_selector("#wsignin")
+    page.click("#wmanual")
+    page.wait_for_selector("#wform", state="visible")
     return page
 
 

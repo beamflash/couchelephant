@@ -1,13 +1,12 @@
 """First run, sign in, sign out, theme."""
-import asyncio
 import urllib.parse
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from .. import auth, db, sync
+from .. import auth, db
 from ._shared import ZONES, current_user, page
-from .settings import _test_plex
+from .settings import _save_and_sync, _test_plex
 
 router = APIRouter()
 
@@ -38,14 +37,7 @@ async def welcome_save(plex_url: str = Form(""), plex_token: str = Form(""),
     ok, detail = _test_plex(url, token)
     if not ok:
         return JSONResponse({"ok": False, "detail": detail})
-    db.set_setting("plex_url", url)
-    db.set_setting("plex_token", token)
-    db.set_setting("timezone", timezone)
-    db.set_setting("dry_run", "1")
-    # Pull the guide now rather than waiting for the loop's next turn. Without
-    # this a new install lands on an empty grid and has no idea whether it is
-    # broken or just early.
-    asyncio.create_task(asyncio.to_thread(sync.full_sync))
+    await _save_and_sync(url, token, timezone)
     return JSONResponse({"ok": True, "detail": detail})
 
 

@@ -1,13 +1,14 @@
 """Settings: the Plex connection, accounts, channel artwork, sync."""
 import asyncio
 import os
+import threading
 import time
 import urllib.parse
 
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from .. import auth, cf_access, db, handover, health, notify, passes, recorder, sync, tuner
+from .. import auth, cf_access, db, handover, health, notify, passes, plextv, recorder, sync, tuner
 from ..plex import Plex, PlexError
 from ._shared import ZONES, current_user, page
 
@@ -311,6 +312,117 @@ def _probe(plex, url):
     lineup = dvrs[0].get("lineupTitle") or "a lineup"
     return True, (f"{name}, Plex {version}. "
                   f"{len(dvrs)} DVR{'' if len(dvrs) == 1 else 's'}, {lineup}.")
+
+
+# ---------- sign in with Plex ----------
+
+HELD_SECONDS = 20 * 60
+_held = {}                      # pin id -> {"at", "expires", "token"}
+_held_lock = threading.Lock()
+
+
+def _prune(now):
+    for k in [k for k, v in _held.items() if now - v["at"] > HELD_SECONDS]:
+        del _held[k]
+
+
+def _drop(pin):
+    with _held_lock:
+        _held.pop(pin, None)
+
+
+def _held_token(pin):
+    with _held_lock:
+        _prune(time.time())
+        e = _held.get(pin)
+        return e["token"] if e else None
+
+
+async def _save_and_sync(url, token, timezone=None):
+    """Save a tested server and start the first guide pull. First run and
+    Sign in with Plex both end here."""
+    db.set_setting("plex_url", url)
+    db.set_setting("plex_token", token)
+    if timezone is not None:
+        db.set_setting("timezone", timezone)
+    db.set_setting("dry_run", "1")
+    # Pull the guide now rather than waiting for the loop's next turn. Without
+    # this a new install lands on an empty grid and has no idea whether it is
+    # broken or just early.
+    asyncio.create_task(asyncio.to_thread(sync.full_sync))
+
+
+@router.post("/settings/plex/signin")
+def plex_signin_start():
+    try:
+        pin = plextv.create_pin()
+    except plextv.PlexTvError as e:
+        return JSONResponse({"ok": False, "detail": str(e)})
+    now = time.time()
+    with _held_lock:
+        _prune(now)
+        _held[pin.id] = {"at": now, "expires": pin.expires_at, "token": None}
+    return {"ok": True, "pin": pin.id, "code": pin.code, "link": "https://plex.tv/link"}
+
+
+@router.get("/settings/plex/signin/{pin}")
+def plex_signin_poll(pin: int):
+    now = time.time()
+    token = _held_token(pin)
+    if token is None:
+        with _held_lock:
+            e = _held.get(pin)
+            if e and e["expires"] <= now:
+                del _held[pin]
+                return {"ok": False, "state": "expired"}
+        try:
+            token = plextv.check_pin(pin)
+        except plextv.PlexTvError as e:
+            if e.status == 404:
+                _drop(pin)
+                return {"ok": False, "state": "expired"}
+            return {"ok": False, "state": "error", "detail": str(e)}
+        if token is None:
+            return {"ok": True, "state": "waiting"}
+        with _held_lock:
+            _held[pin] = {"at": now, "expires": 0, "token": token}
+    try:
+        found = plextv.servers(token)
+    except plextv.PlexTvError as e:
+        return {"ok": False, "state": "error", "detail": str(e)}
+    return {"ok": True, "state": "servers",
+            "servers": [{"name": s.name, "id": s.client_id} for s in found]}
+
+
+@router.post("/settings/plex/signin/{pin}/use")
+async def plex_signin_use(pin: int, server: str = Form(""), timezone: str = Form("")):
+    token = _held_token(pin)
+    if token is None:
+        return JSONResponse({"ok": False, "tried": [],
+                             "detail": "That sign-in has run out. Sign in again."})
+    try:
+        found = await asyncio.to_thread(plextv.servers, token)
+    except plextv.PlexTvError as e:
+        return JSONResponse({"ok": False, "tried": [], "detail": str(e)})
+    chosen = next((s for s in found if s.client_id == server), None)
+    if chosen is None:
+        return JSONResponse({"ok": False, "tried": [],
+                             "detail": "Plex no longer lists that server."})
+    tried, failures = [], []
+    for c in chosen.connections:
+        url = c.uri.rstrip("/")
+        tried.append(url)
+        ok, detail = await asyncio.to_thread(_test_plex, url, chosen.access_token)
+        if ok:
+            await _save_and_sync(url, chosen.access_token,
+                                 timezone if timezone in ZONES else None)
+            _drop(pin)
+            return JSONResponse({"ok": True, "detail": detail, "address": url})
+        failures.append(detail)
+    # Prefer a reason from a server that answered over "could not reach".
+    why = next((d for d in failures if not d.startswith("Could not reach")),
+               failures[0] if failures else "Plex lists no address for this server.")
+    return JSONResponse({"ok": False, "detail": why, "tried": tried})
 
 
 @router.post("/settings/test")

@@ -9,15 +9,32 @@
   <div class="sub">Point it at your Plex server. That is the only thing it needs
     to start.</div>
 
+  <div class="field">
+    <label for="wz">Timezone your Plex server is in</label>
+    <select id="wz" name="timezone">
+      {% for z in zones %}
+        <option value="{{ z }}" {{ 'selected' if z == (settings.timezone or 'UTC') }}>{{ z }}</option>
+      {% endfor %}
+    </select>
+    <span class="help">Guide times come from Plex in this zone, and every time here is
+      shown in it. Pick where the server is, not where you are, if they differ.</span>
+  </div>
+
+  <div id="wsignin" data-plex-signin data-after="guide" data-zone="#wz">
+    <button class="primary psi-go" type="button">Sign in with Plex</button>
+    <div class="psi-out" hidden></div>
+    <p class="psi-or"><a href="#" id="wmanual">Enter it yourself</a></p>
+  </div>
+
   <div class="verdict" id="wverdict" hidden>
     <span class="vmark" aria-hidden="true"></span><span class="vtext"></span>
   </div>
 
-  <form id="wform">
+  <form id="wform" hidden>
     <div class="field">
       <label for="wu">Plex server address</label>
       <input id="wu" name="plex_url" value="{{ settings.plex_url or '' }}"
-             placeholder="http://192.168.1.10:32400" autofocus required>
+             placeholder="http://192.168.1.10:32400" required>
       <span class="help">The address has to work from inside this container. If Plex runs
         on another machine, use that machine's address, not 127.0.0.1.</span>
     </div>
@@ -27,17 +44,6 @@
       <input id="wt" name="plex_token" type="password" placeholder="X-Plex-Token" required>
       <span class="help">On the Plex server this is the <code>PlexOnlineToken</code> in
         Preferences.xml. It is kept in the local database and never logged.</span>
-    </div>
-
-    <div class="field">
-      <label for="wz">Timezone your Plex server is in</label>
-      <select id="wz" name="timezone">
-        {% for z in zones %}
-          <option value="{{ z }}" {{ 'selected' if z == (settings.timezone or 'UTC') }}>{{ z }}</option>
-        {% endfor %}
-      </select>
-      <span class="help">Guide times come from Plex in this zone, and every time here is
-        shown in it. Pick where the server is, not where you are, if they differ.</span>
     </div>
 
     <div class="row">
@@ -73,6 +79,13 @@
   var f = document.getElementById('wform'), out = document.getElementById('wverdict');
   if (!f) return;
 
+  document.getElementById('wmanual').addEventListener('click', function (e) {
+    e.preventDefault();
+    f.hidden = false;
+    document.getElementById('wsignin').hidden = true;
+    document.getElementById('wu').focus();
+  });
+
   // Offer the browser's own zone, which is right far more often than UTC.
   try {
     var sel = document.getElementById('wz');
@@ -94,7 +107,7 @@
     btn.disabled = true; btn.textContent = 'Testing...';
     say('busy', 'Asking your Plex server...');
     fetch('/welcome', {method: 'POST', headers: {Accept: 'application/json'},
-                       body: new URLSearchParams(new FormData(f))})
+                       body: new URLSearchParams(Object.assign(Object.fromEntries(new FormData(f)), {timezone: document.getElementById('wz').value}))})
       .then(function (r) { return r.json(); })
       .then(function (j) {
         if (j.ok) {

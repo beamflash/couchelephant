@@ -41,7 +41,8 @@ def test_a_new_install_sets_itself_up_from_anywhere(browser, base_url, unconfigu
     try:
         # 1. Any page sends a fresh install to the setup screen.
         page.goto("/recordings")
-        page.wait_for_selector("#wform", timeout=20000)
+        page.wait_for_selector("#wsignin", timeout=20000)
+        page.click("#wmanual")
 
         # 2. The timezone they actually live in is on offer.
         assert page.locator(f'#wz option[value="{zone}"]').count() == 1, \
