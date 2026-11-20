@@ -14,8 +14,10 @@ THIS = "http://192.168.1.20:8710"
 def _outside_a_container(monkeypatch):
     # CI runs the suite inside a container. Tests that want the container
     # case set it themselves.
-    from app import paths
+    from app import announce, paths
     monkeypatch.setattr(paths, "_in_container", lambda: False)
+    # "In a container" in these tests means on a Docker bridge.
+    monkeypatch.setattr(announce, "_host_network", lambda: False)
 
 @pytest.fixture(autouse=True)
 def _not_in_a_container(monkeypatch):
@@ -181,3 +183,13 @@ def test_the_address_setting_wins_over_the_machine(client, monkeypatch):
     assert client.get("/api/connect.svg").status_code == 409
     monkeypatch.setenv("COUCHELEPHANT_ADDRESS", "192.168.1.20")
     assert _body(client.get("/api/connect.svg")) == _expected(THIS)
+
+
+def test_a_host_network_container_on_a_172_lan_keeps_its_address(client, monkeypatch):
+    # Host networking on a home LAN in 172.16-31: that address is the real one.
+    monkeypatch.setattr(paths, "_in_container", lambda: True)
+    monkeypatch.setattr(announce, "_host_network", lambda: True)
+    _machine(monkeypatch, "172.25.9.7")
+    monkeypatch.setenv("COUCHELEPHANT_PORT", "8710")
+    assert _body(client.get("/api/connect.svg")) == _expected("http://172.25.9.7:8710")
+    assert not announce.is_bridge("172.25.9.7")

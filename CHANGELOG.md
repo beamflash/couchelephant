@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.5.28 - 2026-11-20
+
+### Fixed
+
+- A container on host networking whose home network uses 172.16 to 172.31
+  addresses did not announce itself, and its QR code found no address.
+  CouchElephant now tells Docker's own networks apart by their interfaces,
+  not by the address range.
+
 ## 1.5.27 - 2026-11-20
 
 ### Added

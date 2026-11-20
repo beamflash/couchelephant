@@ -14,8 +14,10 @@ from app import announce, db
 def _outside_a_container(monkeypatch):
     # CI runs the suite inside a container. Tests that want the container
     # case set it themselves.
-    from app import paths
+    from app import announce, paths
     monkeypatch.setattr(paths, "_in_container", lambda: False)
+    # "In a container" in these tests means on a Docker bridge.
+    monkeypatch.setattr(announce, "_host_network", lambda: False)
 
 TYPE = "_couchelephant._tcp.local."
 
@@ -288,6 +290,7 @@ def test_docker_bridge_address_is_left_out(monkeypatch):
             self.ip, self.is_IPv4 = ip, True
 
     class Ad:
+        nice_name = "eth0"
         ips = [Ip("172.17.0.2"), Ip("192.0.2.5")]
     monkeypatch.setattr(ifaddr, "get_adapters", lambda: [Ad()])
     monkeypatch.setattr(paths, "_in_container", lambda: True)
@@ -303,6 +306,7 @@ def test_container_on_the_bridge_alone_does_not_announce(monkeypatch, caplog):
         ip, is_IPv4 = "172.17.0.2", True
 
     class Ad:
+        nice_name = "eth0"
         ips = [Ip()]
     seen = _fake_zc(monkeypatch)
     monkeypatch.setattr(ifaddr, "get_adapters", lambda: [Ad()])
@@ -375,6 +379,7 @@ def test_a_compose_bridge_is_left_out_in_a_container(monkeypatch):
             self.ip, self.is_IPv4 = ip, True
 
     class Ad:
+        nice_name = "eth0"
         ips = [Ip("172.18.0.2"), Ip("172.31.0.9"), Ip("192.0.2.5")]
     monkeypatch.setattr(ifaddr, "get_adapters", lambda: [Ad()])
     monkeypatch.setattr(paths, "_in_container", lambda: True)

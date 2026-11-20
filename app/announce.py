@@ -40,13 +40,32 @@ def host_label(install_id=None) -> str:
     return "couchelephant-" + (re.sub(r"[^a-z0-9-]+", "-", str(raw).lower()).strip("-") or "x")
 
 
-def is_bridge(ip: str) -> bool:
-    """In a container, 172.16.0.0/12 is Docker's own network (compose makes
-    172.18 and up), which the home network cannot reach."""
+_DOCKER_NICS = ("docker", "br-", "veth")
+
+
+def _host_network() -> bool:
+    """A container on the host's own network sees the host's interfaces. On a
+    Docker bridge it sees only lo and eth0. Many homes use 172.16-31 for the
+    LAN, so the address alone cannot say which it is."""
     try:
-        return paths._in_container() and ipaddress.ip_address(ip) in ipaddress.ip_network("172.16.0.0/12")
+        import ifaddr
+        names = {a.nice_name for a in ifaddr.get_adapters()}
+    except Exception:
+        return False
+    return bool(names - {"lo", "eth0"})
+
+
+def is_bridge(ip: str) -> bool:
+    """An address the home network cannot reach: one of Docker's own networks.
+    Docker's interfaces count everywhere; inside a container on a bridge,
+    172.16.0.0/12 is Docker's (compose makes 172.18 and up)."""
+    try:
+        addr = ipaddress.ip_address(ip)
     except ValueError:
         return False
+    if not paths._in_container() or _host_network():
+        return False
+    return addr in ipaddress.ip_network("172.16.0.0/12")
 
 
 def enabled() -> bool:
@@ -216,7 +235,8 @@ def _addresses() -> list:
     else:
         import ifaddr
         ips = [ip.ip for ad in ifaddr.get_adapters() for ip in ad.ips
-               if ip.is_IPv4 and not ip.ip.startswith("127.")]
+               if ip.is_IPv4 and not ip.ip.startswith("127.")
+               and not ad.nice_name.startswith(_DOCKER_NICS)]
     if paths._in_container():
         # Docker's bridges: addresses the home network cannot reach.
         ips = [i for i in ips if not is_bridge(i)]
