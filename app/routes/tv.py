@@ -174,6 +174,7 @@ def hello(request: Request):
     # Every television gets one, because its own settings hang off it. With
     # sign-in off the key is handed over without anybody approving a code.
     return {"ok": True, "name": "CouchElephant", "version": VERSION,
+            "id": paths.install_id(),
             "pairing_required": needs,
             "paired": bool(dev),
             "can_delete": bool(dev and dev["allow_delete"]),

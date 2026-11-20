@@ -4,7 +4,7 @@ import hmac
 import os
 import time
 
-from app import auth, db, recorder
+from app import auth, db, paths, recorder
 from app.routes import tv as tv_routes
 from tests import fake_plex
 from tests.test_recorder import _airing, _record, _until
@@ -247,6 +247,12 @@ def test_with_sign_in_off_a_television_needs_no_pairing(client, tuner):
     hello = client.get("/api/tv/hello").json()
     assert hello["pairing_required"] is False
     assert client.get("/api/tv/home").status_code == 200
+
+
+def test_hello_carries_the_install_id_the_announcement_carries(client, tuner):
+    from app import announce
+    hello = client.get("/api/tv/hello").json()
+    assert hello["id"] == paths.install_id() == announce.txt()["id"]
 
 
 def test_with_sign_in_on_a_television_pairs_by_code(client, tuner):
