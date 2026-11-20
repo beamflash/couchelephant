@@ -752,6 +752,9 @@ def pebble(tmp_path_factory):
     run = _docker("run", "-d", "--name", name, "--network", "host",
                   "--add-host", f"{domain}:127.0.0.1",
                   "-e", "PEBBLE_VA_ALWAYS_VALID=0", "-e", "PEBBLE_VA_NOSLEEP=1",
+                  # Pebble refuses 5% of nonces on purpose; acme retries once,
+                  # so two in a row failed the run now and then.
+                  "-e", "PEBBLE_WFE_NONCEREJECT=0",
                   "-v", f"{work}:/cfg:ro", IMAGE, "-config", "/cfg/pebble-config.json")
     try:
         if run is None or run.returncode != 0:
