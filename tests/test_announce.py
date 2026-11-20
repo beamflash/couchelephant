@@ -265,6 +265,7 @@ def test_new_address_re_registers(monkeypatch):
 
 def test_docker_bridge_address_is_left_out(monkeypatch):
     import ifaddr
+
     from app import paths
 
     class Ip:
@@ -280,6 +281,7 @@ def test_docker_bridge_address_is_left_out(monkeypatch):
 
 def test_container_on_the_bridge_alone_does_not_announce(monkeypatch, caplog):
     import ifaddr
+
     from app import paths
 
     class Ip:
