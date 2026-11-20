@@ -98,3 +98,41 @@ def test_the_player_and_its_guide_work_under_the_security_policy(browser, base_u
         assert page.csp_violations == []
     finally:
         ctx.close()
+
+
+def test_a_domain_for_a_real_certificate(signin_tab, monkeypatch):
+    from app import acme_tls, db
+
+    def cannot(name):
+        raise acme_tls._Say("Let's Encrypt could not reach this server on port 443.")
+    monkeypatch.setattr(acme_tls, "_order", cannot)
+    page = signin_tab
+    assert page.is_hidden("#awaydomainbox")
+    page.click("#awayon")
+    page.fill("#awayuser", "owner")
+    page.fill("#awaypw", "a-good-password")
+    page.click("#awayfixgo")
+    page.wait_for_selector("#awaydomainbox", state="visible")
+
+    page.fill("#awaydomain", "not a name")
+    page.click("#awaydomaingo")
+    page.wait_for_selector("#awaydomainsay:not([hidden])")
+    assert "not a valid domain" in page.inner_text("#awaydomainsay")
+
+    page.fill("#awaydomain", "tv.example.com")
+    page.click("#awaydomaingo")
+    page.wait_for_function(
+        "document.querySelector('#awaydomainsay').textContent.indexOf('could not reach') > -1",
+        timeout=15000)
+    assert page.is_visible("#awaydomainretry")
+    assert db.get_setting("away_domain") == "tv.example.com"
+    assert "Traceback" not in page.inner_text("#awaydomainsay")
+    page.wait_for_function(
+        "document.querySelector('#awaycheck').textContent.indexOf('Encryption') > -1")
+    assert "could not reach" in page.inner_text("#awaycheck")
+
+    page.fill("#awaydomain", "")
+    page.click("#awaydomaingo")
+    page.wait_for_selector("#awaydomainsay", state="hidden")
+    assert db.get_setting("away_domain") == ""
+    assert page.csp_violations == []

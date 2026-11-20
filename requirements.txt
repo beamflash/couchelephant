@@ -18,3 +18,7 @@ zeroconf==0.154.0
 # level so the frozen builds pick it up.
 segno==1.6.6
 ifaddr==0.2.0
+# A real certificate for a domain from Let's Encrypt (acme_tls.py). The
+# frozen builds import it at module level from there.
+acme==5.10.0
+josepy==2.3.0

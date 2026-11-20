@@ -371,7 +371,7 @@ def test_pairing_opens_when_the_one_small_function_says_so(monkeypatch):
     import app.web as web
     _local_with_account()
     _away()
-    monkeypatch.setattr(web, "pairing_open_to_outsiders", lambda: True)
+    monkeypatch.setattr(web, "pairing_open_to_outsiders", lambda request: True)
     out = at(OUT)
     codes = [out.post("/api/tv/pair", data={"name": "x"}).status_code for _ in range(7)]
     assert codes[:5] == [200] * 5 and codes[5] == 429

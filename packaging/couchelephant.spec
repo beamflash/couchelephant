@@ -24,6 +24,9 @@ hidden = [
 # zeroconf has compiled parts and loads some modules by name.
 from PyInstaller.utils.hooks import collect_dynamic_libs, collect_submodules
 hidden += collect_submodules("zeroconf") + collect_submodules("ifaddr")
+# Let's Encrypt: the acme library reads its message types by name, and josepy
+# registers its JOSE classes on import.
+hidden += collect_submodules("acme") + collect_submodules("josepy")
 
 wanted = ("ffmpeg", "ffprobe", "comskip")
 exe_suffix = ".exe" if sys.platform == "win32" else ""

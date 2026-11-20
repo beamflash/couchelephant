@@ -11,6 +11,7 @@ from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from .. import (
+    acme_tls,
     announce,
     auth,
     cf_access,
@@ -393,6 +394,33 @@ def settings_away(on: str = Form("0")):
     return {"ok": True}
 
 
+@router.post("/settings/away/domain")
+def settings_away_domain(domain: str = Form("")):
+    """The name to get a real certificate for. Saving starts the order in the
+    background; the page asks /api/away/domain how it is going. Empty drops
+    back to the own certificate. The retry button posts the same name."""
+    if not domain.strip():
+        db.set_setting("away_domain", "")
+        acme_tls.drop_error()
+        return {"ok": True}
+    try:
+        name = acme_tls.clean_domain(domain)
+    except ValueError as e:
+        return JSONResponse({"ok": False, "error": str(e)})
+    if not exposure.away_on():
+        return JSONResponse({"ok": False,
+                             "error": "Turn on Use away from home first."})
+    db.set_setting("away_domain", name)
+    acme_tls.drop_error()
+    acme_tls.start_in_background(name)
+    return {"ok": True, "domain": name}
+
+
+@router.get("/api/away/domain")
+def away_domain_state():
+    return acme_tls.status()
+
+
 @router.post("/settings/away/account")
 def settings_away_account(username: str = Form(""), password: str = Form("")):
     """The fix for a switch with no sign-in: Local accounts on, and the first
@@ -424,6 +452,28 @@ def settings_away_password(uid: int = Form(...), password: str = Form("")):
     return {"ok": True}
 
 
+def _encryption_item(request):
+    st = acme_tls.status()
+    https = request.url.scheme == "https"
+    if st["state"] == "ok":
+        return {"name": "Encryption", "ok": True,
+                "say": f"The real certificate for {st['domain']} is valid until "
+                       f"{st['until']}. It renews itself."}
+    if st["state"] == "error":
+        return {"name": "Encryption", "ok": False,
+                "say": f"The certificate for {st['domain']} is not ready: "
+                       f"{st['say']} Until then browsers will warn; the apps "
+                       "still check this server's own certificate."}
+    if https:
+        return {"name": "Encryption", "ok": True,
+                "say": "This connection is encrypted with this server's own "
+                       "certificate. The apps check it, but browsers will warn. "
+                       "Add a domain for a real one."}
+    return {"name": "Encryption", "ok": False,
+            "say": "This connection is not encrypted. Passwords cross the "
+                   "internet in the clear until HTTPS is on."}
+
+
 @router.get("/api/away/check")
 def away_check(request: Request):
     """What is safe and what is not, in plain words, for the self-check."""
@@ -449,10 +499,7 @@ def away_check(request: Request):
         settings_item,
         {"name": "Paired devices", "ok": True,
          "say": "Paired TVs and phones keep working with their own keys."},
-        {"name": "Encryption", "ok": request.url.scheme == "https",
-         "say": "This connection is encrypted." if request.url.scheme == "https"
-         else "This connection is not encrypted. Passwords cross the internet in the "
-              "clear until HTTPS is on."},
+        _encryption_item(request),
         {"name": "Router", "ok": False,
          "say": "Your router may send home devices through the internet address; "
                 "they will be asked to sign in."},

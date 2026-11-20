@@ -178,6 +178,7 @@ tr:hover td{background:var(--panel2)}
 .pill.ok{background:var(--ok-soft);border-color:var(--ok-bd);color:var(--ok-fg)}
 .pill.warn{background:var(--warn-soft);border-color:var(--warn-bd);color:var(--warn-fg)}
 .pill.bad{background:var(--bad-soft);border-color:var(--bad-bd);color:var(--bad-fg)}
+.help.bad{color:var(--bad-fg)}
 /* Whose feature, in the same two colours the guide and the record options use. */
 .pill.ce{background:var(--accent-soft);border-color:var(--accent-bd);color:var(--accent-ink)}
 .pill.plexsrc{background:var(--live-soft);border-color:var(--live);color:var(--live-dot)}

@@ -671,7 +671,7 @@ window.wireSettings = function (root) {
   if (away) {
     var awayon = away.querySelector('#awayon'), awaymsg = away.querySelector('#awaymsg'),
         awayfix = away.querySelector('#awayfix'), awaycheck = away.querySelector('#awaycheck'),
-        awayfor = '';
+        awayfor = '', dbox = away.querySelector('#awaydomainbox');
 
     var post = function (url, data) {
       return fetch(url, {method: 'POST', body: new URLSearchParams(data)})
@@ -723,15 +723,57 @@ window.wireSettings = function (root) {
           awaymsg.hidden = true;
           awayfix.hidden = true;
           awayon.checked = true;
+          dbox.hidden = false;
           drawCheck();
         } else {
           awayon.checked = false;
+          dbox.hidden = true;
           fixForm(j);
         }
         return j;
       });
     };
+    // The domain and its real certificate. The order runs on the server; this
+    // asks how it is going until it is done.
+    var dsay = away.querySelector('#awaydomainsay'),
+        dretry = away.querySelector('#awaydomainretry'),
+        dtimer = null;
+    var drawDomain = function () {
+      fetch('/api/away/domain').then(function (r) { return r.json(); }).then(function (s) {
+        dsay.hidden = !s.say;
+        dsay.textContent = s.say;
+        dsay.className = 'help' + (s.state === 'error' ? ' bad' : '');
+        dretry.hidden = !(s.state === 'error' || s.state === 'waiting');
+        if (s.state === 'working') {
+          dtimer = setTimeout(drawDomain, 2000);
+        } else {
+          dtimer = null;
+          drawCheck();
+        }
+      });
+    };
+    var saveDomain = function () {
+      var name = away.querySelector('#awaydomain').value;
+      post('/settings/away/domain', {domain: name}).then(function (j) {
+        if (!j.ok) { dsay.textContent = j.error; dsay.className = 'help bad'; dsay.hidden = false; return; }
+        if (!name.trim()) { dsay.hidden = true; dretry.hidden = true; drawCheck(); return; }
+        dsay.textContent = 'Getting a certificate...';
+        dsay.className = 'help';
+        dsay.hidden = false;
+        dretry.hidden = true;
+        if (dtimer) clearTimeout(dtimer);
+        dtimer = setTimeout(drawDomain, 1000);
+      });
+    };
+    away.querySelector('#awaydomainform').addEventListener('submit', function (e) {
+      e.preventDefault();
+      saveDomain();
+    });
+    dretry.addEventListener('click', saveDomain);
+    if (dbox && dbox.dataset.domain) drawDomain();
+
     awayon.addEventListener('change', function () {
+      dbox.hidden = !awayon.checked;
       if (awayon.checked) { turnOn(); return; }
       post('/settings/away', {on: '0'}).then(function () {
         awaycheck.hidden = true;

@@ -127,36 +127,111 @@ def ensure_own() -> OwnCert:
         return OwnCert(cert_path, key_path, fingerprint_of(cert.public_key()))
 
 
-def _stamp(own_dir: Path):
+def _stamp(own_dir: Path, domain: str = ""):
     out = []
-    for n in ("cert.pem", "key.pem"):
+    names = ["cert.pem", "key.pem"]
+    if domain:
+        names += [domain + ".cert.pem", domain + ".key.pem"]
+    for n in names:
         try:
             st = (own_dir / n).stat()
             out.append((st.st_mtime_ns, st.st_size))
         except OSError:
-            return None
+            if n in ("cert.pem", "key.pem"):
+                return None
+            out.append(None)            # no real certificate yet
     return tuple(out)
+
+
+# The throwaway certificate an ACME order answers with: {domain: SSLContext}.
+_challenge: dict = {}
+
+
+def challenge_set(domain: str, cert_pem: bytes, key_pem: bytes) -> None:
+    """Answer acme-tls/1 for this name until challenge_clear()."""
+    d = _dir()
+    cert_path, key_path = d / "challenge.cert.pem", d / "challenge.key.pem"
+    _write(key_path, key_pem, 0o600)
+    _write(cert_path, cert_pem, 0o644)
+    try:
+        ctx = _new_context()
+        ctx.load_cert_chain(cert_path, key_path)
+        ctx.set_alpn_protocols(["acme-tls/1"])
+    finally:
+        cert_path.unlink(missing_ok=True)
+        key_path.unlink(missing_ok=True)
+    _challenge[domain.lower()] = ctx
+
+
+def challenge_clear() -> None:
+    _challenge.clear()
+
+
+def _new_context() -> ssl.SSLContext:
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    ctx.set_ciphers("ECDHE+AESGCM:ECDHE+CHACHA20")
+    return ctx
+
+
+def _real_context(domain: str):
+    """A context for the real certificate, or None when there is not a good one."""
+    from . import acme_tls
+    if not domain or acme_tls.real_cert(domain) is None:
+        return None
+    cert_path, key_path = acme_tls._files(domain)
+    ctx = _new_context()
+    try:
+        ctx.load_cert_chain(cert_path, key_path)
+    except (ssl.SSLError, OSError) as e:
+        log.warning("the real certificate for %s did not load: %s", domain, e)
+        return None
+    return ctx
+
+
+def _chooser(domain: str, real):
+    """The SNI callback: the throwaway certificate while an order runs for
+    that name, the real certificate for that name, the own one for anything
+    else (including no name at all)."""
+    def pick(sslobj, name, _ctx):
+        name = (name or "").lower().rstrip(".")
+        if not name or name != domain:
+            return None
+        try:
+            chall = _challenge.get(name)
+            if chall is not None:
+                sslobj.context = chall
+            elif real is not None:
+                sslobj.context = real
+        except Exception as e:
+            log.warning("could not pick a certificate for %s: %s", name, e)
+            return ssl.ALERT_DESCRIPTION_INTERNAL_ERROR
+        return None
+    return pick
 
 
 def context():
     """The SSLContext to serve with, or None while away is off (then the
     port speaks plain HTTP only, as it always did). Built once and kept until
-    the certificate files change; the setting is read every time."""
+    the certificate files change; the setting is read every time. It serves
+    the own certificate, and the real one for the domain in Settings."""
     from . import exposure
     if not exposure.away_on():
         return None
+    from . import acme_tls
+    domain = acme_tls.domain()
     d = _dir()
-    stamp = _stamp(d)
+    stamp = _stamp(d, domain)
     hit = _ctx_cache.get(d)
-    if stamp is not None and hit and hit[0] == stamp:
+    if stamp is not None and hit and hit[0] == stamp and hit[2] == domain:
         return hit[1]
     own = ensure_own()
-    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
-    ctx.set_ciphers("ECDHE+AESGCM:ECDHE+CHACHA20")
+    ctx = _new_context()
     ctx.load_cert_chain(own.cert_path, own.key_path)
+    if domain:
+        ctx.sni_callback = _chooser(domain, _real_context(domain))
     _ctx_cache.clear()
-    _ctx_cache[d] = (_stamp(d), ctx)
+    _ctx_cache[d] = (_stamp(d, domain), ctx, domain)
     return ctx
 
 

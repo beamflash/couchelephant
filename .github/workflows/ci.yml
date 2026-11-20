@@ -22,6 +22,15 @@ jobs:
       # The browser suite needs a shared IPC namespace or Chromium runs out of
       # shared memory and dies halfway through.
       options: --ipc=host
+    services:
+      # Let's Encrypt's test server, for the certificate tests. It really
+      # checks TLS-ALPN, so it connects back to this job on port 5001 by the
+      # job container's own host name (both are on one Docker network).
+      pebble:
+        image: ghcr.io/letsencrypt/pebble:latest
+        env:
+          PEBBLE_VA_ALWAYS_VALID: "0"
+          PEBBLE_VA_NOSLEEP: "1"
     steps:
       - uses: actions/checkout@v7
 
@@ -34,7 +43,10 @@ jobs:
       - name: Unit and API suite
         env:
           PYTHONPATH: ${{ github.workspace }}
-        run: pytest --ignore=tests/ui
+        run: |
+          export PEBBLE_DIRECTORY=https://pebble:14000/dir PEBBLE_TLS_PORT=5001
+          export PEBBLE_DOMAIN=$(hostname)
+          pytest --ignore=tests/ui
 
       - name: Browser suite
         env:

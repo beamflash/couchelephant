@@ -11,6 +11,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Red
 from fastapi.staticfiles import StaticFiles
 
 from . import (
+    acme_tls,
     adskip,
     announce,
     auth,
@@ -184,10 +185,14 @@ _OUT_EXACT = frozenset(("/login", "/favicon.ico", "/api/tv/hello"))
 _PAIR_PATHS = ("/api/tv/pair", "/api/tv/pair/poll")
 
 
-def pairing_open_to_outsiders() -> bool:
-    """First pairing happens at home. A server with a certificate the system
-    trusts will say yes here, later."""
-    return False
+def pairing_open_to_outsiders(request) -> bool:
+    """First pairing happens at home, unless the connection is HTTPS to the
+    domain whose real certificate this server holds. Then a device can check
+    who it is talking to with the system's own trust."""
+    host = (request.headers.get("host") or "").split(":")[0]
+    return request.url.scheme == "https" and acme_tls.trusted_for(host)
+
+
 _OUT_NEVER = ("/setup", "/welcome", "/settings", "/partial/settings", "/api/away",
               "/docs", "/openapi.json", "/redoc")
 
@@ -206,7 +211,7 @@ async def _away_gate(request: Request, call_next):
     if _out_never(path):
         return PlainTextResponse("Not found", status_code=404)
     if path in _PAIR_PATHS:
-        if pairing_open_to_outsiders():
+        if pairing_open_to_outsiders(request):
             return await call_next(request)
         return JSONResponse({"ok": False, "error": "Pair this device at home first."},
                             status_code=403)
@@ -357,6 +362,8 @@ async def announce_loop():
     while True:
         await asyncio.sleep(60)
         await asyncio.to_thread(announce.check)
+        # Once a day, from here: a real certificate with 30 days left is renewed.
+        await asyncio.to_thread(acme_tls.renew_daily)
 
 
 async def backup_loop():
