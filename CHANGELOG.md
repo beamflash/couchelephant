@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.5.27 - 2026-11-20
+
+### Added
+
+- **The apps find the server.** CouchElephant announces itself on the home
+  network, and the iPhone, iPad and Apple TV apps list every CouchElephant
+  they find by name; one tap or press connects. Typing the address is still
+  there, below the list. If nothing shows after a few seconds, the typed
+  address leads, with the last address that worked.
+- If the server's address changes, a paired app finds it again by itself and
+  keeps its pairing.
+- **A QR code to connect a phone**, under Settings, Recording, Televisions and
+  on the welcome page once Plex is set. Scan it with the iPhone or iPad camera.
+- A switch under Settings, Recording, Televisions turns the announcement off.
+
+### Notes
+
+- On Docker's default bridge network the server cannot announce itself, and
+  says so once in its log. Use host networking, or type the address in the
+  app. On Unraid, set Network Type to Host.
+
 ## 1.5.26 - 2026-11-19
 
 ### Added
