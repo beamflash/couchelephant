@@ -1003,3 +1003,10 @@ def test_settings_endpoints_work_without_a_library_mount(client, tuner, monkeypa
     r = client.get("/api/recorder/status")
     assert r.status_code == 200
     assert r.json()["library"]["mounted"] is False
+
+
+def test_a_paired_tv_cannot_turn_the_announcement_off(client, tuner):
+    tv = _pair(client)
+    db.set_setting("announce", "1")
+    client.post("/api/tv/settings", headers=tv, data={"announce": "0"})
+    assert db.get_setting("announce") == "1"

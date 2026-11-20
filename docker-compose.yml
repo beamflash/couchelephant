@@ -9,6 +9,9 @@ services:
     image: ghcr.io/datbird/couchelephant:latest
     container_name: couchelephant
     restart: unless-stopped
+    # The apps find the server by itself only with host networking. Remove
+    # "ports" and uncomment the next line to allow it.
+    # network_mode: host
     ports:
       - "8710:8710"
     volumes:

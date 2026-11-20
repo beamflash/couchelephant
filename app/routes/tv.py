@@ -201,6 +201,7 @@ def _machine_address():
     """This machine's best IPv4 for a phone: 192.168 first, then 10, then
     172.16/12, then anything else (a VPN address is the last resort)."""
     ips = [ipaddress.ip_address(socket.inet_ntoa(a)) for a in announce._addresses()]
+    ips = [ip for ip in ips if not announce.is_bridge(str(ip))]
 
     def rank(ip):
         if ip in ipaddress.ip_network("192.168.0.0/16"):
@@ -219,7 +220,7 @@ def lan_url(request: Request):
     address it could use."""
     host = request.url.hostname or ""
     scheme = request.url.scheme
-    if _is_lan_host(host) and not (host.startswith("172.17.") and paths._in_container()):
+    if _is_lan_host(host) and not announce.is_bridge(host):
         # The port the browser used: the Host header's, else the scheme default.
         port = request.url.port
     else:

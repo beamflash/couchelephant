@@ -3,7 +3,9 @@
 The frozen tray and menu bar must never import this: zeroconf has compiled
 parts and the tray ships only the light modules."""
 import asyncio
+import ipaddress
 import logging
+import re
 import socket
 import threading
 import time
@@ -29,6 +31,22 @@ def machine_name() -> str:
 
 def instance_name() -> str:
     return f"CouchElephant on {machine_name()}"
+
+
+def host_label(install_id=None) -> str:
+    """Our own .local name. Never the machine's: avahi or mDNSResponder owns
+    that, and two owners make it rename the host."""
+    raw = (install_id or paths.install_id)()
+    return "couchelephant-" + (re.sub(r"[^a-z0-9-]+", "-", str(raw).lower()).strip("-") or "x")
+
+
+def is_bridge(ip: str) -> bool:
+    """In a container, 172.16.0.0/12 is Docker's own network (compose makes
+    172.18 and up), which the home network cannot reach."""
+    try:
+        return paths._in_container() and ipaddress.ip_address(ip) in ipaddress.ip_network("172.16.0.0/12")
+    except ValueError:
+        return False
 
 
 def enabled() -> bool:
@@ -106,13 +124,18 @@ class Announcer:
     def _fail(self, e):
         self._failed = True
         self._info = self._sig = None
+        try:
+            if self._zc is not None and self._loop is not None:
+                self._run(self._zc.async_close())
+        except Exception as err:
+            log.debug("announce close: %s", err)
         self._close()
         if self._logged:
             return
         self._logged = True
         if isinstance(e, _NoAddress):
-            log.info("Not announcing on the network: this container is on Docker's "
-                     "bridge network. Use host networking to let the apps find it, "
+            log.info("Not announcing on the network: this container only has a Docker "
+                     "bridge address. Use host networking to let the apps find it, "
                      "or type the address.")
         else:
             log.info("not announcing on the network (%s); the server runs on", e)
@@ -150,16 +173,16 @@ class Announcer:
         t = txt(self._id)
         return ServiceInfo(
             SERVICE, f"{instance_name()}.{SERVICE}", port=self._port,
-            properties=t, server=f"{machine_name()}.local.",
+            properties=t, server=f"{host_label(self._id)}.local.",
             addresses=list(addresses))
 
     async def _announce(self):
-        if self._zc is None:
-            kw = {"interfaces": INTERFACES} if INTERFACES else {}
-            self._zc = AsyncZeroconf(ip_version=IPVersion.V4Only, **kw)
         sig = _signature()
         if not sig[0] and paths._in_container():
             raise _NoAddress()
+        if self._zc is None:
+            kw = {"interfaces": INTERFACES} if INTERFACES else {}
+            self._zc = AsyncZeroconf(ip_version=IPVersion.V4Only, **kw)
         info = self._make_info(sig[0])
         if self._info is None:
             # Two installs on one machine share the name; take the next free one.
@@ -195,8 +218,8 @@ def _addresses() -> list:
         ips = [ip.ip for ad in ifaddr.get_adapters() for ip in ad.ips
                if ip.is_IPv4 and not ip.ip.startswith("127.")]
     if paths._in_container():
-        # Docker's default bridge: an address the home network cannot reach.
-        ips = [i for i in ips if not i.startswith("172.17.")]
+        # Docker's bridges: addresses the home network cannot reach.
+        ips = [i for i in ips if not is_bridge(i)]
         if not ips:
             return []
     return [socket.inet_aton(i) for i in ips]

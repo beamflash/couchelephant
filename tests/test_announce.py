@@ -300,8 +300,8 @@ def test_container_on_the_bridge_alone_does_not_announce(monkeypatch, caplog):
     assert not seen["registered"]
     lines = [r.getMessage() for r in caplog.records
              if r.name == "couchelephant.announce"]
-    assert lines == ["Not announcing on the network: this container is on Docker's "
-                     "bridge network. Use host networking to let the apps find it, "
+    assert lines == ["Not announcing on the network: this container only has a Docker "
+                     "bridge address. Use host networking to let the apps find it, "
                      "or type the address."]
 
 
@@ -333,3 +333,61 @@ def test_startup_does_not_wait_for_a_slow_announce(monkeypatch):
     # The loop kept turning while start slept, so it ran off the loop.
     assert ticks == 5
     assert took >= 0.9
+
+
+def test_the_service_never_claims_the_machines_own_name(monkeypatch):
+    seen = _fake_zc(monkeypatch)
+    monkeypatch.setattr(announce, "_addresses", lambda: [socket.inet_aton("192.0.2.10")])
+    a = announce.Announcer(install_id=lambda: "ABC_123-def")
+    a.start(18780)
+    try:
+        info = seen["registered"][0]
+        assert info.server == "couchelephant-abc-123-def.local."
+        assert socket.gethostname().split(".")[0].lower() + ".local." != info.server
+        assert info.properties[b"name"].decode() == announce.machine_name()
+        assert info.name.startswith("CouchElephant on ")
+    finally:
+        a.stop()
+
+
+def test_a_compose_bridge_is_left_out_in_a_container(monkeypatch):
+    import ifaddr
+
+    from app import paths
+
+    class Ip:
+        def __init__(self, ip):
+            self.ip, self.is_IPv4 = ip, True
+
+    class Ad:
+        ips = [Ip("172.18.0.2"), Ip("172.31.0.9"), Ip("192.0.2.5")]
+    monkeypatch.setattr(ifaddr, "get_adapters", lambda: [Ad()])
+    monkeypatch.setattr(paths, "_in_container", lambda: True)
+    assert announce._addresses() == [socket.inet_aton("192.0.2.5")]
+    monkeypatch.setattr(paths, "_in_container", lambda: False)
+    assert len(announce._addresses()) == 3
+
+
+def test_no_zeroconf_is_made_without_an_address_and_a_failure_closes_it(monkeypatch):
+    from app import paths
+    made, closed = [], []
+
+    class Fake:
+        def __init__(self, *a, **k):
+            made.append(1)
+
+        async def async_register_service(self, info, allow_name_change=False):
+            raise OSError("no route")
+
+        async def async_close(self):
+            closed.append(1)
+    monkeypatch.setattr(announce, "AsyncZeroconf", Fake)
+    monkeypatch.setattr(paths, "_in_container", lambda: True)
+    monkeypatch.setattr(announce, "_addresses", lambda: [])
+    a = announce.Announcer()
+    a.start(18781)
+    assert made == []
+    monkeypatch.setattr(announce, "_addresses", lambda: [socket.inet_aton("192.0.2.10")])
+    a.refresh(retry=True)
+    a.stop()
+    assert made == [1] and closed == [1]

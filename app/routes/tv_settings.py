@@ -95,7 +95,8 @@ async def save(request: Request):
     if not may_change(request):
         return _refused()
     form = await request.form()
-    sent = {k: form.get(k) for k in web.KEYS if k in form and k != "plex_token"}
+    sent = {k: form.get(k) for k in web.KEYS
+            if k in form and k not in ("plex_token", "announce")}
     refused = web.apply(sent)
     if refused:
         return JSONResponse({"ok": False, "error": "Not saved: " + ", ".join(refused)},

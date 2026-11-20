@@ -101,6 +101,9 @@ def test_a_home_address_beats_a_vpn_one_listed_first(client, monkeypatch):
     assert _body(client.get("/api/connect.svg")) == _expected("http://10.0.0.7:8710")
     _machine(monkeypatch, "100.64.3.4", "172.18.0.5")
     assert _body(client.get("/api/connect.svg")) == _expected("http://172.18.0.5:8710")
+    monkeypatch.setattr(paths, "_in_container", lambda: True)
+    assert _body(client.get("/api/connect.svg")) == _expected("http://100.64.3.4:8710")
+    monkeypatch.setattr(paths, "_in_container", lambda: False)
     _machine(monkeypatch, "100.64.3.4")
     assert _body(client.get("/api/connect.svg")) == _expected("http://100.64.3.4:8710")
 
@@ -143,3 +146,12 @@ def test_an_https_proxy_name_gives_the_machines_plain_http_address(client, monke
     _machine(monkeypatch, "192.168.1.20")
     r = client.get("https://tv.example.org/api/connect.svg")
     assert _body(r) == _expected("http://192.168.1.20:8710")
+
+
+def test_in_a_container_a_172_18_host_is_a_bridge_too(client, monkeypatch):
+    _machine(monkeypatch, "192.168.1.20")
+    monkeypatch.setenv("COUCHELEPHANT_PORT", "8710")
+    host = {"Host": "172.18.0.5:8710"}
+    assert _body(client.get("/api/connect.svg", headers=host)) == _expected("http://172.18.0.5:8710")
+    monkeypatch.setattr(paths, "_in_container", lambda: True)
+    assert _body(client.get("/api/connect.svg", headers=host)) == _expected(THIS)
