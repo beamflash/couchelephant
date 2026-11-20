@@ -3,10 +3,14 @@
 Home means loopback, RFC 1918, link-local, IPv6 ULA, and the subnets this
 machine sits on. Everything else is outside, including the router's own
 public address (hairpin NAT)."""
+import functools
 import ipaddress
 import logging
+import socket
+import struct
+import time
 
-from . import announce, db
+from . import announce, db, paths
 
 log = logging.getLogger("couchelephant.exposure")
 
@@ -15,9 +19,114 @@ _HOME = [ipaddress.ip_network(n) for n in (
     "169.254.0.0/16", "::1/128", "fc00::/7", "fe80::/10")]
 
 
+CACHE_SECONDS = 60
+_cache: dict = {}
+
+
+def clear_cache() -> None:
+    _cache.clear()
+
+
+def _cached(fn):
+    """Interfaces and routes change rarely; ask at most once a minute."""
+    @functools.wraps(fn)
+    def wrapper():
+        hit = _cache.get(fn.__name__)
+        if hit and time.monotonic() - hit[0] < CACHE_SECONDS:
+            return hit[1]
+        value = fn()
+        _cache[fn.__name__] = (time.monotonic(), value)
+        return value
+    return wrapper
+
+
+_ETH0_UEVENT = "/sys/class/net/eth0/uevent"
+
+
 def _adapters():
     import ifaddr
     return ifaddr.get_adapters()
+
+
+def _route_files() -> list:
+    return ["/proc/net/route", "/proc/net/ipv6_route"]
+
+
+@_cached
+def _gateways() -> set:
+    """Default gateways, from the kernel's route tables."""
+    out = set()
+    for path in _route_files():
+        try:
+            lines = open(path).read().splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            f = line.split()
+            try:
+                if len(f) >= 8 and f[1] == "00000000" and f[7] == "00000000":
+                    gw = int(f[2], 16)
+                    if gw:
+                        out.add(ipaddress.ip_address(
+                            socket.inet_ntoa(struct.pack("<L", gw))))
+                elif len(f) >= 10 and f[0] == "0" * 32 and f[1] == "00":
+                    gw = ipaddress.ip_address(bytes.fromhex(f[4]))
+                    if not gw.is_unspecified:
+                        out.add(gw)
+            except ValueError:
+                continue
+    return out
+
+
+@_cached
+def _eth0_is_veth():
+    """True on a Docker bridge (eth0 is one end of a veth pair), False on
+    macvlan/ipvlan or a real NIC, None when we cannot tell."""
+    try:
+        uevent = open(_ETH0_UEVENT).read()
+    except OSError:
+        return None
+    # The kernel names a veth end DEVTYPE=veth. macvlan, ipvlan and real
+    # NICs are something else.
+    return "DEVTYPE=veth" in uevent
+
+
+def _nets_of(adapters, skip_lo=True) -> list:
+    out = []
+    for nic in adapters:
+        for ip in nic.ips:
+            raw = ip.ip[0] if isinstance(ip.ip, tuple) else ip.ip
+            try:
+                addr = ipaddress.ip_address(raw)
+                if skip_lo and addr.is_loopback:
+                    continue
+                out.append((nic, ipaddress.ip_network(
+                    f"{raw}/{ip.network_prefix}", strict=False)))
+            except ValueError:
+                continue
+    return out
+
+
+def _docker_nic(nic) -> bool:
+    return str(nic.nice_name).startswith(announce._DOCKER_NICS)
+
+
+@_cached
+def _never_home() -> tuple:
+    """(addresses, networks) that are never home, from Docker's own wiring."""
+    addrs, nets = set(), []
+    try:
+        pairs = _nets_of(list(_adapters()))
+    except Exception:
+        pairs = []
+    if paths._in_container() and not announce._host_network():
+        addrs |= _gateways()
+        # On a bridge, our own subnet is Docker's. Unknown driver: strict.
+        if _eth0_is_veth() is not False:
+            nets += [net for _, net in pairs]
+    else:
+        nets += [net for nic, net in pairs if _docker_nic(nic)]
+    return addrs, nets
 
 
 def _norm(addr):
@@ -34,6 +143,7 @@ def _parse(text):
         return None
 
 
+@_cached
 def local_subnets() -> list:
     """The networks this machine is on, from its own interfaces. Docker's
     own networks are left out, as announce does."""
@@ -53,6 +163,8 @@ def local_subnets() -> list:
                 net = ipaddress.ip_network(f"{raw}/{ip.network_prefix}", strict=False)
             except ValueError:
                 continue
+            if net.prefixlen < (16 if net.version == 4 else 48):
+                continue                # too wide to mean "my home"
             if net not in out:
                 out.append(net)
     return out
@@ -70,14 +182,15 @@ def _trusted():
         except ValueError:
             log.warning("trusted_proxies: ignoring %r", part)
             continue
+        if net.version == 6 and net.network_address.ipv4_mapped and net.prefixlen >= 96:
+            net = ipaddress.ip_network(
+                (net.network_address.ipv4_mapped, net.prefixlen - 96))
         out.append(net)
     return out
 
 
 def _is_trusted(addr, trusted) -> bool:
     for net in trusted:
-        if net.version == 6 and net.network_address.ipv4_mapped:
-            continue
         if addr.version == net.version and addr in net:
             return True
     return False
@@ -96,11 +209,11 @@ def client_address(request):
     trusted = _trusted()
     if not trusted or not _is_trusted(peer, trusted):
         return peer
-    header = request.headers.get("x-forwarded-for")
-    if header is None:
-        return peer
+    lines = request.headers.getlist("x-forwarded-for")
+    if not lines:
+        return _NOBODY              # a proxy that says nothing: outside
     hops = []
-    for part in header.split(","):
+    for part in ",".join(lines).split(","):
         addr = _parse(part)
         if addr is None:
             return _NOBODY          # junk: treat as outside
@@ -114,6 +227,9 @@ def client_address(request):
 def is_home(request) -> bool:
     addr = client_address(request)
     if addr == _NOBODY:
+        return False
+    addrs, nets_never = _never_home()
+    if addr in addrs or any(addr.version == n.version and addr in n for n in nets_never):
         return False
     nets = _HOME + local_subnets()
     return any(addr.version == n.version and addr in n for n in nets)

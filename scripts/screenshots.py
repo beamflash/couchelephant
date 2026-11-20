@@ -92,7 +92,8 @@ def start_app(plex_url):
 
     port = free_port()
     server = uvicorn.Server(uvicorn.Config(
-        web.app, host="127.0.0.1", port=port, log_level="warning"))
+        web.app, host="127.0.0.1", port=port, log_level="warning",
+        proxy_headers=False))
     threading.Thread(target=server.run, daemon=True).start()
     deadline = time.time() + 20
     while not server.started:

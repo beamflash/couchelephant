@@ -100,7 +100,8 @@ def main():
               f"ad break {AD_BREAK}", flush=True)
 
     print(f"CouchElephant for the Apple tests on port {PORT}, scratch {SCRATCH}", flush=True)
-    uvicorn.run(web.app, host="0.0.0.0", port=PORT, log_level="warning")
+    uvicorn.run(web.app, host="0.0.0.0", port=PORT, log_level="warning",
+                proxy_headers=False)
 
 
 if __name__ == "__main__":

@@ -28,6 +28,12 @@ def _open_later(port: int) -> None:
     webbrowser.open(f"http://localhost:{port}/welcome")
 
 
+def make_config(port: int) -> uvicorn.Config:
+    # proxy_headers off: app.exposure alone decides whom to believe.
+    return uvicorn.Config("app.web:app", host="0.0.0.0", port=port,
+                          server_header=False, proxy_headers=False)
+
+
 def main(argv: list[str]) -> int:
     global _server
     ap = argparse.ArgumentParser(prog="python -m app")
@@ -41,8 +47,7 @@ def main(argv: list[str]) -> int:
     paths.data_dir()                      # make the folder before anything uses it
     if args.open and first_run():
         threading.Thread(target=_open_later, args=(args.port,), daemon=True).start()
-    _server = uvicorn.Server(uvicorn.Config(
-        "app.web:app", host="0.0.0.0", port=args.port, server_header=False))
+    _server = uvicorn.Server(make_config(args.port))
     _server.run()
     return 0
 
