@@ -252,3 +252,117 @@ def test_a_late_poll_after_use_does_not_take_the_token_again(client, tv, plex_ur
     assert routes._held[pin]["token"] is None
     again = client.post(f"/settings/plex/signin/{pin}/use", data={"server": "cid-1"}).json()
     assert again["ok"] is False
+
+
+# ---- final review ----
+
+def _use(client, pin, server="cid-1", **kw):
+    return client.post(f"/settings/plex/signin/{pin}/use",
+                       data={"server": server, **kw}).json()
+
+
+def test_the_plain_local_address_is_tried_when_plex_direct_will_not_resolve(client, tv, plex_url):
+    direct = fake.plexdirect(plex_url)
+    pin = _approved(client, tv, [fake.server("Den", "cid-1", [direct])])
+    j = _use(client, pin)
+    assert j["ok"] is True and j["address"] == plex_url
+    assert db.get_setting("plex_url") == plex_url
+
+
+def test_the_plain_address_is_listed_right_after_its_plex_direct_name(client, tv):
+    direct = ("https://192-168-1-5.abc.plex.direct.invalid:1", True, False, "192.168.1.5", 1)
+    pin = _approved(client, tv, [fake.server("Den", "cid-1", [
+        direct, ("https://other.plex.direct.invalid:2", False, False)])])
+    j = _use(client, pin)
+    assert j["ok"] is False
+    assert j["tried"] == [direct[0], "http://192.168.1.5:1", "https://other.plex.direct.invalid:2"]
+
+
+def test_a_relay_is_never_saved(client, tv, plex_url):
+    pin = _approved(client, tv, [fake.server("Den", "cid-1", [(plex_url, False, True)])])
+    j = _use(client, pin)
+    assert j["ok"] is False
+    assert j["detail"] == ("Only Plex's relay answered. CouchElephant needs a direct "
+                           "address. Check that this computer can reach the Plex "
+                           "server, or enter it yourself.")
+    assert j["tried"] == [plex_url]
+    assert db.get_setting("plex_url") == "" and db.get_setting("plex_token") == ""
+
+
+def test_a_direct_address_beats_a_relay_that_also_answers(client, tv, plex_url):
+    relay = plex_url.replace("127.0.0.1", "localhost")
+    pin = _approved(client, tv, [fake.server("Den", "cid-1", [
+        (relay, False, True), (plex_url, False, False)])])
+    j = _use(client, pin)
+    assert j["ok"] is True and j["address"] == plex_url
+
+
+def test_a_dead_relay_gives_the_ordinary_failure(client, tv):
+    pin = _approved(client, tv, [fake.server("Den", "cid-1", [
+        ("http://127.0.0.1:1", False, True)])])
+    j = _use(client, pin)
+    assert j["ok"] is False and "relay" not in j["detail"]
+
+
+def test_only_servers_the_account_owns_are_listed(client, tv, plex_url):
+    pin = _approved(client, tv, [
+        fake.server("Friend", "cid-f", [(plex_url, True, False)], owned=False),
+        fake.server("Mine", "cid-1", [(plex_url, True, False)])])
+    j = client.get(f"/settings/plex/signin/{pin}").json()
+    assert j["servers"] == [{"name": "Mine", "id": "cid-1"}]
+    assert _use(client, pin, "cid-f")["ok"] is False
+    assert db.get_setting("plex_url") == ""
+
+
+def test_an_account_that_owns_no_server_says_so(client, tv, plex_url):
+    pin = _approved(client, tv, [
+        fake.server("Friend", "cid-f", [(plex_url, True, False)], owned=False)])
+    j = client.get(f"/settings/plex/signin/{pin}").json()
+    assert j["state"] == "servers" and j["servers"] == []
+    assert j["detail"] == ("This Plex account does not own a server. Sign in with "
+                           "the account that runs your Plex server.")
+
+
+def test_a_pin_this_install_never_started_is_expired_without_asking_plex_tv(client, tv):
+    other = tv.next_id
+    tv.pins[other] = {"code": "ZZZZ", "authToken": fake.TOKEN}
+    before = len(tv.requests)
+    assert client.get(f"/settings/plex/signin/{other}").json() == {
+        "ok": False, "state": "expired"}
+    assert len(tv.requests) == before
+
+
+# ---- welcome is locked once set up ----
+
+LOCKED = {"ok": False, "detail": "CouchElephant is already set up. Change Plex under Settings."}
+
+
+def _welcome(client, plex_url, **kw):
+    data = {"plex_url": plex_url, "plex_token": "evil", "timezone": "UTC", **kw}
+    return client.post("/welcome", data=data, headers=H)
+
+
+def test_welcome_post_is_refused_after_setup_with_sign_in_off(client, plex_url):
+    db.set_setting("plex_url", plex_url)
+    db.set_setting("plex_token", "keep-me")
+    r = _welcome(client, plex_url)
+    assert r.status_code == 403 and r.json() == LOCKED
+    assert db.get_setting("plex_token") == "keep-me"
+
+
+def test_welcome_post_is_refused_after_setup_with_sign_in_on(client, plex_url):
+    db.set_setting("auth_mode", "local")
+    auth.create_user("boss", "a-long-enough-password", role="admin")
+    db.set_setting("plex_url", plex_url)
+    db.set_setting("plex_token", "keep-me")
+    r = _welcome(client, plex_url)
+    assert r.status_code == 403 and r.json() == LOCKED
+    assert db.get_setting("plex_token") == "keep-me"
+
+
+def test_welcome_refuses_a_timezone_off_the_list(client, plex_url):
+    db.set_setting("plex_url", "")
+    db.set_setting("plex_token", "")
+    r = _welcome(client, plex_url, timezone="Mars/Olympus")
+    assert r.json()["ok"] is False
+    assert db.get_setting("plex_url") == ""

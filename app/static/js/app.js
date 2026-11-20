@@ -1255,7 +1255,10 @@ window.wireSettings = function (root) {
       })
       .catch(function (err) { box.innerHTML = '<div class="empty">' + err + '</div>'; });
   });
-  function shut() { ovl.classList.remove('show', 'settings'); box.innerHTML = ''; }
+  function shut() {
+    if (window.stopPlexSignin) window.stopPlexSignin(box);
+    ovl.classList.remove('show', 'settings'); box.innerHTML = '';
+  }
   ovl.addEventListener('click', function (e) { if (e.target === ovl) shut(); });
   document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape' && ovl.classList.contains('settings')) shut();

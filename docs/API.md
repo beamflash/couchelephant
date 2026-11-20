@@ -150,8 +150,8 @@ sync fills in its games.
 | --- | --- |
 | `POST /settings` | Server address, token, timezone, sync interval, preview mode |
 | `POST /settings/plex/signin` | Start Sign in with Plex. `{ok, pin, code, link}`: show `code` and send the person to `link` |
-| `GET /settings/plex/signin/{pin}` | Poll it. `{ok, state}` where `state` is `waiting`, `servers` (with `servers: [{name, id}]`) or `expired` |
-| `POST /settings/plex/signin/{pin}/use` | Form `server` (an id from the poll), optional `timezone`. Tests each address and saves the first that works: `{ok, detail, address}`, or `{ok: false, detail, tried}` |
+| `GET /settings/plex/signin/{pin}` | Poll it. `{ok, state}` where `state` is `waiting`, `servers` (with `servers: [{name, id}]`, owned servers only, and a `detail` when the list is empty), `expired` (also for a pin this install did not start) or `error` (with `detail`: plex.tv did not answer or refused; the pin is still good, so keep polling) |
+| `POST /settings/plex/signin/{pin}/use` | Form `server` (an id from the poll), optional `timezone`. Tests each address (for a local server, the `plex.direct` name then the plain `http://host:port`) and saves the first direct one that works; a relay is never saved: `{ok, detail, address}`, or `{ok: false, detail, tried}` |
 | `POST /settings/test` | Check the Plex connection. Send `Accept: application/json` for `{ok, detail}` |
 | `POST /settings/auth` | Sign-in mode and the Cloudflare fields |
 | `POST /settings/logos` | Re-fetch every channel logo |

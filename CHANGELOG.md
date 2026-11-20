@@ -5,20 +5,26 @@
 ### Added
 
 - **Sign in with Plex.** The welcome page and Settings, Plex have one button.
-  It shows a four-letter code to type at plex.tv/link, lists your Plex
-  servers by name, and saves the first address of the chosen server that
-  answers and has a DVR. If none answers it lists every address it tried.
-  Typing the address and token yourself is still there, under "Enter it
-  yourself".
+  It shows a four-character code to type at plex.tv/link, lists the Plex
+  servers your account owns by name, and saves the first address of the chosen
+  server that answers and has a DVR. For a local server it tries the plain
+  address (`http://host:port`) after Plex's `plex.direct` name, because many
+  home routers will not resolve that name. A relay address is never saved: if
+  only the relay answers, it says so. If none answers it lists every address
+  it tried. Servers shared with you by a friend are not listed. Typing the
+  address and token yourself is still there: a link, "Enter it yourself", on
+  the welcome page, and the form itself in Settings, Plex.
+- The welcome page's save is locked once CouchElephant is set up, so nobody
+  on the network can repoint Plex. Change it under Settings.
 - **Recording folders suggested from Plex.** Settings, Recording fills in the
   TV and Movies folders from your Plex libraries and says whether CouchElephant
   can write to each. Nothing is saved until you press "Use these folders".
 
 ### Fixed
 
-- On the Windows, macOS and Linux installs, a full folder path for TV or
-  Movies recordings lost its leading slash when saved, so recordings were not
-  moved into Plex.
+- On the macOS and Linux installs, a full folder path for TV or Movies
+  recordings lost its leading slash when saved, so recordings were not moved
+  into Plex. A normal Windows `C:\` path was not affected.
 
 ## 1.5.25 - 2026-11-19
 

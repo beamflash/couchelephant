@@ -134,3 +134,30 @@ def test_rejected_token_has_its_own_message(tv):
 def test_approve_unknown_pin_is_clear(tv):
     with pytest.raises(KeyError):
         tv.approve(999999)
+
+
+# ---- final review ----
+
+def test_connections_keep_address_port_and_protocol(tv):
+    tv.load_resources([fake.server("Den", "c", [
+        ("https://192-168-1-5.abc.plex.direct:32400", True, False, "192.168.1.5", 32400)])])
+    c = plextv.servers(fake.TOKEN)[0].connections[0]
+    assert (c.address, c.port, c.protocol) == ("192.168.1.5", 32400, "https")
+
+
+def test_servers_know_whether_the_account_owns_them(tv):
+    tv.load_resources([fake.server("Mine", "a", [("http://h:1", True, False)]),
+                       fake.server("Friend", "b", [("http://h:2", True, False)], owned=False)])
+    assert [(s.name, s.owned) for s in plextv.servers(fake.TOKEN)] == [
+        ("Mine", True), ("Friend", False)]
+
+
+def test_a_slowly_dribbled_answer_still_hits_the_total_deadline(tv, monkeypatch):
+    import time
+    monkeypatch.setattr(plextv, "TIMEOUT", 0.6)
+    tv.drip = 4
+    t0 = time.monotonic()
+    with pytest.raises(plextv.PlexTvError) as e:
+        plextv.create_pin()
+    assert str(e.value) == "plex.tv did not answer."
+    assert time.monotonic() - t0 < 1.5

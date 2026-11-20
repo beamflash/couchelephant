@@ -461,9 +461,12 @@ def plex_signin_poll(pin: int):
     if token is None:
         with _held_lock:
             e = _held.get(pin)
-            if e and e.get("used"):
+            if e is None:
+                # Not a pin this install started. Never ask plex.tv about it.
                 return {"ok": False, "state": "expired"}
-            if e and e["expires"] <= now:
+            if e.get("used"):
+                return {"ok": False, "state": "expired"}
+            if e["expires"] <= now:
                 del _held[pin]
                 return {"ok": False, "state": "expired"}
         try:
@@ -481,9 +484,19 @@ def plex_signin_poll(pin: int):
         found = plextv.servers(token)
     except plextv.PlexTvError as e:
         return {"ok": False, "state": "error", "detail": str(e)}
-    return {"ok": True, "state": "servers",
-            "servers": [{"name": s.name, "id": s.client_id} for s in found]}
+    mine = [s for s in found if s.owned]
+    out = {"ok": True, "state": "servers",
+           "servers": [{"name": s.name, "id": s.client_id} for s in mine]}
+    if not mine:
+        out["detail"] = NOT_OWNED
+    return out
 
+
+NOT_OWNED = ("This Plex account does not own a server. Sign in with the account "
+             "that runs your Plex server.")
+RELAY_ONLY = ("Only Plex's relay answered. CouchElephant needs a direct address. "
+              "Check that this computer can reach the Plex server, or enter it "
+              "yourself.")
 
 ADDRESS_TIMEOUT = 4.0       # per request to one address
 USE_CAP = 10.0              # all addresses together
@@ -535,23 +548,46 @@ async def plex_signin_use(pin: int, server: str = Form(""), timezone: str = Form
         found = await asyncio.to_thread(plextv.servers, token)
     except plextv.PlexTvError as e:
         return JSONResponse({"ok": False, "tried": [], "detail": str(e)})
-    chosen = next((s for s in found if s.client_id == server), None)
+    chosen = next((s for s in found if s.owned and s.client_id == server), None)
     if chosen is None:
         return JSONResponse({"ok": False, "tried": [],
                              "detail": "Plex no longer lists that server."})
-    urls = [c.uri.rstrip("/") for c in chosen.connections]
+    urls, relay = _addresses(chosen.connections)
     results = await asyncio.to_thread(_try_all, urls, chosen.access_token)
+    answered_relay = False
     for url, (ok, detail) in zip(urls, results):
-        if ok:
+        if ok and url in relay:
+            answered_relay = True      # reachable, but never saved
+        elif ok:
             await _save_and_sync(url, chosen.access_token,
                                  timezone if timezone in ZONES else None)
             _mark_used(pin)
             return JSONResponse({"ok": True, "detail": detail, "address": url})
-    tried, failures = urls, [d for _, d in results]
+    if answered_relay:
+        return JSONResponse({"ok": False, "detail": RELAY_ONLY, "tried": urls})
+    failures = [d for _, d in results]
     # Prefer a reason from a server that answered over "could not reach".
     why = next((d for d in failures if not d.startswith("Could not reach")),
                failures[0] if failures else "Plex lists no address for this server.")
-    return JSONResponse({"ok": False, "detail": why, "tried": tried})
+    return JSONResponse({"ok": False, "detail": why, "tried": urls})
+
+
+def _addresses(conns):
+    """Every address to try, best first, and the set that are relays. A local
+    plex.direct name is followed by the plain http address, because many home
+    routers will not resolve plex.direct (DNS rebinding protection)."""
+    urls, relay = [], set()
+    for c in conns:
+        u = c.uri.rstrip("/")
+        if u and u not in urls:
+            urls.append(u)
+            if c.relay:
+                relay.add(u)
+        if c.local and not c.relay and c.address and c.port:
+            plain = f"http://{c.address}:{c.port}"
+            if plain not in urls:
+                urls.append(plain)
+    return urls, relay
 
 
 @router.post("/settings/test")

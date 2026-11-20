@@ -21,6 +21,7 @@ class State:
         self.requests = []      # (method, path, query dict, headers dict)
         self.resources = []
         self.hang = 0           # how many requests stall before answering
+        self.drip = 0           # seconds to dribble an answer out, a byte at a time
         self.fail_status = None  # answer every request with this status
         self.raw = None         # if set, every GET answers this JSON
         self.valid_tokens = {TOKEN}  # account tokens /resources accepts
@@ -41,16 +42,36 @@ class State:
 STATE = State()
 
 
-def server(name, client_id, connections, token="srv-token-abc", provides="server"):
-    """One entry of /api/v2/resources. Each connection is (uri, local, relay)."""
+def _conn(c):
+    """(uri, local, relay) or (uri, local, relay, address, port). Without the
+    last two they come from the uri, like a plain http address."""
+    from urllib.parse import urlsplit
+    uri, local, relay = c[:3]
+    u = urlsplit(uri)
+    address, port = c[3:5] if len(c) == 5 else (u.hostname, u.port)
+    return {"protocol": u.scheme, "address": address, "port": port,
+            "uri": uri, "local": local, "relay": relay}
+
+
+def server(name, client_id, connections, token="srv-token-abc", provides="server",
+           owned=True):
+    """One entry of /api/v2/resources."""
     return {
         "name": name,
         "clientIdentifier": client_id,
         "provides": provides,
         "accessToken": token,
-        "connections": [{"uri": u, "local": loc, "relay": rel}
-                        for u, loc, rel in connections],
+        "owned": owned,
+        "connections": [_conn(c) for c in connections],
     }
+
+
+def plexdirect(plex_url, host="192-168-1-5"):
+    """A local plex.direct style connection that will not resolve, whose plain
+    address is the fake Plex. Returns a connection tuple."""
+    port = int(plex_url.rsplit(":", 1)[1])
+    return (f"https://{host}.abc123.plex.direct.invalid:{port}", True, False,
+            "127.0.0.1", port)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -63,6 +84,14 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(raw)))
         self.end_headers()
+        if STATE.drip:
+            # One byte at a time: no single read stalls, the whole answer does.
+            step = STATE.drip / len(raw)
+            for i in range(len(raw)):
+                self.wfile.write(raw[i:i + 1])
+                self.wfile.flush()
+                threading.Event().wait(step)
+            return
         self.wfile.write(raw)
 
     def _handle(self, method):

@@ -4,6 +4,7 @@ The token this handles is the user's account token. It goes in a header only,
 never in a URL, a log line or an error message.
 """
 import os
+import threading
 import time
 from dataclasses import dataclass, field
 
@@ -39,6 +40,9 @@ class Connection:
     uri: str
     local: bool
     relay: bool
+    address: str = ""
+    port: int = 0
+    protocol: str = ""
 
 
 @dataclass
@@ -47,6 +51,7 @@ class PlexServer:
     client_id: str
     access_token: str = field(repr=False)
     connections: list = field(default_factory=list)
+    owned: bool = True
 
 
 def _headers(token=None):
@@ -61,10 +66,31 @@ def _headers(token=None):
     return h
 
 
+def _request(method, path, token, params):
+    """One request with a total deadline. httpx's timeout is per phase, so a
+    slow trickle never trips it; the thread join is the real limit."""
+    box = {}
+
+    def run():
+        try:
+            box["r"] = httpx.request(method, BASE + path, params=params,
+                                     headers=_headers(token), timeout=TIMEOUT)
+        except BaseException as e:
+            box["e"] = e
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    t.join(TIMEOUT)
+    if t.is_alive():
+        raise httpx.ReadTimeout("deadline")
+    if "e" in box:
+        raise box["e"]
+    return box["r"]
+
+
 def _call(method, path, token=None, params=None, by_status=None):
     try:
-        r = httpx.request(method, BASE + path, params=params,
-                          headers=_headers(token), timeout=TIMEOUT)
+        r = _request(method, path, token, params)
     except httpx.TimeoutException:
         raise PlexTvError("plex.tv did not answer.") from None
     except httpx.HTTPError:
@@ -99,6 +125,13 @@ def check_pin(pin_id: int):
     return d.get("authToken") or None
 
 
+def _port(v):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _rank(c: Connection):
     return 0 if c.local and not c.relay else 2 if c.relay else 1
 
@@ -116,9 +149,11 @@ def servers(token: str) -> list:
         if "server" not in (r.get("provides") or "").split(","):
             continue
         conns = [Connection(c.get("uri", ""), bool(c.get("local")),
-                            bool(c.get("relay")))
+                            bool(c.get("relay")), str(c.get("address") or ""),
+                            _port(c.get("port")), str(c.get("protocol") or ""))
                  for c in r.get("connections") or [] if isinstance(c, dict)]
         conns.sort(key=_rank)
         out.append(PlexServer(r.get("name", ""), r.get("clientIdentifier", ""),
-                              r.get("accessToken", ""), conns))
+                              r.get("accessToken", ""), conns,
+                              bool(r.get("owned"))))
     return out

@@ -28,6 +28,11 @@ async def welcome_save(plex_url: str = Form(""), plex_token: str = Form(""),
                        timezone: str = Form("UTC")):
     """Test first, then save. A wrong address saved quietly is what makes the
     first five minutes confusing."""
+    if _configured():
+        return JSONResponse({"ok": False, "detail": "CouchElephant is already set up. "
+                             "Change Plex under Settings."}, status_code=403)
+    if timezone not in ZONES:
+        return JSONResponse({"ok": False, "detail": "That timezone is not on the list."})
     url, token = plex_url.strip().rstrip("/"), plex_token.strip()
     if not url or not token:
         return JSONResponse({"ok": False,

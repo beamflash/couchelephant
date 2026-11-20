@@ -84,3 +84,62 @@ def test_settings_sign_in_shows_the_addresses_it_tried(settings, plextv_fake):
     settings.wait_for_selector(".psi-out .verdict.bad", timeout=30000)
     text = settings.locator(".psi-out").inner_text()
     assert "Tried: http://127.0.0.1:1, http://127.0.0.1:2" in text
+
+
+# ---- final review ----
+
+def test_a_failed_pick_keeps_the_server_buttons(settings, plextv_fake, plex_url):
+    from app import db
+    plextv_fake.load_resources([
+        fake.server("Den", "cid-1", [("http://127.0.0.1:1", True, False)], token="tok-den"),
+        fake.server("Attic", "cid-2", [(plex_url, True, False)], token="tok-attic")])
+    _start(settings, plextv_fake)
+    settings.get_by_role("button", name="Den").wait_for(timeout=15000)
+    settings.get_by_role("button", name="Den").click()
+    settings.wait_for_selector(".psi-out .verdict.bad", timeout=30000)
+    assert settings.get_by_role("button", name="Den").is_visible()
+    settings.get_by_role("button", name="Attic").click()
+    settings.wait_for_selector(".psi-out .verdict.ok", timeout=15000)
+    assert db.get_setting("plex_token") == "tok-attic"
+
+
+def test_one_plex_tv_error_while_waiting_does_not_end_the_sign_in(settings, plextv_fake, plex_url):
+    from app import db
+    plextv_fake.load_resources([fake.server("Den", "cid-1", [(plex_url, True, False)])])
+    settings.get_by_role("button", name="Sign in with Plex").click()
+    settings.wait_for_selector(".psi-code")
+    plextv_fake.fail_status = 500
+    settings.get_by_text("plex.tv did not answer, still trying.").wait_for(timeout=15000)
+    plextv_fake.fail_status = None
+    plextv_fake.approve(next(iter(plextv_fake.pins)))
+    settings.wait_for_selector(".psi-out .verdict.ok", timeout=20000)
+    assert db.get_setting("plex_token") == "srv-token-abc"
+
+
+def test_five_errors_in_a_row_end_the_sign_in(settings, plextv_fake):
+    settings.get_by_role("button", name="Sign in with Plex").click()
+    settings.wait_for_selector(".psi-code")
+    plextv_fake.fail_status = 500
+    settings.wait_for_selector(".psi-out .verdict.bad", timeout=30000)
+    assert "still trying" not in settings.locator(".psi-out").inner_text()
+    assert settings.get_by_role("button", name="Sign in with Plex").is_enabled()
+
+
+def test_closing_the_overlay_stops_the_poll(page, plextv_fake, plex_url):
+    from app import db
+    plextv_fake.reset()
+    plextv_fake.load_resources([fake.server("Den", "cid-1", [(plex_url, True, False)])])
+    db.set_setting("plex_token", "keep-me")
+    page.goto("/")
+    page.locator("#gearbtn").click()
+    page.wait_for_selector("#ovlbox .psi-go")
+    page.locator("#ovlbox .psi-go").click()
+    page.wait_for_selector(".psi-code")
+    page.keyboard.press("Escape")
+    page.wait_for_selector("#ovl:not(.show)", state="attached")
+    seen = []
+    page.on("request", lambda r: seen.append(r.url))
+    plextv_fake.approve(next(iter(plextv_fake.pins)))
+    page.wait_for_timeout(5000)
+    assert [u for u in seen if "/settings/plex/signin" in u] == []
+    assert db.get_setting("plex_token") == "keep-me"

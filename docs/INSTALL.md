@@ -135,20 +135,25 @@ browser.
 Open `http://your-host:8710`. The welcome page, and later **Settings, Plex**,
 has a **Sign in with Plex** button.
 
-1. Press **Sign in with Plex**. A four-letter code shows on the page.
+1. Press **Sign in with Plex**. A four-character code shows on the page.
 2. Open [plex.tv/link](https://plex.tv/link), sign in to Plex if it asks, and
    type the code.
 3. Back on the page, pick your Plex server by name if you have more than one.
+   Only servers your account owns are listed, so sign in with the account that
+   runs the server, not one that was shared with you.
 
-CouchElephant tries each address Plex lists for that server, nearest first,
-and keeps the first one that answers and has a DVR. If none answers it names
-every address it tried. The code runs out after about 15 minutes; press the
+CouchElephant tries each address Plex lists for that server, nearest first
+(for a local server, Plex's `plex.direct` name and then the plain address),
+and keeps the first one that answers and has a DVR. It never saves a relay
+address: if only Plex's relay answers, it says so and you can enter the
+address yourself. If none answers it names every address it tried. The code runs out after about 15 minutes; press the
 button again for a new one. On a new install this also turns on Preview mode.
 
 ### Enter it yourself
 
-If plex.tv cannot be reached, or you would rather not sign in, press **Enter
-it yourself** and type the address and token.
+If plex.tv cannot be reached, or you would rather not sign in, type the address
+and token. On the welcome page, press the **Enter it yourself** link. In
+**Settings, Plex** the address and token form is already shown.
 
 **Address.** The address must work from inside the container. `127.0.0.1` only
 works if Plex is running in that same container, which it is not, so use the
