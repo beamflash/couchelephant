@@ -142,7 +142,7 @@ def test_a_passed_video_link_streams_and_a_bad_pass_does_not():
     assert home.status_code not in (303, 401)
     out = at(OUT).get(f"/hlsk/{good}/{rec}/master.m3u8")
     assert out.status_code == home.status_code
-    bad = at(OUT).get(f"/hlsk/{good[:-1]}0/{rec}/master.m3u8")
+    bad = at(OUT).get(f"/hlsk/{good[:-1]}{'1' if good[-1] == '0' else '0'}/{rec}/master.m3u8")
     assert bad.status_code in (303, 401)
     assert at(OUT).get(f"/hls/{rec}/master.m3u8").status_code in (303, 401, 404)
 
@@ -562,3 +562,22 @@ def test_a_server_error_carries_the_headers_too():
     assert "content-security-policy" in resp.headers
     assert resp.headers["strict-transport-security"] == "max-age=31536000"
     assert "server" not in resp.headers
+
+
+def test_a_flood_of_made_up_names_cannot_push_out_a_locked_account(monkeypatch):
+    from app import ratelimit
+    ratelimit.reset()
+    monkeypatch.setattr(ratelimit, "MAX_KEYS", 50)
+    for _ in range(ratelimit.FAILS):
+        ratelimit.reserve(["addr:203.0.113.9", "user:owner"])
+    assert ratelimit.reserve(["addr:203.0.113.9", "user:owner"]) > 0
+    # The locked address floods made-up names: nothing is added for them.
+    for i in range(500):
+        assert ratelimit.reserve(["addr:203.0.113.9", f"user:junk{i}"]) > 0
+    assert len(ratelimit._keys) <= 50
+    # Unlocked addresses fill the table past the cap; the lock stays.
+    for i in range(200):
+        ratelimit.reserve([f"addr:198.51.100.{i % 250}", f"user:x{i}"])
+    assert len(ratelimit._keys) <= 50
+    assert ratelimit.reserve(["addr:192.0.2.1", "user:owner"]) > 0
+    ratelimit.reset()

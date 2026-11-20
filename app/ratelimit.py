@@ -63,13 +63,24 @@ def _entry(key, now):
     return s
 
 
+def _trim(now) -> None:
+    """Drop the oldest keys past the cap, but never one that is locked: a flood
+    of made-up names must not push a real lock out of the table."""
+    if len(_keys) <= MAX_KEYS:
+        return
+    for k in list(_keys):
+        if len(_keys) <= MAX_KEYS:
+            break
+        if _keys[k]["until"] <= now:
+            del _keys[k]
+
+
 def _hit(key, now) -> None:
     s = _entry(key, now)
     s["last"] = now
     s["fails"].append(now)
     _lock_if_full(s, now)
-    while len(_keys) > MAX_KEYS:
-        _keys.popitem(last=False)
+    _trim(now)
 
 
 def check(key: str) -> float:
@@ -91,18 +102,19 @@ def reserve(keys) -> float:
     with _lock:
         now = _now()
         wait = 0.0
+        # Look before adding anything: a locked caller must not grow the table.
         for k in keys:
-            s = _entry(k, now)
-            _lock_if_full(s, now)
-            wait = max(wait, _left(k, now))
+            s = _keys.get(k)
+            if s and now - s["last"] <= FORGET:
+                _lock_if_full(s, now)
+                wait = max(wait, _left(k, now))
         if wait:
             return wait
         for k in keys:
-            s = _keys[k]
+            s = _entry(k, now)
             s["last"] = now
             s["fails"].append(now)
-        while len(_keys) > MAX_KEYS:
-            _keys.popitem(last=False)
+        _trim(now)
         return 0.0
 
 

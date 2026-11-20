@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.5.29 - 2026-11-20
+
+### Security
+
+- **Fixed a sign-in bypass.** A request with a crafted Host header could
+  reach pages that need sign-in, Settings included, without signing in. It
+  affects every earlier version with Local accounts that is reachable from
+  outside your home network. Update now. A Host header with a slash, a
+  question mark, a hash, an at sign or a space is now refused.
+- **Fixed a cross-site form.** A form posted from a sandboxed frame on another
+  site (Origin `null`) was taken as coming from CouchElephant itself.
+- Sign-in attempts are limited: five wrong passwords in ten minutes, from one
+  address or at one account, locks for a minute, doubling up to an hour. Tries
+  from your home network never lock an account.
+- Every page carries security headers (no framing by other sites, no
+  sniffing, a content security policy) and no `Server` header.
+
+### Added
+
+- **Use away from home**, under Settings, Accounts, Sign-in. It lets only
+  sign-in, paired apps and video links in from outside your home network, and
+  keeps Settings, setup and pairing home only. It will not turn on while any
+  way in has no password, and it offers to make the first account. HTTPS on
+  the same port comes in the next release; until then the self-check says the
+  connection is not encrypted.
+
 ## 1.5.28 - 2026-11-20
 
 ### Fixed
