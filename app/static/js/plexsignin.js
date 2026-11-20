@@ -68,6 +68,11 @@
     }
 
     function done(j) {
+      // The welcome page shows the QR to connect the app instead of leaving.
+      if (landing === 'guide' && window.ceShowConnect) {
+        say('ok', j.detail);
+        return window.ceShowConnect();
+      }
       say('ok', j.detail + (landing === 'guide' ? ' Taking you to the guide...' : ' Saved.'));
       setTimeout(function () {
         if (landing === 'guide') location.href = '/'; else location.reload();

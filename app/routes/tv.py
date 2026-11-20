@@ -7,15 +7,19 @@ Everything here is JSON under /api/tv, and the viewing copies under /hls.
 import asyncio
 import hashlib
 import hmac
+import ipaddress
 import json
 import logging
 import os
 import re
 import secrets
+import socket
 import time
+import urllib.parse
 import zoneinfo
 from datetime import datetime
 
+import segno
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import (
     FileResponse,
@@ -25,7 +29,7 @@ from fastapi.responses import (
     Response,
 )
 
-from .. import adskip, auth, db, handover, passes, recorder, sync, tuner
+from .. import adskip, announce, auth, db, handover, passes, paths, recorder, sync, tuner
 from . import passes as pass_routes
 from . import record
 from ._shared import VERSION, _plex, current_user, page
@@ -176,6 +180,48 @@ def hello(request: Request):
             "can_change_settings": bool(not needs or (dev and dev["allow_settings"])),
             "recorder": recorder.why_unavailable() is None,
             "recorder_note": recorder.why_unavailable()}
+
+
+def _is_lan_host(host: str) -> bool:
+    """A name or address a phone on the same network can reach."""
+    host = (host or "").lower()
+    if host.endswith(".local"):
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    if ip.version != 4 or ip.is_loopback:
+        return False
+    return ip.is_private or ip.is_link_local
+
+
+def lan_url(request: Request) -> str:
+    """Where a phone should reach this server, with the port."""
+    host = request.url.hostname or ""
+    port = request.url.port
+    if port is None:
+        server = request.scope.get("server")
+        port = server[1] if server and server[1] else (443 if request.url.scheme == "https" else 80)
+    if not _is_lan_host(host) or (host.startswith("172.17.") and paths._in_container()):
+        # Reached by localhost or a public name: use this machine's own address.
+        ips = [socket.inet_ntoa(a) for a in announce._addresses()]
+        host = ips[0] if ips else host
+    return f"{request.url.scheme}://{host}:{port}"
+
+
+QR_LOOK = {"dark": "#000", "light": "#fff"}
+
+
+@router.get("/api/connect.svg")
+def connect_svg(request: Request):
+    """The QR code the apps scan to connect. Never carries a key or token."""
+    # Part 4 adds &fp=<fingerprint> here once the server has TLS.
+    link = "couchelephant://connect?url=" + urllib.parse.quote(lan_url(request), safe="")
+    svg = segno.make(link).svg_inline(**QR_LOOK)
+    # A standalone SVG file needs its namespace; svg_inline leaves it out.
+    svg = svg.replace("<svg ", '<svg xmlns="http://www.w3.org/2000/svg" ', 1)
+    return Response(svg, media_type="image/svg+xml", headers={"Cache-Control": "no-store"})
 
 
 @router.post("/api/tv/pair")

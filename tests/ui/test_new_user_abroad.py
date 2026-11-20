@@ -61,7 +61,8 @@ def test_a_new_install_sets_itself_up_from_anywhere(browser, base_url, unconfigu
         # No hand-run sync here: a stranger does not have one.
         from app import db
         page.wait_for_function(
-            "() => !document.getElementById('wform')", timeout=45000)
+            "() => { var c = document.getElementById('wconnect');"
+            " return c && !c.hidden; }", timeout=45000)
         assert db.get_setting("timezone") == zone
         # The suite's install has CouchElephant DVR on, so setup lands on Home.
         # The guide is one tab over, and it is the guide this test is about.

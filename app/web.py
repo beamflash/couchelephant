@@ -68,7 +68,8 @@ _OPEN_PREFIX = ("/static/",)
 # accounts, artwork, and anything that copies or replaces the database. They
 # keep the guide, the schedule and the passes, which is what the app is for.
 _ADMIN_PREFIX = ("/settings", "/api/backups", "/api/backingstore", "/api/import",
-                 "/api/export", "/api/tv/devices", "/api/update/apply")
+                 "/api/export", "/api/tv/devices", "/api/update/apply",
+                 "/api/connect.svg")
 
 
 def _device_may(path):

@@ -50,6 +50,9 @@ def test_a_server_that_answers_is_saved_and_lets_you_in(fresh, plex_url):
     fresh.fill('input[name="plex_url"]', plex_url)
     fresh.fill('input[name="plex_token"]', "test-token")
     fresh.click("#wform button")
+    # Plex is set: the QR to connect the app shows, then the guide is one click on.
+    fresh.wait_for_selector("#wconnect", state="visible", timeout=30000)
+    fresh.click("#wgo")
     fresh.wait_for_url(lambda u: "/welcome" not in u, timeout=30000)
     assert fresh.locator("#ptnav").count() == 1
 

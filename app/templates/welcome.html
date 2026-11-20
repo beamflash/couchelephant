@@ -51,6 +51,14 @@
     </div>
   </form>
 
+  <div id="wconnect" class="setblock" hidden>
+    <h3>Connect the app</h3>
+    <img id="wqr" alt="QR code to connect the app" width="180" height="180"
+         class="connect-img">
+    <p class="dim">Scan with your iPhone or iPad camera</p>
+    <p><a class="primary" href="/" id="wgo">Open the guide</a></p>
+  </div>
+
   <div class="setblock">
     <h3>Two things you can leave for later</h3>
     <p class="dim" style="margin:0 0 10px">Neither is needed to start, and both live in
@@ -95,6 +103,14 @@
     }
   } catch (e) {}
 
+  // Plex is set: show the QR to connect the app, then let them go on.
+  window.ceShowConnect = function () {
+    f.hidden = true;
+    document.getElementById('wsignin').hidden = true;
+    document.getElementById('wqr').src = '/api/connect.svg';
+    document.getElementById('wconnect').hidden = false;
+  };
+
   function say(kind, text) {
     out.hidden = false;
     out.className = 'verdict ' + kind;
@@ -111,8 +127,8 @@
       .then(function (r) { return r.json(); })
       .then(function (j) {
         if (j.ok) {
-          say('ok', j.detail + ' Taking you to the guide...');
-          setTimeout(function () { location.href = '/'; }, 1300);
+          say('ok', j.detail);
+          window.ceShowConnect();
         } else {
           say('bad', j.detail);
           btn.disabled = false; btn.textContent = 'Test and save';

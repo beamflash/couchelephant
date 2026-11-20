@@ -518,6 +518,11 @@
           </label>
         </div>
         {% endif %}
+        <div class="field connect-qr" data-find="qr code scan connect iphone ipad phone app">
+          <img id="connectqr" src="/api/connect.svg" alt="QR code to connect the app"
+               width="180" height="180" class="connect-img">
+          <span class="help">Scan with your iPhone or iPad camera</span>
+        </div>
         <form method="post" action="/settings/announce" class="setform">
           <div class="field" data-find="announce find server apps home network discovery">
             <label class="row">

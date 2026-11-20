@@ -14,3 +14,6 @@ pyzipper==0.3.6
 # Lets the apps on the home network find this server (mDNS). Has compiled
 # parts, so the frozen builds import it at module level from app/announce.py.
 zeroconf==0.154.0
+# The QR code that connects a phone. Pure Python; tv.py imports it at module
+# level so the frozen builds pick it up.
+segno==1.6.6

@@ -43,6 +43,9 @@ def test_signing_in_shows_a_code_and_lands_on_the_guide(fresh, plextv_fake):
     assert fresh.locator(".psi-code").inner_text() == "ABCD"
     assert fresh.locator('a[href="https://plex.tv/link"]').count() == 1
     plextv_fake.approve(next(iter(plextv_fake.pins)))
+    # Plex is set: the QR to connect the app shows, then the guide is one click on.
+    fresh.wait_for_selector("#wconnect", state="visible", timeout=30000)
+    fresh.click("#wgo")
     fresh.wait_for_url(lambda u: "/welcome" not in u, timeout=30000)
     assert fresh.locator("#ptnav").count() == 1
     assert db.get_setting("plex_token") == "srv-token-abc"
