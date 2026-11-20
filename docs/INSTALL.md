@@ -39,11 +39,18 @@ shares that count.
 
 There is a `docker-compose.yml` in the repository that does the same thing.
 
+**Letting the apps find it.** On Docker's default bridge network the container
+cannot announce itself on your home network, so the apps will not list it; it
+says so once in its log. Either type its address in the app, or run it with
+host networking (`--network host` in place of `-p 8710:8710`), and the apps
+list it by name.
+
 ### On Unraid
 
 Search for **CouchElephant** in **Apps**. The template sets the port to 8710
 and the appdata path to `/mnt/user/appdata/couchelephant`, which is all it
-needs. Everything else is configured in the app itself.
+needs. For the apps to list it by name, set **Network Type** to **Host**;
+on the default bridge, type its address in the app. Everything else is configured in the app itself.
 
 The template lives in
 [datbird/unraid-templates](https://github.com/datbird/unraid-templates), which
@@ -122,7 +129,13 @@ for two days after Plex has the recording and is made again on demand.
 `clients/apple` in the repository holds an Apple TV app and an iPhone app.
 Both play what CouchElephant records, tune live channels, show the guide, and
 record from it. They are built from source with Xcode; see the README there.
-The first run asks for the address of your CouchElephant. With sign-in on the
+The first run lists every CouchElephant on your home network by name; pick
+yours. If none shows after a few seconds, or the app was not allowed to look
+for devices on your network, type the address instead. You can also scan the
+QR code under **Settings, Recording, Televisions** with an iPhone or iPad
+camera. The server announces itself unless you turn off **Let the apps find
+this server on the home network** in that same place. If the server's address
+changes later, a paired app finds it again by itself. With sign-in on the
 app shows a six-letter code, and you type that code under **Settings,
 Recording, Televisions** to let that device in. A phone is listed there too,
 with the same per-device settings as a television.

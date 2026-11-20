@@ -44,7 +44,8 @@ Recorded list.
 
 | | |
 | --- | --- |
-| `GET /api/tv/hello` | Open. Who this server is, and whether a client must pair first |
+| `GET /api/tv/hello` | Open. Who this server is (`id` is the install id, the same as in its Bonjour record), and whether a client must pair first |
+| `GET /api/connect.svg` | Administrators only once sign-in is on. A QR code of `couchelephant://connect?url=<address>`, the address a phone on the home network can reach. 409 with `detail` when there is none |
 | `POST /api/tv/pair` | Open. A client asks to be let in. `name`. Answers a six-letter `code` to show and a `secret` to poll with |
 | `POST /api/tv/pair/poll` | Open. `secret`. Answers `approved`, and the client's `key` exactly once |
 | `GET /api/tv/schedule` | Paired device. `offset`, `limit`, `start`, `end`. The schedule the web Agenda and Calendar draw: bookings and failed ones, with `more` for paging |
