@@ -15,7 +15,11 @@ talks to replaced:
     MPEG-2 video made by ffmpeg, so the player has something to play);
   - sign-in off, so a simulator is let in without a code;
   - one recording already under way, with an ad break 20 seconds in,
-    for the Skip ad test.
+    for the Skip ad test;
+  - with AWAY=1, Use away from home on: the same port also answers HTTPS
+    with its own certificate, and GET /test/pin says the key's fingerprint,
+    so the pinning tests can connect with it. Sign-in stays off, and the
+    tests come from the local network, so the gate lets them in.
 
 Everything it writes goes to a scratch folder, checked by the same guard the
 test suite uses. Stop it and nothing is left.
@@ -37,6 +41,9 @@ os.environ["COUCHELEPHANT_NO_SYNC_LOOP"] = "1"
 os.environ["COUCHELEPHANT_DEMO_GUIDE"] = "1"
 os.environ["COUCHELEPHANT_COMSKIP"] = os.path.join(SCRATCH, "no-comskip")
 os.environ["FAKE_TUNER_VIDEO"] = "1"
+AWAY = os.environ.get("AWAY") == "1"
+if AWAY:
+    os.environ["COUCHELEPHANT_DATA"] = os.path.join(SCRATCH, "data")
 os.makedirs(os.environ["COUCHELEPHANT_RECORDINGS"])
 os.makedirs(os.environ["COUCHELEPHANT_LIBRARY"])
 # The demo week starts at the top of this hour, so something is on now.
@@ -47,7 +54,7 @@ from tests import demo_guide, fake_plex, fake_tuner, isolation  # noqa: E402
 
 isolation.assert_isolated()
 
-from app import db, recorder, sync, web  # noqa: E402
+from app import db, oneport, recorder, sync, tls, web  # noqa: E402
 
 PORT = int(os.environ.get("PORT", "8790"))
 AD_BREAK = (20.0, 50.0)
@@ -84,6 +91,14 @@ def main():
                  "auth_mode": "none", "timezone": "America/Chicago",
                  "tuner_url": tuner_url, "recorder_encoder": "software"}.items():
         db.set_setting(k, v)
+    if AWAY:
+        db.set_setting("away_mode", "1")
+        pin = tls.ensure_own().fingerprint
+
+        @web.app.get("/test/pin")
+        def _pin():
+            return {"fp": pin}
+        print("away mode on, key fingerprint", pin, flush=True)
     ok, detail = sync.full_sync()
     if not ok:
         raise SystemExit(f"the demo guide would not sync: {detail}")
@@ -100,8 +115,12 @@ def main():
               f"ad break {AD_BREAK}", flush=True)
 
     print(f"CouchElephant for the Apple tests on port {PORT}, scratch {SCRATCH}", flush=True)
-    uvicorn.run(web.app, host="0.0.0.0", port=PORT, log_level="warning",
-                proxy_headers=False)
+    config = uvicorn.Config(web.app, host="0.0.0.0", port=PORT, log_level="warning",
+                            proxy_headers=False, server_header=False)
+    if AWAY:
+        oneport.serve(config)       # HTTP and HTTPS on the one port
+    else:
+        uvicorn.Server(config).run()
 
 
 if __name__ == "__main__":
