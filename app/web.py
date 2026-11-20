@@ -86,6 +86,8 @@ def _admin_only(path, method):
         return False          # reading settings is fine; changing them is not
     if path.startswith("/api/tv/settings"):
         return method != "GET"
+    if path == "/api/recorder/library-suggest":
+        return True           # it lists folders on this computer
     return path.startswith(_ADMIN_PREFIX)
 
 

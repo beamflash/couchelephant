@@ -113,3 +113,44 @@ def test_saving_in_a_container_still_makes_the_folder_relative(monkeypatch):
     monkeypatch.setattr(handover, "LIB_DIR", "/library")
     routes.apply({"recorder_shows_folder": "/TV/../x"})
     assert db.get_setting("recorder_shows_folder") == "TV/x"
+
+
+def test_only_an_administrator_may_list_folders(client, native, tmp_path):
+    from app import auth
+    (tmp_path / "TV").mkdir()
+    _sections(str(tmp_path / "TV"), str(tmp_path / "none"))
+    db.set_setting("auth_mode", "local")
+    admin = auth.create_user("owner", "a-good-password")
+    viewer = auth.create_user("kid", "a-good-password", role="user")
+    for uid, code in ((viewer, 403), (admin, 200)):
+        client.cookies.set(auth.SESSION_COOKIE, auth.create_session(uid))
+        assert client.get(URL).status_code == code
+
+
+def test_it_is_open_when_sign_in_is_off(client, native, tmp_path):
+    db.set_setting("auth_mode", "none")
+    _sections(str(tmp_path), str(tmp_path))
+    assert client.get(URL).status_code == 200
+
+
+def test_a_check_file_that_cannot_be_removed_is_not_a_500(client, native, tmp_path, monkeypatch):
+    tv = tmp_path / "TV"
+    tv.mkdir()
+    _sections(str(tv), str(tmp_path / "none"))
+
+    def boom(path):
+        raise PermissionError("no")
+    monkeypatch.setattr(routes.os, "remove", boom)
+    r = client.get(URL)
+    assert r.status_code == 200
+    first = r.json()["suggestions"][0]
+    assert first["writable"] is False and first["why"]
+    for f in tv.iterdir():
+        f.unlink()
+
+
+def test_a_folder_of_only_slashes_is_refused(native):
+    routes.apply({"recorder_shows_folder": "/srv/TV"})
+    for bad in ("/", "///"):
+        assert routes.apply({"recorder_shows_folder": bad}) == ["recorder_shows_folder"]
+        assert db.get_setting("recorder_shows_folder") == "/srv/TV"

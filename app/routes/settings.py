@@ -120,6 +120,9 @@ def apply(values: dict) -> list[str]:
             value = "/".join(p for p in value.strip("/").split("/")
                              if p and p not in (".", ".."))
             if whole:
+                if not value:
+                    refused.append(key)     # "/" alone is the whole disk
+                    continue
                 value = "/" + value
         db.set_setting(key, value)
     return refused
@@ -229,7 +232,10 @@ def _writable(path: str) -> str:
     except OSError:
         return "CouchElephant cannot write to that folder."
     os.close(fd)
-    os.remove(name)
+    try:
+        os.remove(name)
+    except OSError:
+        return "CouchElephant can write there but cannot remove its test file."
     return ""
 
 
