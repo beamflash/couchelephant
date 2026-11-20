@@ -433,8 +433,28 @@ def test_a_home_peer_still_connects_when_outsiders_fill_their_share(monkeypatch)
                 h.close()
 
 
-def test_one_outsider_address_cannot_pass_sixteen(monkeypatch):
+def _plain_outsider(monkeypatch):
+    """127.0.0.1 is an outsider on the internet, not a Docker gateway."""
+    monkeypatch.setattr(exposure, "peer_is_home", lambda h: h != "127.0.0.1")
+    monkeypatch.setattr(exposure, "peer_is_bridge", lambda h: False)
+
+
+def test_a_bridge_gateway_is_not_held_to_sixteen(monkeypatch):
+    # Every visitor of a bridge container comes from the gateway.
     _outsiders(monkeypatch)
+    monkeypatch.setattr(oneport, "MAX_CONNECTIONS", 200)
+    with Running() as r:
+        held = [_dial(r.port) for _ in range(20)]
+        try:
+            time.sleep(0.3)
+            assert httpx.get(r.url(), timeout=3).status_code == 200
+        finally:
+            for h in held:
+                h.close()
+
+
+def test_one_outsider_address_cannot_pass_sixteen(monkeypatch):
+    _plain_outsider(monkeypatch)
     monkeypatch.setattr(oneport, "MAX_CONNECTIONS", 200)
     with Running() as r:
         held = [_dial(r.port) for _ in range(16)]

@@ -429,8 +429,10 @@ class _Listener:
         if exposure.peer_is_home(host):
             return True, None
         key = _peer_key(host)
-        if (self.out_total >= (MAX_CONNECTIONS or connection_cap())
-                or self.out.get(key, 0) >= PER_ADDRESS):
+        # A bridge gateway carries every visitor, so only the total applies.
+        full_here = (self.out.get(key, 0) >= PER_ADDRESS
+                     and not exposure.peer_is_bridge(host))
+        if self.out_total >= (MAX_CONNECTIONS or connection_cap()) or full_here:
             return False, None
         self.out[key] = self.out.get(key, 0) + 1
         self.out_total += 1

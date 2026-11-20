@@ -302,6 +302,16 @@ def peer_is_home(host) -> bool:
     return _addr_is_home(addr)
 
 
+def peer_is_bridge(host) -> bool:
+    """A Docker gateway or bridge address: every visitor of a bridge
+    container arrives from it, so it is never limited as one person."""
+    addr = _parse(host)
+    if addr is None:
+        return False
+    addrs, nets_never = _never_home()
+    return addr in addrs or any(addr.version == n.version and addr in n for n in nets_never)
+
+
 def is_home(request) -> bool:
     return _addr_is_home(client_address(request))
 
