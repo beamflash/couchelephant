@@ -584,7 +584,8 @@ def _addresses(conns):
             if c.relay:
                 relay.add(u)
         if c.local and not c.relay and c.address and c.port:
-            plain = f"http://{c.address}:{c.port}"
+            host = f"[{c.address}]" if ":" in c.address else c.address
+            plain = f"http://{host}:{c.port}"
             if plain not in urls:
                 urls.append(plain)
     return urls, relay

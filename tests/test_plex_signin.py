@@ -366,3 +366,12 @@ def test_welcome_refuses_a_timezone_off_the_list(client, plex_url):
     r = _welcome(client, plex_url, timezone="Mars/Olympus")
     assert r.json()["ok"] is False
     assert db.get_setting("plex_url") == ""
+
+
+def test_a_plain_ipv6_local_address_is_bracketed():
+    from app import plextv
+    from app.routes import settings as st
+    c = plextv.Connection("https://x.plex.direct:32400", True, False,
+                          "fd00::5", 32400, "https")
+    urls, _ = st._addresses([c])
+    assert urls == ["https://x.plex.direct:32400", "http://[fd00::5]:32400"]
