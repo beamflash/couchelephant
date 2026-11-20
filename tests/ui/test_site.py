@@ -131,3 +131,41 @@ def test_no_script_points_at_every_download(browser):
     assert "right-click CouchElephant and choose Open." in page.locator("noscript").inner_text()
     assert "curl -fsSL https://couchelephant.app/install.sh" in page.content()
     ctx.close()
+
+
+def test_promo_video_has_both_sources_and_autoplays(browser):
+    ctx, page = open_site(browser, WIN)
+    video = page.locator("video#promo")
+    assert video.count() == 1
+    srcs = video.locator("source").evaluate_all("els => els.map(e => e.getAttribute('src'))")
+    assert srcs == ["promo.mp4", "promo.webm"]
+    assert video.get_attribute("aria-label")
+    assert video.get_attribute("poster") == "promo-poster.jpg"
+    assert video.evaluate("v => v.autoplay && v.muted && v.loop") is True
+    # Under the tagline, above the download card.
+    order = page.evaluate("""() => {
+        const y = s => document.querySelector(s).getBoundingClientRect().top;
+        return [y('.sub'), y('video#promo'), y('#hero')];
+    }""")
+    assert order == sorted(order)
+    ctx.close()
+
+
+def test_promo_video_waits_with_reduced_motion(browser):
+    ctx = browser.new_context(user_agent=WIN, reduced_motion="reduce")
+    ctx.route("https://api.github.com/**", lambda r: r.fulfill(
+        status=200, content_type="application/json", body=json.dumps(FULL)))
+    page = ctx.new_page()
+    page.goto(PAGE)
+    video = page.locator("video#promo")
+    assert video.evaluate("v => v.autoplay") is False
+    assert video.evaluate("v => v.controls") is True
+    assert video.evaluate("v => v.paused") is True
+    ctx.close()
+
+
+def test_promo_files_exist_and_are_small():
+    site = Path(PAGE.replace("file://", "")).parent
+    for name in ("promo.mp4", "promo.webm", "promo-poster.jpg"):
+        size = (site / name).stat().st_size
+        assert 0 < size < 10_000_000, name

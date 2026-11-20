@@ -18,6 +18,7 @@ scripts/test.sh [options] [pytest args...]
   --unit      lint plus the Python suite, no browser
   --ui        only the browser suite
   --shots     remake docs/images/*.png from the demo guide, then stop
+  --video     record the web clips for the site's promo video, then stop
   --build     rebuild the test image first
   -h, --help  this
 
@@ -32,6 +33,7 @@ for a in "$@"; do
   case "$a" in
     --unit)    WHAT=unit ;;
     --shots)   WHAT=shots ;;
+    --video)   WHAT=video ;;
     --ui)      WHAT=ui ;;
     --build)   BUILD=1 ;;
     -h|--help) usage; exit 0 ;;
@@ -75,6 +77,18 @@ if [ "$WHAT" = shots ]; then
       bash -c 'ln -sfn /out /work/docs-images && mkdir -p /work/docs && \
                rm -rf /work/docs/images && ln -sfn /out /work/docs/images && \
                python3 scripts/screenshots.py'
+  exit $?
+fi
+
+if [ "$WHAT" = video ]; then
+  # Writes only to the folder named by PROMO_OUT (default /tmp/claude-1000/promo/web).
+  OUTDIR="${PROMO_OUT:-/tmp/claude-1000/promo/web}"
+  mkdir -p "$OUTDIR"
+  docker run --rm --name "ce-video-$$" \
+    -v "$PWD:/src:ro" -v "$OUTDIR:/out" -w /work \
+    --tmpfs /work:exec,size=2g --ipc=host \
+    -e HOME=/work/home -e PYTHONPATH=/work -e PROMO_OUT=/out \
+    "$IMAGE" bash -c "$BOOT" -- python3 scripts/promo_video.py
   exit $?
 fi
 
