@@ -127,6 +127,13 @@ def test_plain_http_from_outside_gets_a_308_to_https(monkeypatch):
         got = httpx.post(r.url("/login?next=%2Fx"), follow_redirects=False)
         assert got.status_code == 308
         assert got.headers["location"] == f"https://127.0.0.1:{r.port}/login?next=%2Fx"
+        assert got.headers["cache-control"] == "no-store"
+        # A page load gets the kind a browser does not remember.
+        for method in ("GET", "HEAD"):
+            got = httpx.request(method, r.url("/login"), follow_redirects=False)
+            assert got.status_code == 307
+            assert got.headers["cache-control"] == "no-store"
+            assert got.headers["location"] == f"https://127.0.0.1:{r.port}/login"
         assert httpx.get(r.url(scheme="https"), verify=False).status_code == 200
 
 
@@ -221,3 +228,128 @@ def test_the_healthcheck_url_keeps_working():
     db.set_setting("away_mode", "1")
     with Running() as r:
         assert httpx.get(r.url("/healthz"), follow_redirects=False).status_code == 200
+
+
+def test_100_silent_clients_do_not_hold_up_a_real_one_with_no_reader_loop(monkeypatch):
+    # Windows' proactor loop has no add_reader; one watcher thread serves all.
+    monkeypatch.setattr(oneport, "NO_READER", True)
+    monkeypatch.setattr(oneport, "FIRST_BYTE_SECONDS", 2)
+    db.set_setting("away_mode", "1")
+    with Running() as r:
+        quiet = [socket.create_connection(("127.0.0.1", r.port)) for _ in range(100)]
+        try:
+            time.sleep(0.3)
+            t0 = time.time()
+            assert httpx.get(r.url(), timeout=5).status_code == 200
+            assert httpx.get(r.url(scheme="https"), verify=False, timeout=5).status_code == 200
+            assert time.time() - t0 < 1
+            # Their deadline counts from accept, and then they are closed.
+            time.sleep(2.5)
+            quiet[50].settimeout(2)
+            assert quiet[50].recv(10) == b""
+            assert threading.active_count() < 40
+        finally:
+            for q in quiet:
+                q.close()
+
+
+def test_a_bad_host_with_a_backslash_is_not_redirected(monkeypatch):
+    db.set_setting("away_mode", "1")
+    monkeypatch.setattr(exposure, "is_home", lambda request: False)
+    with Running() as r:
+        got = httpx.get(r.url("/x"), headers={"Host": "evil.example\\@a"},
+                        follow_redirects=False)
+        assert got.status_code not in (307, 308)
+
+
+def test_windows_takes_the_port_exclusively():
+    calls = []
+
+    class Fake:
+        def __init__(self, family=None):
+            pass
+
+        def setsockopt(self, level, opt, val):
+            calls.append((opt, val))
+
+        def bind(self, addr):
+            calls.append(("bind", addr))
+
+        def getsockname(self):
+            return ("0.0.0.0", 1234)
+    import socket as sk
+    cfg = uvicorn.Config("app.web:app", host="0.0.0.0", port=1234)
+    old = getattr(sk, "SO_EXCLUSIVEADDRUSE", None)
+    sk.SO_EXCLUSIVEADDRUSE = -5
+    try:
+        oneport._listening_socket(cfg, windows=True, make=Fake)
+    finally:
+        if old is None:
+            del sk.SO_EXCLUSIVEADDRUSE
+    assert (-5, 1) in calls
+    assert not any(c[0] == sk.SO_REUSEADDR for c in calls)
+    assert ("bind", ("0.0.0.0", 1234)) in calls
+
+
+def test_other_systems_keep_reuseaddr():
+    cfg = uvicorn.Config("app.web:app", host="127.0.0.1", port=0)
+    sock = oneport._listening_socket(cfg, windows=False)
+    try:
+        assert sock.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR)
+    finally:
+        sock.close()
+
+
+def test_accept_errors_pause_only_when_out_of_descriptors_and_log_rarely(caplog, monkeypatch):
+    import errno
+    monkeypatch.setattr(oneport, "_last_accept_log", 0.0)
+    clock = [1000.0]
+    monkeypatch.setattr(oneport.time, "monotonic", lambda: clock[0])
+    with caplog.at_level("WARNING", logger="couchelephant.oneport"):
+        assert oneport._accept_failed(OSError(errno.ECONNABORTED, "x")) is False
+        assert oneport._accept_failed(OSError(errno.EMFILE, "x")) is True
+        assert oneport._accept_failed(OSError(errno.ENFILE, "x")) is True
+        assert oneport._accept_failed(OSError(errno.ENOBUFS, "x")) is True
+        assert len(caplog.records) == 1
+        clock[0] += 11
+        oneport._accept_failed(OSError(errno.EMFILE, "x"))
+        assert len(caplog.records) == 2
+
+
+def test_our_own_tls_failure_is_warned_once(caplog, monkeypatch):
+    monkeypatch.setattr(oneport, "_tls_warned", False)
+
+    def broken():
+        raise ssl.SSLError("bad context")
+    monkeypatch.setattr(tls, "context", broken)
+    db.set_setting("away_mode", "1")
+    with caplog.at_level("DEBUG", logger="couchelephant.oneport"), Running() as r:
+        for _ in range(3):
+            s = socket.create_connection(("127.0.0.1", r.port))
+            s.sendall(b"\x16\x03\x01\x00\x05hello")
+            s.settimeout(2)
+            try:
+                s.recv(10)
+            except OSError:
+                pass
+            s.close()
+        time.sleep(0.3)
+    warns = [x for x in caplog.records if x.levelname == "WARNING"]
+    assert len(warns) == 1
+
+
+def test_the_context_is_kept_until_the_files_change():
+    db.set_setting("away_mode", "1")
+    a = tls.context()
+    assert tls.context() is a
+    own = tls.ensure_own()
+    own.cert_path.write_bytes(own.cert_path.read_bytes() + b"\n")   # touched
+    assert tls.context() is not a
+
+
+def test_tls_one_two_ciphers_are_the_modern_ones():
+    db.set_setting("away_mode", "1")
+    ctx = tls.context()
+    names = [c["name"] for c in ctx.get_ciphers() if c["protocol"] != "TLSv1.3"]
+    assert names and all(n.startswith("ECDHE") for n in names)
+    assert not any("CBC" in n or "RC4" in n for n in names)

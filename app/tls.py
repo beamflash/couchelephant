@@ -52,8 +52,13 @@ def _names() -> list:
     """The host names and LAN addresses the certificate answers to."""
     from . import announce
     host = socket.gethostname().split(".")[0] or "server"
-    out = [x509.DNSName(n) for n in dict.fromkeys(
-        [host, host + ".local", announce.host_label() + ".local", "localhost"])]
+    out = []
+    for n in dict.fromkeys([host, host + ".local", announce.host_label() + ".local",
+                            "localhost"]):
+        try:
+            out.append(x509.DNSName(n.encode("idna").decode("ascii")))
+        except (UnicodeError, ValueError):
+            log.info("left %r out of the certificate: not a valid host name", n)
     ips = ["127.0.0.1", "::1"]
     try:
         ips += [socket.inet_ntoa(a) for a in announce._addresses()]
@@ -79,13 +84,29 @@ def _make(cert_path: Path, key_path: Path) -> None:
     pem_key = key.private_bytes(serialization.Encoding.PEM,
                                 serialization.PrivateFormat.PKCS8,
                                 serialization.NoEncryption())
-    # The key is written private from the first byte, then moved into place.
-    tmp = key_path.with_suffix(".tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    # Each file is written whole under a temp name, then moved into place;
+    # the key is private from its first byte. A crash leaves the old pair or
+    # a mismatch that ensure_own() mends.
+    _write(key_path, pem_key, 0o600)
+    _write(cert_path, cert.public_bytes(serialization.Encoding.PEM), 0o644)
+
+
+def _write(path: Path, data: bytes, mode: int) -> None:
+    tmp = path.with_name(path.name + ".tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
     with os.fdopen(fd, "wb") as f:
-        f.write(pem_key)
-    os.replace(tmp, key_path)
-    cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+        f.write(data)
+    os.replace(tmp, path)
+
+
+def _load(cert_path: Path, key_path: Path):
+    """The certificate if both files load and the key is the cert's."""
+    cert = x509.load_pem_x509_certificate(cert_path.read_bytes())
+    key = serialization.load_pem_private_key(key_path.read_bytes(), password=None)
+    fmt = (serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+    if key.public_key().public_bytes(*fmt) != cert.public_key().public_bytes(*fmt):
+        raise ValueError("the key is not the certificate's")
+    return cert
 
 
 def ensure_own() -> OwnCert:
@@ -93,27 +114,49 @@ def ensure_own() -> OwnCert:
     with _lock:
         d = _dir()
         cert_path, key_path = d / "cert.pem", d / "key.pem"
-        if not (cert_path.is_file() and key_path.is_file()):
+        cert = None
+        if cert_path.is_file() and key_path.is_file():
+            try:
+                cert = _load(cert_path, key_path)
+            except Exception as e:
+                log.error("the own certificate is unusable (%s); making a new one. "
+                          "Apps will learn the new fingerprint at home.", e)
+        if cert is None:
             _make(cert_path, key_path)
-        cert = x509.load_pem_x509_certificate(cert_path.read_bytes())
+            cert = _load(cert_path, key_path)
         return OwnCert(cert_path, key_path, fingerprint_of(cert.public_key()))
+
+
+def _stamp(own_dir: Path):
+    out = []
+    for n in ("cert.pem", "key.pem"):
+        try:
+            st = (own_dir / n).stat()
+            out.append((st.st_mtime_ns, st.st_size))
+        except OSError:
+            return None
+    return tuple(out)
 
 
 def context():
     """The SSLContext to serve with, or None while away is off (then the
-    port speaks plain HTTP only, as it always did)."""
+    port speaks plain HTTP only, as it always did). Built once and kept until
+    the certificate files change; the setting is read every time."""
     from . import exposure
     if not exposure.away_on():
         return None
+    d = _dir()
+    stamp = _stamp(d)
+    hit = _ctx_cache.get(d)
+    if stamp is not None and hit and hit[0] == stamp:
+        return hit[1]
     own = ensure_own()
-    key = (own.cert_path, own.fingerprint)
-    ctx = _ctx_cache.get(key)
-    if ctx is None:
-        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
-        ctx.load_cert_chain(own.cert_path, own.key_path)
-        _ctx_cache.clear()
-        _ctx_cache[key] = ctx
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    ctx.set_ciphers("ECDHE+AESGCM:ECDHE+CHACHA20")
+    ctx.load_cert_chain(own.cert_path, own.key_path)
+    _ctx_cache.clear()
+    _ctx_cache[d] = (_stamp(d), ctx)
     return ctx
 
 

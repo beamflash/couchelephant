@@ -12,12 +12,15 @@ control and shutdown would all be one step removed.
 
 TLS is offered only while Use away from home is on (app.tls.context)."""
 import asyncio
-import concurrent.futures
+import errno
 import logging
 import re
 import select
 import socket
+import ssl
+import sys
 import threading
+import time
 
 import uvicorn
 from starlette.requests import Request
@@ -30,57 +33,137 @@ FIRST_BYTE_SECONDS = 5      # a client that says nothing is dropped after this
 HANDSHAKE_SECONDS = 10
 SHUTDOWN_SECONDS = 3         # a TLS close waits for the peer; do not wait long
 TLS_HELLO = 0x16
-_BAD_HOST = re.compile(r"[/?#@\s]")
-_pool = None
-_pool_lock = threading.Lock()
+_BAD_HOST = re.compile(r"[/\\?#@\s]")
+IS_WINDOWS = sys.platform == "win32"
+NO_READER = False            # tests: act like a loop with no add_reader
+MAX_WATCHED = 500            # select() on Windows takes 512 at most
+_SLEEP_ERRNOS = {errno.EMFILE, errno.ENFILE, errno.ENOBUFS}
 
 
-def _peek_pool():
-    # Only for event loops with no add_reader (Windows' proactor loop).
-    global _pool
-    with _pool_lock:
-        if _pool is None:
-            _pool = concurrent.futures.ThreadPoolExecutor(32, "peek")
-        return _pool
+class _Watcher:
+    """For loops with no add_reader (Windows' proactor loop): one thread
+    watches every waiting socket with a single select(). Each socket has its
+    own deadline, counted from accept."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._items = []                     # [conn, deadline, loop, future]
+        self._wake_r, self._wake_w = socket.socketpair()
+        self._wake_r.setblocking(False)
+        threading.Thread(target=self._run, daemon=True, name="peek").start()
+
+    def wait(self, loop, conn, deadline):
+        fut = loop.create_future()
+        with self._lock:
+            self._items.append([conn, deadline, loop, fut])
+        try:
+            self._wake_w.send(b"x")
+        except OSError:
+            pass
+        return fut
+
+    @staticmethod
+    def _resolve(item, value):
+        _, _, loop, fut = item
+
+        def done():
+            if not fut.done():
+                fut.set_result(value)
+        try:
+            loop.call_soon_threadsafe(done)
+        except RuntimeError:                 # that loop is gone
+            pass
+
+    def _run(self):
+        while True:
+            now = time.monotonic()
+            with self._lock:
+                keep, gone = [], []
+                for it in self._items:
+                    if it[3].done() or it[0].fileno() < 0:
+                        continue
+                    (gone if it[1] <= now else keep).append(it)
+                keep.sort(key=lambda it: it[1])
+                self._items = keep + []
+            for it in gone:
+                self._resolve(it, False)
+            watched = keep[:MAX_WATCHED]
+            timeout = min([it[1] for it in watched] + [now + 1.0]) - now
+            try:
+                ready, _, _ = select.select(
+                    [it[0] for it in watched] + [self._wake_r], [], [], max(0.0, timeout))
+            except (OSError, ValueError):    # one was closed under us; rescan
+                time.sleep(0.01)
+                continue
+            if self._wake_r in ready:
+                try:
+                    self._wake_r.recv(4096)
+                except OSError:
+                    pass
+            hit = [it for it in watched if it[0] in ready]
+            with self._lock:
+                self._items = [it for it in self._items if it not in hit]
+            for it in hit:
+                self._resolve(it, True)
 
 
-def _peek_blocking(conn) -> bytes:
-    if not select.select([conn], [], [], FIRST_BYTE_SECONDS)[0]:
-        return b""
-    return conn.recv(1, socket.MSG_PEEK)
+_watcher = None
+_watcher_lock = threading.Lock()
 
 
-async def peek_first_byte(loop, conn):
+def _the_watcher():
+    global _watcher
+    with _watcher_lock:
+        if _watcher is None:
+            _watcher = _Watcher()
+        return _watcher
+
+
+async def peek_first_byte(loop, conn, deadline=None):
     """The first byte of the connection, left in place. None when the client
-    sent nothing in time or went away."""
+    sent nothing by the deadline (monotonic, default 5 s from now) or went
+    away."""
+    if deadline is None:
+        deadline = time.monotonic() + FIRST_BYTE_SECONDS
     try:
         data = conn.recv(1, socket.MSG_PEEK)
         return data[0] if data else None
     except (BlockingIOError, InterruptedError):
         pass
-    fut = loop.create_future()
-
-    def ready():
-        if not fut.done():
-            fut.set_result(None)
-    try:
-        loop.add_reader(conn.fileno(), ready)
-    except NotImplementedError:
-        data = await loop.run_in_executor(_peek_pool(), _peek_blocking, conn)
-        return data[0] if data else None
-    try:
-        await asyncio.wait_for(fut, FIRST_BYTE_SECONDS)
-    except TimeoutError:
+    left = deadline - time.monotonic()
+    if left <= 0:
         return None
-    finally:
-        loop.remove_reader(conn.fileno())
-    data = conn.recv(1, socket.MSG_PEEK)
+    fut = None
+    if not NO_READER:
+        fut = loop.create_future()
+
+        def ready():
+            if not fut.done():
+                fut.set_result(True)
+        try:
+            loop.add_reader(conn.fileno(), ready)
+        except NotImplementedError:
+            fut = None
+    if fut is None:
+        if not await _the_watcher().wait(loop, conn, deadline):
+            return None
+    else:
+        try:
+            await asyncio.wait_for(fut, left)
+        except TimeoutError:
+            return None
+        finally:
+            loop.remove_reader(conn.fileno())
+    try:
+        data = conn.recv(1, socket.MSG_PEEK)
+    except (BlockingIOError, InterruptedError):
+        return None
     return data[0] if data else None
 
 
 class _Redirector:
     """Plain HTTP from outside, while away is on, goes to the same URL on
-    HTTPS (308 keeps the method). Home keeps plain HTTP. A request that came
+    HTTPS. Home keeps plain HTTP. A request that came
     through a trusted proxy is left alone: the proxy owns the outside."""
 
     def __init__(self, app):
@@ -99,8 +182,12 @@ class _Redirector:
                 url = "https://" + host + path.decode("latin-1")
                 if scope.get("query_string"):
                     url += "?" + scope["query_string"].decode("latin-1")
-                await send({"type": "http.response.start", "status": 308, "headers": [
+                # 307 for a page load, so a browser never remembers it; 308
+                # for the rest, which keeps the method and body.
+                status = 307 if scope["method"] in ("GET", "HEAD") else 308
+                await send({"type": "http.response.start", "status": status, "headers": [
                     (b"location", url.encode("latin-1")), (b"content-length", b"0"),
+                    (b"cache-control", b"no-store"),
                     (b"x-content-type-options", b"nosniff")]})
                 await send({"type": "http.response.body", "body": b""})
                 return
@@ -116,6 +203,51 @@ class _Redirector:
         if peer is not None and trusted and exposure._is_trusted(peer, trusted):
             return False
         return not exposure.is_home(request)
+
+
+_last_accept_log = 0.0
+_tls_warned = False
+
+
+def _accept_failed(e) -> bool:
+    """Log (at most every 10 s) and say whether to pause: only when the
+    machine is out of descriptors or buffers. A connection that was reset
+    before we took it is nothing."""
+    global _last_accept_log
+    now = time.monotonic()
+    if now - _last_accept_log >= 10:
+        _last_accept_log = now
+        log.warning("accept failed: %s", e)
+    return e.errno in _SLEEP_ERRNOS
+
+
+def _tls_failed(e) -> None:
+    """A handshake that failed on our side. Said once, not per connection:
+    port scanners and old clients would fill the log."""
+    global _tls_warned
+    if not _tls_warned:
+        _tls_warned = True
+        log.warning("a TLS handshake failed (%s); further ones are not logged", e)
+
+
+def _listening_socket(config, windows=None, make=socket.socket):
+    """On Windows another program can bind the same port when SO_REUSEADDR is
+    set, so there it is left off and the port is taken exclusively. Elsewhere
+    uvicorn's own socket (SO_REUSEADDR, so a restart does not wait)."""
+    if not (IS_WINDOWS if windows is None else windows):
+        return config.bind_socket()
+    host = config.host or "0.0.0.0"
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    sock = make(family=family)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+    try:
+        sock.bind((host, config.port))
+    except OSError as exc:
+        logging.getLogger("uvicorn.error").error(exc)
+        sys.exit(1)
+    logging.getLogger("uvicorn.error").info(
+        "Uvicorn running on http://%s:%d (Press CTRL+C to quit)", host, sock.getsockname()[1])
+    return sock
 
 
 class _Listener:
@@ -139,22 +271,23 @@ class _Listener:
             except OSError as e:
                 if self.closed or self.sock.fileno() < 0:
                     return
-                log.warning("accept failed: %s", e)
-                await asyncio.sleep(0.1)       # out of descriptors: do not spin
+                if _accept_failed(e):
+                    await asyncio.sleep(0.1)   # out of descriptors: do not spin
                 continue
-            t = self.loop.create_task(self._hand_over(conn))
+            t = self.loop.create_task(self._hand_over(conn, time.monotonic()))
             self.pending.add(t)
             t.add_done_callback(self.pending.discard)
 
-    async def _hand_over(self, conn):
+    async def _hand_over(self, conn, accepted):
+        ssl_ctx, was_tls = None, False
         try:
             conn.setblocking(False)
-            first = await peek_first_byte(self.loop, conn)
+            first = await peek_first_byte(self.loop, conn, accepted + FIRST_BYTE_SECONDS)
             if first is None:
                 conn.close()
                 return
-            ssl_ctx = None
             if first == TLS_HELLO:
+                was_tls = True
                 ssl_ctx = tls.context()
                 if ssl_ctx is None:             # away is off: TLS is refused
                     conn.close()
@@ -167,7 +300,10 @@ class _Listener:
             conn.close()
             raise
         except Exception as e:
-            log.debug("connection dropped: %s", e)
+            if was_tls and isinstance(e, ssl.SSLError):
+                _tls_failed(e)
+            else:
+                log.debug("connection dropped: %s", e)
             conn.close()
 
     def close(self):
@@ -201,7 +337,7 @@ class Server(uvicorn.Server):
             self.should_exit = True
             return
         try:
-            sock = config.bind_socket()
+            sock = _listening_socket(config)
         except SystemExit:
             await self.lifespan.shutdown()
             raise

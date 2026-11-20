@@ -97,11 +97,71 @@ def test_txt_carries_tls_and_fp_only_when_away_is_on():
     assert t["fp"] == tls.ensure_own().fingerprint
 
 
-def test_the_switch_refreshes_the_announcement(client, monkeypatch):
+def _home_client():
+    from fastapi.testclient import TestClient
+
+    from app.web import app
+
+    async def shim(scope, receive, send):
+        if scope["type"] == "http":
+            scope = {**scope, "client": ("192.168.1.5", 4321)}
+        await app(scope, receive, send)
+    c = TestClient(shim, base_url="http://testserver")
+    c.headers.update({"Origin": "http://testserver"})
+    return c
+
+
+def test_the_switch_refreshes_the_announcement_both_ways(monkeypatch):
+    from app.routes import settings
     calls = []
     monkeypatch.setattr(announce, "refresh", lambda retry=False: calls.append(retry))
-    client.post("/settings/away", data={"on": "0"})
-    assert calls == [True]
+    monkeypatch.setattr(settings, "_away_blocker", lambda mode=None: None)
+    c = _home_client()
+    assert c.post("/settings/away", data={"on": "1"}).json() == {"ok": True}
+    assert db.get_setting("away_mode") == "1"
+    assert c.post("/settings/away", data={"on": "0"}).json() == {"ok": True}
+    assert db.get_setting("away_mode") == "0"
+    assert calls == [True, True]
+
+
+@pytest.mark.parametrize("damage", ["short cert", "garbage key", "other pair"])
+def test_a_broken_pair_is_mended(damage, caplog):
+    first = tls.ensure_own()
+    if damage == "short cert":
+        first.cert_path.write_bytes(first.cert_path.read_bytes()[:200])
+    elif damage == "garbage key":
+        first.key_path.write_bytes(b"not a key")
+    else:
+        other = tmp_dir() / "o"
+        other.mkdir()
+        import app.tls as t
+        t._make(other / "c.pem", other / "k.pem")
+        first.key_path.write_bytes((other / "k.pem").read_bytes())
+    db.set_setting("away_mode", "1")
+    with caplog.at_level("ERROR", logger="couchelephant.tls"):
+        t = announce.txt()
+    assert any(r.levelname == "ERROR" for r in caplog.records)
+    assert t["tls"] == "1"
+    own = tls.ensure_own()          # now whole, and it matches what was announced
+    assert t["fp"] == own.fingerprint
+    assert tls.context() is not None
+    assert own.key_path.stat().st_mode & 0o077 == 0
+    assert not list(own.cert_path.parent.glob("*.tmp"))
+    # and the QR still works
+    import socket as sk
+    announce_addrs = sk.inet_aton("192.168.1.20")
+    assert announce_addrs
+    assert _home_client().get("/api/connect.svg").status_code == 200
+
+
+def test_a_non_ascii_host_name_does_not_break_the_certificate(monkeypatch):
+    monkeypatch.setattr(socket, "gethostname", lambda: "Robert\u2019s-PC")
+    own = tls.ensure_own()
+    cert = x509.load_pem_x509_certificate(own.cert_path.read_bytes())
+    san = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+    for n in san.get_values_for_type(x509.DNSName):
+        n.encode("ascii")
+    assert "localhost" in san.get_values_for_type(x509.DNSName)
 
 
 def test_the_qr_carries_the_fingerprint_when_away_is_on(monkeypatch):

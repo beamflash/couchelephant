@@ -244,7 +244,7 @@ def _secure(resp, request):
     return resp
 
 
-_BAD_HOST = re.compile(r"[/?#@\s]")
+_BAD_HOST = re.compile(r"[/\\?#@\s]")
 
 
 @app.middleware("http")

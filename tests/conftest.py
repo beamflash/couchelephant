@@ -12,6 +12,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # these at module level. Doing it in a fixture would be too late.
 _ROOT = tempfile.mkdtemp(prefix="ce-test-")
 os.environ["COUCHELEPHANT_DB"] = os.path.join(_ROOT, "couchelephant.db")
+# Anything that asks for the data folder (the own certificate) gets scratch.
+os.environ["COUCHELEPHANT_DATA"] = os.path.join(_ROOT, "data")
 os.environ["COUCHELEPHANT_AUTH_DB"] = os.path.join(_ROOT, "auth.db")
 os.environ["COUCHELEPHANT_LOGOS"] = os.path.join(_ROOT, "logos")
 os.environ["COUCHELEPHANT_RECORDINGS"] = os.path.join(_ROOT, "recordings")
