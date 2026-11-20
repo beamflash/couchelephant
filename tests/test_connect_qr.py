@@ -17,6 +17,13 @@ def _outside_a_container(monkeypatch):
     from app import paths
     monkeypatch.setattr(paths, "_in_container", lambda: False)
 
+@pytest.fixture(autouse=True)
+def _not_in_a_container(monkeypatch):
+    """CI runs inside a container; tests that care set this themselves."""
+    from app import paths
+    monkeypatch.setattr(paths, "_in_container", lambda: False)
+
+
 
 def _expected(url):
     link = "couchelephant://connect?url=" + urllib.parse.quote(url, safe="")

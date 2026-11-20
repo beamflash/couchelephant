@@ -19,6 +19,13 @@ def _outside_a_container(monkeypatch):
 
 TYPE = "_couchelephant._tcp.local."
 
+@pytest.fixture(autouse=True)
+def _not_in_a_container(monkeypatch):
+    """CI runs inside a container; tests that care set this themselves."""
+    from app import paths
+    monkeypatch.setattr(paths, "_in_container", lambda: False)
+
+
 
 def test_txt_has_the_four_keys_and_no_fp():
     t = announce.txt()
