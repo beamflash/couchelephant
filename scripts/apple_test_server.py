@@ -20,6 +20,8 @@ talks to replaced:
     with its own certificate, and GET /test/pin says the key's fingerprint,
     so the pinning tests can connect with it. Sign-in stays off, and the
     tests come from the local network, so the gate lets them in.
+    GET /test/keyseen says how many requests carried the device key
+    (?reset=1 starts the count again).
 
 Everything it writes goes to a scratch folder, checked by the same guard the
 test suite uses. Stop it and nothing is left.
@@ -99,6 +101,23 @@ def main():
         def _pin():
             return {"fp": pin}
         print("away mode on, key fingerprint", pin, flush=True)
+
+        # Test only: counts the requests that carried the device key, so a
+        # test can say the key never reached an address it must not.
+        keys_seen = []
+
+        @web.app.middleware("http")
+        async def _watch_key(request, call_next):
+            if request.headers.get("authorization") and not request.url.path.startswith("/test/"):
+                keys_seen.append(f"{request.url.scheme} {request.url.path}")
+            return await call_next(request)
+
+        @web.app.get("/test/keyseen")
+        def _keyseen(reset: int = 0):
+            seen = list(keys_seen)
+            if reset:
+                keys_seen.clear()
+            return {"count": len(seen), "paths": seen[-5:]}
     ok, detail = sync.full_sync()
     if not ok:
         raise SystemExit(f"the demo guide would not sync: {detail}")
