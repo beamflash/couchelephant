@@ -295,16 +295,11 @@ def test_the_server_config_ignores_forwarding_headers(monkeypatch):
         app = getattr(app, "app", None)
 
 
-@pytest.mark.parametrize("text,want", [("DEVTYPE=veth\nINTERFACE=eth0\n", True),
-                                       ("DEVTYPE=macvlan\n", False),
-                                       ("INTERFACE=eth0\n", False)])
-def test_eth0_driver_from_uevent(monkeypatch, tmp_path, text, want):
-    f = tmp_path / "uevent"
-    f.write_text(text)
-    monkeypatch.setattr(exposure, "_ETH0_UEVENT", str(f))
+@pytest.mark.parametrize("driver,want", [("veth", True), ("macvlan", False),
+                                         ("ipvlan", False), ("e1000e", None),
+                                         (None, None)])
+def test_eth0_driver_decides_bridge_or_lan(monkeypatch, driver, want):
+    # Only a confirmed macvlan or ipvlan counts as being on the LAN. A real
+    # Docker veth has no DEVTYPE in uevent, so that file cannot tell them apart.
+    monkeypatch.setattr(exposure, "_eth0_driver", lambda: driver)
     assert exposure._eth0_is_veth() is want
-
-
-def test_eth0_driver_unknown_when_unreadable(monkeypatch):
-    monkeypatch.setattr(exposure, "_ETH0_UEVENT", "/nonexistent/uevent")
-    assert exposure._eth0_is_veth() is None

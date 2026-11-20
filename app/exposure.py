@@ -40,7 +40,6 @@ def _cached(fn):
     return wrapper
 
 
-_ETH0_UEVENT = "/sys/class/net/eth0/uevent"
 
 
 def _adapters():
@@ -78,17 +77,34 @@ def _gateways() -> set:
     return out
 
 
+def _eth0_driver():
+    """The kernel driver behind eth0 ("veth", "macvlan", "ipvlan", ...), or
+    None. Asked through the ethtool ioctl: /sys uevent carries no DEVTYPE for
+    any of these, checked on real Docker networks."""
+    import array
+    import fcntl
+    import struct
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            buf = array.array("B", struct.pack("I", 3) + b"\0" * 192)  # ETHTOOL_GDRVINFO
+            ifr = struct.pack("16sP", b"eth0", buf.buffer_info()[0])
+            fcntl.ioctl(s.fileno(), 0x8946, ifr)                     # SIOCETHTOOL
+        return bytes(buf[4:36]).split(b"\0")[0].decode() or None
+    except (OSError, ImportError, ValueError):
+        return None
+
+
 @_cached
 def _eth0_is_veth():
-    """True on a Docker bridge (eth0 is one end of a veth pair), False on
-    macvlan/ipvlan or a real NIC, None when we cannot tell."""
-    try:
-        uevent = open(_ETH0_UEVENT).read()
-    except OSError:
-        return None
-    # The kernel names a veth end DEVTYPE=veth. macvlan, ipvlan and real
-    # NICs are something else.
-    return "DEVTYPE=veth" in uevent
+    """True on a Docker bridge, False on macvlan or ipvlan (the container is
+    on the LAN itself), None when we cannot tell, which callers treat as a
+    bridge."""
+    drv = _eth0_driver()
+    if drv == "veth":
+        return True
+    if drv in ("macvlan", "ipvlan"):
+        return False
+    return None
 
 
 def _nets_of(adapters, skip_lo=True) -> list:
