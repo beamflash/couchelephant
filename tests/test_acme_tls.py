@@ -595,7 +595,7 @@ def test_one_attempt_an_hour_unless_the_name_changed(monkeypatch):
     acme_tls.request("tv.example.com")
     acme_tls.request("tv.example.com")            # a restart leaves only the database
     assert calls == ["tv.example.com"]
-    assert 0 < acme_tls.too_soon("tv.example.com") <= 3600
+    assert 0 < acme_tls.too_soon("tv.example.com") <= 15 * 60
     assert acme_tls.too_soon("other.example.com") == 0
     acme_tls.request("other.example.com")         # a new name goes at once
     assert calls == ["tv.example.com", "other.example.com"]

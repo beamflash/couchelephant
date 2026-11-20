@@ -32,7 +32,9 @@ PRODUCTION = "https://acme-v02.api.letsencrypt.org/directory"
 RENEW_DAYS = 30
 ORDER_SECONDS = 120
 DAY = 86400
-HOUR = 3600
+# Let's Encrypt allows five failed checks an hour for one name; one try every
+# quarter hour stays under that and still lets a fixed router through soon.
+RETRY_WAIT = 15 * 60
 
 _lock = threading.Lock()
 _wlock = threading.Lock()    # guards _wanted and the hand-back of _lock
@@ -272,7 +274,7 @@ def _set_error(text: str) -> None:
 
 def too_soon(name: str) -> int:
     """Seconds still to wait before this name may be tried again: one attempt
-    an hour, except for a name that was not the last one tried. The time is in
+    every 15 minutes, except for a name that was not the last one tried. The time is in
     the database, so a restart does not order again at once."""
     if (db.get_setting("away_domain_last_name") or "") != name:
         return 0
@@ -280,14 +282,14 @@ def too_soon(name: str) -> int:
         last = int(db.get_setting("away_domain_last_try") or 0)
     except ValueError:
         return 0
-    return max(0, last + HOUR - int(time.time()))
+    return max(0, last + RETRY_WAIT - int(time.time()))
 
 
 def request(name: str) -> None:
     """Get a certificate for this name. One order runs at a time: a second
     call while one runs returns at once, and if it names a different domain
     that one is ordered when the first is done. Nothing is ordered while the
-    certificate is good, or within an hour of the last try for the same name."""
+    certificate is good, or within 15 minutes of the last try for the same name."""
     with _wlock:
         if not _lock.acquire(blocking=False):
             _wanted[:] = [name]
