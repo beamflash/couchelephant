@@ -226,8 +226,10 @@ def lan_url(request: Request):
     else:
         # Reached by localhost or a public name: use this machine's own address
         # and the port this server is set to listen on.
-        host = _machine_address()
-        if host is None:
+        # COUCHELEPHANT_ADDRESS names it outright: the one way a container on
+        # Docker's bridge can know the address the rest of the house uses.
+        host = os.environ.get("COUCHELEPHANT_ADDRESS", "").strip() or _machine_address()
+        if not host:
             return None
         port = paths.port()
         scheme = "http"            # the server's own port speaks plain http

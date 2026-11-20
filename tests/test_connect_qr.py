@@ -171,3 +171,13 @@ def test_in_a_container_a_172_18_host_is_a_bridge_too(client, monkeypatch):
     assert _body(client.get("/api/connect.svg", headers=host)) == _expected("http://172.18.0.5:8710")
     monkeypatch.setattr(paths, "_in_container", lambda: True)
     assert _body(client.get("/api/connect.svg", headers=host)) == _expected(THIS)
+
+
+def test_the_address_setting_wins_over_the_machine(client, monkeypatch):
+    # A container on Docker's bridge has no home address of its own.
+    monkeypatch.setattr(paths, "_in_container", lambda: True)
+    _machine(monkeypatch, "172.17.0.2")
+    monkeypatch.setenv("COUCHELEPHANT_PORT", "8710")
+    assert client.get("/api/connect.svg").status_code == 409
+    monkeypatch.setenv("COUCHELEPHANT_ADDRESS", "192.168.1.20")
+    assert _body(client.get("/api/connect.svg")) == _expected(THIS)

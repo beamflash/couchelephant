@@ -79,6 +79,7 @@ up.
 | `COUCHELEPHANT_LOGOS` | `/data/logos` | Cached channel artwork |
 | `COUCHELEPHANT_RECORDINGS` | `/recordings` | Where CouchElephant DVR keeps its files. It is off unless this folder exists |
 | `COUCHELEPHANT_LIBRARY` | `/library` | The Plex library folder a finished recording is moved into |
+| `COUCHELEPHANT_ADDRESS` | none | The address of this machine on your home network, such as `192.168.1.20`. The QR code under Settings carries it. Set it when the container is on Docker's bridge network, where it cannot see that address itself |
 | `TZ` | `UTC` | The container's clock |
 
 Everything else is a setting in the app, not an environment variable, because

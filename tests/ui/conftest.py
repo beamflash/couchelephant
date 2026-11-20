@@ -37,6 +37,8 @@ def base_url(plex_url):
 
     # The periodic sync would fire underneath a test and rewrite the guide.
     os.environ["COUCHELEPHANT_NO_SYNC_LOOP"] = "1"
+    # CI runs in a container with no home network address to put in the QR code.
+    os.environ["COUCHELEPHANT_ADDRESS"] = "192.168.1.20"
 
     port = _free_port()
     config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")

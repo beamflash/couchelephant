@@ -9,7 +9,16 @@ def _drawn(page, selector):
     return page.locator(selector).is_visible()
 
 
-def test_settings_televisions_shows_the_qr_and_says_how_to_scan(page):
+def _home_address(monkeypatch):
+    """A fixed home address, so a CI container's own bridge address does not matter."""
+    import socket
+
+    from app import announce
+    monkeypatch.setattr(announce, "_addresses", lambda: [socket.inet_aton("192.168.1.20")])
+
+
+def test_settings_televisions_shows_the_qr_and_says_how_to_scan(page, monkeypatch):
+    _home_address(monkeypatch)
     page.goto("/settings")
     page.wait_for_selector("#setnav .nav-item")
     page.click('.nav-item[data-sec="recording"]')
@@ -22,7 +31,8 @@ def test_settings_televisions_shows_the_qr_and_says_how_to_scan(page):
     assert sec.locator('input[name="announce_on"]').count() == 1
 
 
-def test_the_welcome_page_shows_it_once_plex_is_set(page, plex_url):
+def test_the_welcome_page_shows_it_once_plex_is_set(page, plex_url, monkeypatch):
+    _home_address(monkeypatch)
     from app import db
     db.set_setting("plex_url", "")
     db.set_setting("plex_token", "")
@@ -41,6 +51,7 @@ def test_the_welcome_page_shows_it_once_plex_is_set(page, plex_url):
 def test_with_no_address_settings_says_so_where_the_qr_would_be(page, monkeypatch):
     from app import announce
     monkeypatch.setattr(announce, "_addresses", lambda: [])
+    monkeypatch.delenv("COUCHELEPHANT_ADDRESS", raising=False)
     # The browser reaches the server as localhost, which a phone cannot use.
     page.goto("/settings")
     page.wait_for_selector("#setnav .nav-item")

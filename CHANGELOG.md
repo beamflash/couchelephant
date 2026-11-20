@@ -14,6 +14,8 @@
 - **A QR code to connect a phone**, under Settings, Recording, Televisions and
   on the welcome page once Plex is set. Scan it with the iPhone or iPad camera.
 - A switch under Settings, Recording, Televisions turns the announcement off.
+- `COUCHELEPHANT_ADDRESS` names the home network address for the QR code, for
+  a container on Docker's bridge network.
 
 ### Changed
 
