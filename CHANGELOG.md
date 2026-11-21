@@ -16,6 +16,8 @@
   system trusts, away from home. Video plays through a small proxy inside the
   app that listens on `127.0.0.1` only. A link never replaces a stored pin. If
   the key changes, the app asks you to pair again at home.
+- The apps send their key only to the stored address, and play video only
+  from it. A video link from behind a TLS proxy is moved onto that address.
 - The QR code is an `https://` address and carries `&fp=` while away is on.
 - docs/AUTH.md has an "Away from home" section, and docs/INSTALL.md says what
   to forward on the router.

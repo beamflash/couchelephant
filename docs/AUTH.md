@@ -211,6 +211,9 @@ code.
   at home." Forget the server in the app and pair again at home.
 - A server whose away switch is off does not answer on HTTPS. The app says so
   and points you at the server's settings.
+- Video plays only from the stored address. Behind a TLS proxy the server
+  hands out `http://` video links to its own name; the app moves those onto
+  the stored address. A video link to another host does not play.
 - AVPlayer cannot be told to trust a pin, so when the pin vouches for the
   server, video plays through a small proxy inside the app. It listens on
   `127.0.0.1` only and wants a random token on every path.
