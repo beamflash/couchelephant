@@ -111,7 +111,7 @@ def test_pathological_input_is_fast():
     import time
     s = Scrubber()
     for unit in ("a.", "eyJ.", "-----BEGIN PRIVATE KEY-----", "a:", "token", "1.",
-                 "[::", "x://", "@", "a::", "to a:1 "):
+                 "[::", "x://", "x:///", "a://a@", "@", "a::", "to a:1 "):
         big = unit * (200_000 // len(unit))
         t = time.perf_counter()
         s.text(big)
@@ -129,3 +129,10 @@ def test_surrogate_and_case_in_hashing():
 def test_known_host_with_port_single_word():
     s = Scrubber(known_hosts=["plexbox"])
     assert "plexbox" not in s.text("retry plexbox:32400 later")
+
+
+def test_nested_url_masked_in_all_positions():
+    s = Scrubber()
+    out = s.text("a http://a.example.com/x?u=https://b.example.org/y#https://c.example.net/")
+    for h in ("a.example.com", "b.example.org", "c.example.net"):
+        assert h not in out

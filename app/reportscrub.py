@@ -67,7 +67,14 @@ _HEX32 = re.compile(r"(?<![0-9A-Fa-f])[0-9A-Fa-f]{32,}(?![0-9A-Fa-f])")
 _RUN = re.compile(r"(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{20,}(?![A-Za-z0-9_-])")
 # Bounded so a long dotted string can't make the scan quadratic. The body is
 # the whole run up to a space or quote; _mask_url finds the host inside it.
-_URL = re.compile(r"[A-Za-z][A-Za-z0-9+.-]{0,30}://([^\s\"'<>]{1,300})")
+_SCHEME = r"[A-Za-z][A-Za-z0-9+.-]{0,30}://"
+# The body stops where another scheme:// starts, so a URL nested in a path or
+# query is a match of its own and is masked on its own.
+_URL = re.compile(_SCHEME + r"((?:(?!" + _SCHEME + r")[^\s\"'<>]){1,1000})")
+# The host after an @ even when the user:pass in front of it was too long for
+# the URL pass to reach (also masks the host half of an email address).
+_AT_HOST = re.compile(
+    r"(?<=@)(?:[A-Za-z0-9-]{1,63}\.){1,6}[A-Za-z]{2,24}(?::(\d{2,5}))?(?![\w-])")
 _IPV4 = re.compile(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?(?![\d.])")
 _V6_BRACKET = re.compile(
     r"\[([0-9A-Fa-f:.]{2,45})(?:%[A-Za-z0-9_.-]{1,20})?\](?::(\d{1,5}))?")
@@ -158,6 +165,7 @@ class Scrubber:
                  known_hosts: Iterable[str] = ()):
         self.salt = salt if salt is not None else os.urandom(16)
         self._shown_cache: dict[str, str] = {}
+        self._host_cache: dict[str, str] = {}
         # Longest first, so a secret that holds another is removed whole.
         self._secrets = sorted({v for v in known_secrets
                                 if isinstance(v, str) and len(v) >= 4},
@@ -171,8 +179,12 @@ class Scrubber:
         self._hosts = sorted(names, key=len, reverse=True)
 
     def host(self, name: str) -> str:
-        digest = hashlib.sha256(self.salt + name.encode(errors="surrogatepass")).hexdigest()
-        return "host-" + digest[:10]
+        got = self._host_cache.get(name)
+        if got is None:
+            digest = hashlib.sha256(
+                self.salt + name.encode(errors="surrogatepass")).hexdigest()
+            got = self._host_cache[name] = "host-" + digest[:10]
+        return got
 
     def _shown(self, name: str) -> str:
         name = name.lower()
@@ -202,6 +214,11 @@ class Scrubber:
         cut = re.search(r"[/?#]", rest)
         host, tail = (rest[:cut.start()], rest[cut.start():]) if cut else (rest, "")
         return self.address(f"{scheme}://{host}") + tail
+
+    def _mask_at_host(self, m: re.Match) -> str:
+        port = m.group(1)
+        name = m.group(0).rsplit(":", 1)[0] if port else m.group(0)
+        return self._shown(name) + (f":{port}" if port else "")
 
     def _mask_ip(self, m: re.Match) -> str:
         s = m.group(0)
@@ -254,6 +271,7 @@ class Scrubber:
             s = s.replace(v, REMOVED)
         s = _cut_pem(s)
         s = _URL.sub(self._mask_url, s)
+        s = _AT_HOST.sub(self._mask_at_host, s)
         s = _V6_BRACKET.sub(self._mask_v6_bracket, s)
         s = _IPV4.sub(self._mask_ip, s)
         s = _V6_BARE.sub(self._mask_v6_bare, s)
