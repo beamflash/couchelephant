@@ -127,9 +127,9 @@ for two days after Plex has the recording and is made again on demand.
 
 ### The Apple TV and iPhone apps
 
-`clients/apple` in the repository holds an Apple TV app and an iPhone app.
-Both play what CouchElephant records, tune live channels, show the guide, and
-record from it. They are built from source with Xcode; see the README there.
+The Apple TV app and the iPhone and iPad app play what CouchElephant
+records, tune live channels, show the guide, and record from it. They are
+not in this repository; they come from Apple's TestFlight for now.
 The first run lists every CouchElephant on your home network by name; pick
 yours. If none shows after a few seconds, or the app was not allowed to look
 for devices on your network, type the address instead. You can also scan the

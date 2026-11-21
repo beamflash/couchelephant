@@ -3,7 +3,7 @@
 
     scripts/apple_test_server.sh            # in a container, on port 8790
 
-The XCUITest suites in `clients/apple/UITests` press real buttons in the
+The Apple apps' XCUITest suites (kept in a separate repository) press real buttons in the
 simulator: they tune live TV, change channel from the guide over the
 picture, record from it, and skip an ad. None of that may reach a real Plex,
 a real tuner or real recordings, so this runs the app with everything it

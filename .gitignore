@@ -18,3 +18,6 @@ dist/
 packaging/windows/WinSW-x64.exe
 site/install.sh
 .wrangler/
+
+# The Apple apps live in their own private repository, cloned here for builds.
+clients/apple/
