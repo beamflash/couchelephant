@@ -1,13 +1,10 @@
 """Handing over to a show Plex already has: the file joins an old episode as
 another Part, and the guide's episode number can be one off Plex's."""
 import os
-import time
 
-import pytest
-
-from app import db, handover, recorder
+from app import handover, recorder
 from tests import fake_plex
-from tests.test_recorder import _record, library  # noqa: F401
+from tests.test_recorder import _record, library  # noqa: F401, F811
 
 
 def _plex_has_murder(library_dir):
@@ -30,7 +27,7 @@ def _as_murder(rec, episode):
     return recorder.get(rec["id"])
 
 
-def test_a_file_that_becomes_a_second_part_of_an_old_episode_is_found(tuner, library):
+def test_a_file_that_becomes_a_second_part_of_an_old_episode_is_found(tuner, library):  # noqa: F811
     _plex_has_murder(library)
     rec = _as_murder(_record(), 17)
     handover.tick(wait=True)
@@ -39,7 +36,7 @@ def test_a_file_that_becomes_a_second_part_of_an_old_episode_is_found(tuner, lib
     assert done["plex_rating_key"] == "9017"
 
 
-def test_the_episode_is_numbered_as_plex_numbers_it(tuner, library):
+def test_the_episode_is_numbered_as_plex_numbers_it(tuner, library):  # noqa: F811
     season = _plex_has_murder(library)
     rec = _as_murder(_record(), 18)         # the guide is one off
     handover.tick(wait=True)
@@ -51,7 +48,7 @@ def test_the_episode_is_numbered_as_plex_numbers_it(tuner, library):
     assert not os.path.exists(os.path.join(library, "Murder, She Wrote (1984)", "Season 01"))
 
 
-def test_a_file_put_under_the_wrong_number_is_moved_and_scanned(tuner, library):
+def test_a_file_put_under_the_wrong_number_is_moved_and_scanned(tuner, library):  # noqa: F811
     season = _plex_has_murder(library)
     rec = _as_murder(_record(), 18)
     wrong_dir = os.path.join(library, "Murder, She Wrote (1984)", "Season 01")
@@ -72,7 +69,7 @@ def test_a_file_put_under_the_wrong_number_is_moved_and_scanned(tuner, library):
     assert done["plex_rating_key"] == "9017"
 
 
-def test_a_show_plex_does_not_have_keeps_the_guide_number(tuner, library):
+def test_a_show_plex_does_not_have_keeps_the_guide_number(tuner, library):  # noqa: F811
     rec = _as_murder(_record(), 18)
     handover.tick(wait=True)
     done = recorder.get(rec["id"])
@@ -80,7 +77,7 @@ def test_a_show_plex_does_not_have_keeps_the_guide_number(tuner, library):
     assert "S01E18" in done["plex_path"]
 
 
-def test_an_episode_title_two_episodes_share_is_not_guessed(tuner, library):
+def test_an_episode_title_two_episodes_share_is_not_guessed(tuner, library):  # noqa: F811
     _plex_has_murder(library)
     fake_plex.STATE.shows["900"]["eps"].append(
         {"ratingKey": "9099", "title": "Sudden Death", "parentIndex": 2, "index": 3, "files": []})
