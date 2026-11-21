@@ -20,6 +20,7 @@ from . import (
     db,
     exposure,
     handover,
+    logring,
     overtime,
     passes,
     paths,
@@ -36,6 +37,7 @@ from .routes._shared import ASSET_V, BASE, VERSION, current_user  # noqa: F401
 from .routes.account import _configured
 
 log = logging.getLogger("couchelephant")
+logring.install()
 
 
 class _HidePass(logging.Filter):
