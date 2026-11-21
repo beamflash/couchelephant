@@ -6,9 +6,10 @@
 
 - **Deleting a pass asks about its recordings.** "Delete the Murder, She Wrote
   season pass?" offers "Also cancel the 36 upcoming recordings" (the first
-  choice), "Keep them" or Cancel, on the web, iPhone, iPad and Apple TV. With
+  choice), "Keep them" or "Never mind", on the web, iPhone, iPad and Apple TV. With
   none ahead there is no question. Only recordings that have not started are
-  cancelled, with the recorder that holds them.
+  cancelled, with the recorder that holds them. A Plex booking with no stored
+  key is left alone and the message says to remove it in Plex.
 - **A pass deleted earlier can be managed.** Recordings left booked by a pass
   that is gone show in the Season pass or Sports pass tab as one row,
   "Title (pass deleted)", with how many are set. "Cancel all" cancels them.
