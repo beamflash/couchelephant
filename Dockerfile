@@ -18,9 +18,9 @@ FROM python:3.12-slim
 ARG VERSION=dev
 LABEL org.opencontainers.image.title="CouchElephant" \
       org.opencontainers.image.description="A Plex DVR sidecar that records the live broadcast, not the repeat." \
-      org.opencontainers.image.source="https://github.com/datbird/couchelephant" \
-      org.opencontainers.image.url="https://github.com/datbird/couchelephant" \
-      org.opencontainers.image.documentation="https://github.com/datbird/couchelephant/blob/main/docs/INSTALL.md" \
+      org.opencontainers.image.source="https://github.com/beamflash/couchelephant" \
+      org.opencontainers.image.url="https://github.com/beamflash/couchelephant" \
+      org.opencontainers.image.documentation="https://github.com/beamflash/couchelephant/blob/main/docs/INSTALL.md" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.version="${VERSION}"
 

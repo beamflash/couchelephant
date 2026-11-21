@@ -25,7 +25,7 @@ docker run -d --name couchelephant --restart unless-stopped \
   -p 8710:8710 \
   -v /opt/couchelephant/data:/data \
   -e TZ=UTC \
-  ghcr.io/datbird/couchelephant:latest
+  ghcr.io/beamflash/couchelephant:latest
 ```
 
 The image is built for `linux/amd64` and `linux/arm64`, so the same tag works
@@ -103,7 +103,7 @@ docker run -d --name couchelephant --restart unless-stopped \
   -v /path/to/your/plex/media:/library \
   --device /dev/dri \
   -e TZ=UTC \
-  ghcr.io/datbird/couchelephant:latest
+  ghcr.io/beamflash/couchelephant:latest
 ```
 
 | Addition | What it is for |

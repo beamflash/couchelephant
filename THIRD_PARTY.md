@@ -112,5 +112,5 @@ install folder's `bin/` as `LICENSE-ffmpeg.txt` and `LICENSE-comskip.txt`
 FFmpeg: https://ffmpeg.org/releases/ and the build scripts in the two build
 projects named above. Comskip: https://github.com/erikkaashoek/Comskip . If
 any of that is ever unavailable, write to the project's issue tracker at
-https://github.com/datbird/couchelephant/issues and the matching source will
+https://github.com/beamflash/couchelephant/issues and the matching source will
 be provided for three years after the release that shipped the program.

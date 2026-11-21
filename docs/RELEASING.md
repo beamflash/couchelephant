@@ -9,7 +9,7 @@ git tag v1.0.0 && git push origin v1.0.0
 ```
 
 `.github/workflows/release.yml` runs the whole suite, then builds
-`linux/amd64` and `linux/arm64` and pushes to `ghcr.io/datbird/couchelephant`
+`linux/amd64` and `linux/arm64` and pushes to `ghcr.io/beamflash/couchelephant`
 tagged `1.0.0`, `1.0`, `1` and `latest`. An image that fails its own tests is
 never published: the release workflow calls the CI workflow and waits for it.
 
@@ -18,7 +18,7 @@ About page shows, so move it in the same commit you tag.
 
 ## Where the image lives
 
-**GitHub Container Registry**, `ghcr.io/datbird/couchelephant`. Public images
+**GitHub Container Registry**, `ghcr.io/beamflash/couchelephant`. Public images
 there cost nothing, allow anonymous pulls, and have no published pull limit.
 Docker Hub allows 100 anonymous pulls per IP address per six hours, which is a
 poor fit for an app strangers install: one busy neighbour on the same shared
@@ -48,7 +48,7 @@ Published from a public repository, the package inherits that and is public
 from its first push. It only needs setting by hand if it was first published
 while the repository was private:
 
-1. github.com/datbird → **Packages** → **couchelephant**
+1. github.com/beamflash → **Packages** → **couchelephant**
 2. **Package settings** → **Danger Zone** → **Change visibility** → **Public**
 
 This is one-way. A public package cannot be made private again.

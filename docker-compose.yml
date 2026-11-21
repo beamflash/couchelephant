@@ -6,7 +6,7 @@
 # Settings, Plex. Nothing else is required.
 services:
   couchelephant:
-    image: ghcr.io/datbird/couchelephant:latest
+    image: ghcr.io/beamflash/couchelephant:latest
     container_name: couchelephant
     restart: unless-stopped
     # The apps find the server by itself only with host networking. Remove

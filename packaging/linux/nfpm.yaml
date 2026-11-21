@@ -8,7 +8,7 @@ section: video
 maintainer: CouchElephant <noreply@users.noreply.github.com>
 description: |
   CouchElephant, a TV guide and recorder front end for Plex.
-homepage: https://github.com/datbird/couchelephant
+homepage: https://github.com/beamflash/couchelephant
 license: MIT
 contents:
   - src: @SRC@

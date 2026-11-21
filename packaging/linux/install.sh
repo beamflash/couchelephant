@@ -1,11 +1,11 @@
 #!/bin/sh
 # One-line install:
-#   curl -fsSL https://raw.githubusercontent.com/datbird/couchelephant/main/packaging/linux/install.sh | sudo sh
+#   curl -fsSL https://raw.githubusercontent.com/beamflash/couchelephant/main/packaging/linux/install.sh | sudo sh
 # COUCHELEPHANT_RELEASES_URL overrides the release feed. COUCHELEPHANT_FORMAT
 # (deb, rpm or tar) overrides the package type picked from this system.
 set -eu
 
-RELEASES_URL=${COUCHELEPHANT_RELEASES_URL:-https://api.github.com/repos/datbird/couchelephant/releases/latest}
+RELEASES_URL=${COUCHELEPHANT_RELEASES_URL:-https://api.github.com/repos/beamflash/couchelephant/releases/latest}
 
 die() { echo "install.sh: $*" >&2; exit 1; }
 

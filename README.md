@@ -260,7 +260,7 @@ docker run -d --name couchelephant --restart unless-stopped \
   -p 8710:8710 \
   -v /opt/couchelephant/data:/data \
   -e TZ=UTC \
-  ghcr.io/datbird/couchelephant:latest
+  ghcr.io/beamflash/couchelephant:latest
 ```
 
 The same image is on Docker Hub as `datbird/couchelephant`, if you would

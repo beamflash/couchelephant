@@ -52,11 +52,11 @@ footer{text-align:center;color:var(--dim);font-size:.9rem;margin-top:32px}
 <section class="card" id="hero">
   <h2 id="hero-title">Download CouchElephant</h2>
   <noscript>
-    <p>Every download is on the <a href="https://github.com/datbird/couchelephant/releases/latest">latest release page</a>:
+    <p>Every download is on the <a href="https://github.com/beamflash/couchelephant/releases/latest">latest release page</a>:
     a Windows installer, a macOS disk image, and Linux packages.</p>
     <p class="note">On a Mac, the first time, right-click CouchElephant and choose Open.</p>
   </noscript>
-  <a class="big" id="hero-button" href="https://github.com/datbird/couchelephant/releases/latest" hidden></a>
+  <a class="big" id="hero-button" href="https://github.com/beamflash/couchelephant/releases/latest" hidden></a>
   <p class="note" id="hero-note" hidden></p>
   <p class="note" id="hero-missing" hidden></p>
   <p class="note" id="hero-version" hidden></p>
@@ -81,13 +81,13 @@ footer{text-align:center;color:var(--dim);font-size:.9rem;margin-top:32px}
   -p 8710:8710 \
   -v /opt/couchelephant/data:/data \
   -e TZ=UTC \
-  ghcr.io/datbird/couchelephant:latest</pre>
+  ghcr.io/beamflash/couchelephant:latest</pre>
   <h2>Unraid</h2>
   <p>Search for <b>CouchElephant</b> in <b>Apps</b>.</p>
 </section>
 
 <footer>
-  <a href="https://github.com/datbird/couchelephant">Source and documentation</a>
+  <a href="https://github.com/beamflash/couchelephant">Source and documentation</a>
   <p>Works with Plex. Not made by or affiliated with Plex.</p>
 </footer>
 </main>
@@ -106,8 +106,8 @@ footer{text-align:center;color:var(--dim);font-size:.9rem;margin-top:32px}
 </script>
 <script>
 (function () {
-  var FEED = "https://api.github.com/repos/datbird/couchelephant/releases/latest";
-  var RELEASES = "https://github.com/datbird/couchelephant/releases/latest";
+  var FEED = "https://api.github.com/repos/beamflash/couchelephant/releases/latest";
+  var RELEASES = "https://github.com/beamflash/couchelephant/releases/latest";
 
   // One row per download. "test" picks the asset out of the release by name.
   var KINDS = {
@@ -160,7 +160,7 @@ footer{text-align:center;color:var(--dim);font-size:.9rem;margin-top:32px}
   }
 
   // Only our own release files are ever linked, whatever the feed says.
-  var TRUSTED = "https://github.com/datbird/couchelephant/releases/download/";
+  var TRUSTED = "https://github.com/beamflash/couchelephant/releases/download/";
 
   function pick(release) {
     var out = {};

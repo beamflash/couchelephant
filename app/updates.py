@@ -23,7 +23,7 @@ from .version import VERSION
 
 log = logging.getLogger("couchelephant")
 
-DEFAULT_FEED = "https://api.github.com/repos/datbird/couchelephant/releases/latest"
+DEFAULT_FEED = "https://api.github.com/repos/beamflash/couchelephant/releases/latest"
 TIMEOUT = 15
 MOVE_FIRST = "Move CouchElephant to Applications first"
 UNSIGNED = "This update is not signed yet. Download it from couchelephant.app."

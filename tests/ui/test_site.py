@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 
 PAGE = (Path(__file__).resolve().parents[2] / "site" / "index.html").as_uri()
-BASE = "https://github.com/datbird/couchelephant/releases/download/v9.9.9/"
+BASE = "https://github.com/beamflash/couchelephant/releases/download/v9.9.9/"
 
 NAMES = [
     "CouchElephant-Setup-9.9.9.exe",
@@ -117,7 +117,7 @@ def test_hostile_download_urls_are_never_linked(browser):
 def test_feed_failure_links_the_releases_page(browser):
     ctx, page = open_site(browser, WIN, status=500)
     text, href = hero(page)
-    assert href == "https://github.com/datbird/couchelephant/releases/latest"
+    assert href == "https://github.com/beamflash/couchelephant/releases/latest"
     ctx.close()
 
 
@@ -125,7 +125,7 @@ def test_no_script_points_at_every_download(browser):
     ctx = browser.new_context(user_agent=WIN, java_script_enabled=False)
     page = ctx.new_page()
     page.goto(PAGE)
-    link = page.locator("noscript a[href='https://github.com/datbird/couchelephant/releases/latest']")
+    link = page.locator("noscript a[href='https://github.com/beamflash/couchelephant/releases/latest']")
     assert link.count() == 1
     assert page.locator("#hero-button").is_hidden()
     assert "right-click CouchElephant and choose Open." in page.locator("noscript").inner_text()
