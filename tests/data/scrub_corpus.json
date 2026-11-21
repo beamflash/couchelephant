@@ -1,37 +1,216 @@
 {
-  "secrets": [
-    {"name": "plex token in url query", "input": "GET http://192.168.1.20:32400/library/sections?X-Plex-Token=Xk3j9Qm2LpR7vT4wYz8N failed", "secret": "Xk3j9Qm2LpR7vT4wYz8N"},
-    {"name": "plex token in header line", "input": "X-Plex-Token: Qw8e3Rt6Yu1Io4Pa7Sd2", "secret": "Qw8e3Rt6Yu1Io4Pa7Sd2"},
-    {"name": "plex token bare in a log line", "input": "sync used token Zx9Cv3Bn7Ml1Kj5Hg2Fd for the call", "secret": "Zx9Cv3Bn7Ml1Kj5Hg2Fd"},
-    {"name": "device key", "input": "registered device a1B2c3D4e5F6g7H8i9J0k1L2m3N4", "secret": "a1B2c3D4e5F6g7H8i9J0k1L2m3N4"},
-    {"name": "bearer header", "input": "Authorization: Bearer abcDEF123ghiJKL456mnoPQR", "secret": "abcDEF123ghiJKL456mnoPQR"},
-    {"name": "bearer without header name", "input": "sent Bearer shortTok9 upstream", "secret": "shortTok9"},
-    {"name": "jwt", "input": "session eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0In0.c2lnbmF0dXJl end", "secret": "eyJhbGciOiJIUzI1NiJ9"},
-    {"name": "pem private key", "input": "tls load failed\n-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSj\nAbCdEfGhIjKlMnOpQrStUvWxYz0123456789\n-----END PRIVATE KEY-----\nretrying", "secret": "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSj"},
-    {"name": "pem ec private key", "input": "-----BEGIN EC PRIVATE KEY-----\nZm9vYmFyZm9vYmFy\n-----END EC PRIVATE KEY-----", "secret": "Zm9vYmFyZm9vYmFy"},
-    {"name": "acme account key json", "input": "{\"kty\":\"EC\",\"crv\":\"P-256\",\"x\":\"f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU\",\"y\":\"x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0\",\"d\":\"jpsQnnGQmL-YBIffH1136cspYG6-0iY7X1fCE9-E9LI\"}", "secret": "jpsQnnGQmL-YBIffH1136cspYG6-0iY7X1fCE9-E9LI"},
-    {"name": "acme key no digits in d", "input": "{\"kty\":\"EC\",\"d\":\"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ\"}", "secret": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ"},
-    {"name": "userinfo in url", "input": "fetch https://user:hunter2@example.net/x", "secret": "hunter2"},
-    {"name": "password equals", "input": "login with password=hunter2 now", "secret": "hunter2"},
-    {"name": "password json", "input": "{\"password\": \"hunter2\", \"user\": \"bob\"}", "secret": "hunter2"},
-    {"name": "api key colon", "input": "api_key: sk-test-notreal", "secret": "sk-test-notreal"},
-    {"name": "setting dump line", "input": "settings: plex_url=http://10.0.0.5:32400 plex_token=Mn4Bv7Cx1Zl9Kj3Hg6Fd tmdb_key=0123456789abcdef0123456789abcdef", "secret": "Mn4Bv7Cx1Zl9Kj3Hg6Fd"},
-    {"name": "setting dump tmdb key", "input": "tmdb_key=0123456789abcdef0123456789abcdef", "secret": "0123456789abcdef0123456789abcdef"},
-    {"name": "64 hex run", "input": "digest 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08 ok", "secret": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"},
-    {"name": "lan address in text", "input": "tuner unreachable at 10.20.30.40:5004", "secret": "10.20.30.40"},
-    {"name": "public address in text", "input": "dns says 203.0.113.77 for the host", "secret": "203.0.113.77"},
-    {"name": "public host url in text", "input": "calling https://plex.example.net:8443/status", "secret": "plex.example.net"}
-  ],
-  "must_survive": [
-    "Murder, She Wrote",
-    "Green Bay Packers",
-    "Sunday Night Football",
-    "Pass: Thursday Night Games",
-    "version 1.5.33",
-    "recorded at 12:30:45",
-    "grab id 4821",
-    "airing a7f3",
-    "tuner reported 3 of 4 busy",
-    "Law & Order: Special Victims Unit"
-  ]
+ "secrets": [
+  {
+   "name": "plex token in url query",
+   "input": "GET http://192.168.1.20:32400/library/sections?X-Plex-Token=Xk3j9Qm2LpR7vT4wYz8N failed",
+   "secret": "Xk3j9Qm2LpR7vT4wYz8N"
+  },
+  {
+   "name": "plex token in header line",
+   "input": "X-Plex-Token: Qw8e3Rt6Yu1Io4Pa7Sd2",
+   "secret": "Qw8e3Rt6Yu1Io4Pa7Sd2"
+  },
+  {
+   "name": "plex token bare in a log line",
+   "input": "sync used token Zx9Cv3Bn7Ml1Kj5Hg2Fd for the call",
+   "secret": "Zx9Cv3Bn7Ml1Kj5Hg2Fd"
+  },
+  {
+   "name": "device key",
+   "input": "registered device a1B2c3D4e5F6g7H8i9J0k1L2m3N4",
+   "secret": "a1B2c3D4e5F6g7H8i9J0k1L2m3N4"
+  },
+  {
+   "name": "bearer header",
+   "input": "Authorization: Bearer abcDEF123ghiJKL456mnoPQR",
+   "secret": "abcDEF123ghiJKL456mnoPQR"
+  },
+  {
+   "name": "bearer without header name",
+   "input": "sent Bearer shortTok9 upstream",
+   "secret": "shortTok9"
+  },
+  {
+   "name": "jwt",
+   "input": "session eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0In0.c2lnbmF0dXJl end",
+   "secret": "eyJhbGciOiJIUzI1NiJ9"
+  },
+  {
+   "name": "pem private key",
+   "input": "tls load failed\n-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSj\nAbCdEfGhIjKlMnOpQrStUvWxYz0123456789\n-----END PRIVATE KEY-----\nretrying",
+   "secret": "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSj"
+  },
+  {
+   "name": "pem ec private key",
+   "input": "-----BEGIN EC PRIVATE KEY-----\nZm9vYmFyZm9vYmFy\n-----END EC PRIVATE KEY-----",
+   "secret": "Zm9vYmFyZm9vYmFy"
+  },
+  {
+   "name": "acme account key json",
+   "input": "{\"kty\":\"EC\",\"crv\":\"P-256\",\"x\":\"f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU\",\"y\":\"x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0\",\"d\":\"jpsQnnGQmL-YBIffH1136cspYG6-0iY7X1fCE9-E9LI\"}",
+   "secret": "jpsQnnGQmL-YBIffH1136cspYG6-0iY7X1fCE9-E9LI"
+  },
+  {
+   "name": "acme key no digits in d",
+   "input": "{\"kty\":\"EC\",\"d\":\"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ\"}",
+   "secret": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ"
+  },
+  {
+   "name": "userinfo in url",
+   "input": "fetch https://user:hunter2@example.net/x",
+   "secret": "hunter2"
+  },
+  {
+   "name": "password equals",
+   "input": "login with password=hunter2 now",
+   "secret": "hunter2"
+  },
+  {
+   "name": "password json",
+   "input": "{\"password\": \"hunter2\", \"user\": \"bob\"}",
+   "secret": "hunter2"
+  },
+  {
+   "name": "api key colon",
+   "input": "api_key: sk-test-notreal",
+   "secret": "sk-test-notreal"
+  },
+  {
+   "name": "setting dump line",
+   "input": "settings: plex_url=http://10.0.0.5:32400 plex_token=Mn4Bv7Cx1Zl9Kj3Hg6Fd tmdb_key=0123456789abcdef0123456789abcdef",
+   "secret": "Mn4Bv7Cx1Zl9Kj3Hg6Fd"
+  },
+  {
+   "name": "setting dump tmdb key",
+   "input": "tmdb_key=0123456789abcdef0123456789abcdef",
+   "secret": "0123456789abcdef0123456789abcdef"
+  },
+  {
+   "name": "64 hex run",
+   "input": "digest 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08 ok",
+   "secret": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+  },
+  {
+   "name": "lan address in text",
+   "input": "tuner unreachable at 10.20.30.40:5004",
+   "secret": "10.20.30.40"
+  },
+  {
+   "name": "public address in text",
+   "input": "dns says 203.0.113.77 for the host",
+   "secret": "203.0.113.77"
+  },
+  {
+   "name": "public host url in text",
+   "input": "calling https://plex.example.net:8443/status",
+   "secret": "plex.example.net"
+  },
+  {
+   "name": "no digit token after word",
+   "input": "token Zx_cVbNmLkJhGfDsAqWe used",
+   "secret": "Zx_cVbNmLkJhGfDsAqWe"
+  },
+  {
+   "name": "no digit token bare in sync line",
+   "input": "sync used QwErTyUiOpAsDfGhJkLz ok",
+   "secret": "QwErTyUiOpAsDfGhJkLz",
+   "known": true
+  },
+  {
+   "name": "truncated pem",
+   "input": "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkq+hkiG9w0BAQEF/AASCBKcwg+gSj\nAbCdEf",
+   "secret": "AbCdEf"
+  },
+  {
+   "name": "bare host port",
+   "input": "Cannot connect to host plex.home.lan:32400 ssl:default",
+   "secret": "plex.home.lan"
+  },
+  {
+   "name": "local name",
+   "input": "resolving mediabox.local failed",
+   "secret": "mediabox"
+  },
+  {
+   "name": "single label host port",
+   "input": "connect to nasbox:32400 refused",
+   "secret": "nasbox"
+  },
+  {
+   "name": "ipv6 private",
+   "input": "tuner at fd00::1234 down",
+   "secret": "fd00::1234"
+  },
+  {
+   "name": "ipv6 link local zone",
+   "input": "iface fe80::1%eth0 up",
+   "secret": "fe80::1"
+  },
+  {
+   "name": "ipv6 bracket port",
+   "input": "tuner at [fd00::1234]:5004 down",
+   "secret": "fd00::1234"
+  },
+  {
+   "name": "ipv6 public",
+   "input": "reply from 2001:db8::77 late",
+   "secret": "2001:db8::77"
+  },
+  {
+   "name": "malformed url",
+   "input": "x http://[bad.example.net y",
+   "secret": "bad.example.net"
+  },
+  {
+   "name": "quoted password with spaces",
+   "input": "{\"password\": \"hunter 2 x\"}",
+   "secret": "hunter 2 x"
+  },
+  {
+   "name": "password with comma and semicolon",
+   "input": "password=ab,cdef;gh",
+   "secret": "cdef;gh"
+  },
+  {
+   "name": "slash in password",
+   "input": "https://user:pa/ss@plex.example.net/x",
+   "secret": "plex.example.net"
+  },
+  {
+   "name": "slash in password tail",
+   "input": "https://user:pa/ss@plex.example.net/x",
+   "secret": "ss@"
+  },
+  {
+   "name": "camel case key",
+   "input": "\"accessToken\": \"abcdefghijklmnopqrstuvwx\"",
+   "secret": "abcdefghijklmnopqrstuvwx"
+  },
+  {
+   "name": "client secret camel",
+   "input": "clientSecret=zzzzzzzzzzzzzzzz",
+   "secret": "zzzzzzzzzzzzzzzz"
+  },
+  {
+   "name": "stream pass path",
+   "input": "GET /hlsk/12.1795000000.0123456789abcdef0123456789abcdef/x.m3u8",
+   "secret": "0123456789abcdef0123456789abcdef"
+  }
+ ],
+ "must_survive": [
+  "Murder, She Wrote",
+  "Green Bay Packers",
+  "Sunday Night Football",
+  "Pass: Thursday Night Games",
+  "version 1.5.33",
+  "recorded at 12:30:45",
+  "grab id 4821",
+  "airing a7f3",
+  "tuner reported 3 of 4 busy",
+  "Law & Order: Special Victims Unit",
+  "File app.py:123 line failed",
+  "status:500 returned",
+  "at 12:30:45 and 1.5.33",
+  "std::string was empty"
+ ]
 }
