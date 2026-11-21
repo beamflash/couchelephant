@@ -289,6 +289,11 @@ class State:
         self.scans = []         # (section, path) of every scan asked for
         self.library = {}       # file name -> ratingKey, as of the last scan
         self.scan_blind = False
+        # Shows Plex already has: key -> {"title", "eps": [{ratingKey, title,
+        # parentIndex, index, files}]}. A scanned file named SxxEyy joins the
+        # episode with that number as another Part, as the real Plex does,
+        # and that episode keeps its old addedAt: it is never a new item.
+        self.shows = {}
         self.sections = None    # a test's own library sections, instead of the two below
         self.positions = {}     # ratingKey -> milliseconds
         self.library_deleted = []   # ratingKeys a client asked to delete
@@ -645,9 +650,26 @@ class Handler(BaseHTTPRequestHandler):
             if not STATE.scan_blind:
                 for _dir, _sub, files in os.walk(os.environ["COUCHELEPHANT_LIBRARY"]):
                     for f in files:
-                        if f.endswith(".ts"):
+                        if f.endswith(".ts") and not self._attach(f, _dir):
                             STATE.library.setdefault(f, str(5000 + len(STATE.library)))
             return self._send({})
+
+        if p.startswith("/library/sections/") and p.endswith("/all") and "title" in q:
+            want = q["title"][0].lower()
+            kind = q.get("type", [""])[0]
+            if kind == "2":
+                return self._container(Metadata=[
+                    {"ratingKey": k, "title": v["title"]} for k, v in STATE.shows.items()
+                    if want in v["title"].lower()])
+            return self._container(Metadata=[])
+
+        if p.startswith("/library/metadata/") and p.endswith("/allLeaves"):
+            show = STATE.shows.get(p.split("/")[3], {"eps": []})
+            return self._container(Metadata=[
+                {"ratingKey": e["ratingKey"], "title": e["title"],
+                 "parentIndex": e["parentIndex"], "index": e["index"],
+                 "Media": [{"Part": [{"file": f} for f in e["files"]]}]}
+                for e in show["eps"]])
 
         if p.startswith("/library/sections/") and p.endswith("/all"):
             return self._container(Metadata=[
@@ -660,6 +682,25 @@ class Handler(BaseHTTPRequestHandler):
             return self._send({})
 
         return self._send({"error": "not found"}, 404)
+
+    def _attach(self, name, folder) -> bool:
+        """Join a scanned file to the existing episode it is numbered as."""
+        import re
+        m = re.search(r"S(\d+)E(\d+)", name)
+        if not m:
+            return False
+        for show in STATE.shows.values():
+            if not name.lower().startswith(show["title"].lower()):
+                continue
+            for e in show["eps"]:
+                if (e["parentIndex"], e["index"]) == (int(m[1]), int(m[2])):
+                    rel = os.path.relpath(os.path.join(folder, name),
+                                          os.environ["COUCHELEPHANT_LIBRARY"])
+                    path = "/media/video/" + rel
+                    if path not in e["files"]:
+                        e["files"].append(path)
+                    return True
+        return False
 
     def do_POST(self):
         STATE.seen_urls.append(self.path)

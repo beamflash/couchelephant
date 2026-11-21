@@ -347,23 +347,62 @@ class Plex:
             raise PlexError(f"scan of library {section} -> HTTP {r.status_code}",
                             r.status_code)
 
-    def find_file(self, section: str, type_: int, name: str) -> dict | None:
-        """The newest library item whose file has this name, or None.
+    def find_file(self, section: str, type_: int, name: str,
+                  title: str | None = None) -> dict | None:
+        """The library item whose file has this name, or None.
 
-        Asked of the newest items rather than by a file filter, because the
-        filter is not one Plex documents and a recording handed over a minute
-        ago is always among the newest.
+        The newest items are asked first, because a recording handed over a
+        minute ago is usually among them. But Plex attaches a file to an
+        episode it already has as a second Part, and that episode is old, so
+        with `title` (the show, or the movie) it falls back to that title's
+        own items.
         """
         items = self._get(f"/library/sections/{section}/all", {
             "type": type_, "sort": "addedAt:desc",
             "X-Plex-Container-Start": 0, "X-Plex-Container-Size": 60,
         }).get("Metadata", []) or []
         for m in items:
-            for media in m.get("Media") or []:
-                for part in media.get("Part") or []:
-                    if (part.get("file") or "").rsplit("/", 1)[-1] == name:
-                        return m
+            if _has_file(m, name):
+                return m
+        if not title:
+            return None
+        if type_ == 1:
+            for m in self._by_title(section, 1, title):
+                if _has_file(m, name):
+                    return m
+            return None
+        for show in self._by_title(section, 2, title):
+            for ep in self.show_leaves(show.get("ratingKey")):
+                if _has_file(ep, name):
+                    return ep
         return None
+
+    def _by_title(self, section: str, type_: int, title: str) -> list[dict]:
+        """Items of this type whose title is exactly this one (Plex's own
+        filter is a substring match)."""
+        got = self._get(f"/library/sections/{section}/all",
+                        {"type": type_, "title": title}).get("Metadata", []) or []
+        return [m for m in got if norm_title(m.get("title")) == norm_title(title)]
+
+    def show_leaves(self, key) -> list[dict]:
+        """Every episode of a show, with its files."""
+        return self._get(f"/library/metadata/{key}/allLeaves").get("Metadata", []) or []
+
+    def episode_numbering(self, section: str, show: str, title: str):
+        """(season, episode) Plex gives the episode of this show with this
+        title, or None when the show is not there or the title is not one
+        episode's alone."""
+        want = norm_title(title)
+        if not want or want == norm_title(show):
+            return None
+        found = []
+        for s_ in self._by_title(section, 2, show):
+            for ep in self.show_leaves(s_.get("ratingKey")):
+                if (norm_title(ep.get("title")) == want
+                        and ep.get("parentIndex") is not None
+                        and ep.get("index") is not None):
+                    found.append((int(ep["parentIndex"]), int(ep["index"])))
+        return found[0] if len(set(found)) == 1 else None
 
     def delete_item(self, rating_key: str) -> None:
         """Remove a library item, and its file where Plex is allowed to."""
@@ -379,6 +418,19 @@ class Plex:
             "time": int(seconds * 1000), "state": "stopped"})
         if r.status_code >= 400:
             raise PlexError(f"set position -> HTTP {r.status_code}", r.status_code)
+
+
+def norm_title(t) -> str:
+    """A title with case and punctuation taken out, to compare two spellings."""
+    return "".join(ch for ch in (t or "").lower() if ch.isalnum())
+
+
+def _has_file(item: dict, name: str) -> bool:
+    for media in item.get("Media") or []:
+        for part in media.get("Part") or []:
+            if (part.get("file") or "").rsplit("/", 1)[-1] == name:
+                return True
+    return False
 
 
 def discover(plex: Plex) -> tuple[str, str | None, str | None, str | None]:

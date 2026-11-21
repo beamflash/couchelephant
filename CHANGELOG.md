@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.5.32 - 2026-11-21
+
+### Fixed
+
+- **A recording Plex attached to an existing episode no longer loops in
+  "moving".** Plex adds our file as another Part of an episode it already has,
+  and that episode is old, so it was never among the newest items the handover
+  looked at. The handover now also looks through the show's own episodes (and
+  the movie's own entry) by exact title.
+- **The episode number follows Plex.** The guide can number an episode one off
+  Plex's. Before copying, the handover asks Plex for the episode with the same
+  title and uses Plex's season and episode in the file name, and the season
+  folder the show already has ("Season 1", not a new "Season 01"). A file
+  already put under the wrong number is moved to the right place (our own file
+  only) and scanned again.
+
 ## 1.5.31 - 2026-11-21
 
 ### Added

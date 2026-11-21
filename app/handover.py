@@ -104,8 +104,28 @@ def _existing(root: str, show: str) -> str:
     return show
 
 
-def relative_path(rec, root: str | None = None) -> str:
-    """Where the file goes, under the TV or movies folder."""
+def _season_folder(root: str, show_folder: str, n: int) -> str:
+    """The season folder the show already has on disk ("Season 1" as well as
+    "Season 01"), or the plain two digit name. With both, the one with more in
+    it, which is the one Plex is reading."""
+    best, size = None, -1
+    try:
+        for name in sorted(os.listdir(os.path.join(root, show_folder)), reverse=True):
+            path = os.path.join(root, show_folder, name)
+            if re.fullmatch(rf"season 0*{n}", name.lower()) and os.path.isdir(path):
+                count = len(os.listdir(path))
+                if count > size:   # a tie goes to "Season 1" over "Season 01"
+                    best, size = name, count
+    except OSError:
+        pass
+    return best or f"Season {n:02d}"
+
+
+def relative_path(rec, root: str | None = None, number=None) -> str:
+    """Where the file goes, under the TV or movies folder.
+
+    `number` is (season, episode) as Plex numbers it, when that is known and
+    differs from the guide's."""
     title = clean(rec["title"])
     if rec["ptype"] == "movie":
         name = f"{title} ({rec['year']})" if rec["year"] else title
@@ -113,8 +133,9 @@ def relative_path(rec, root: str | None = None) -> str:
     show = clean(rec["show_title"] or rec["title"])
     folder = _existing(root, show) if root else show
     if rec["season"] is not None and rec["episode"] is not None:
-        season = f"Season {int(rec['season']):02d}"
-        name = f"{folder} - S{int(rec['season']):02d}E{int(rec['episode']):02d}"
+        sn, ep = number or (int(rec["season"]), int(rec["episode"]))
+        season = _season_folder(root, folder, sn) if root else f"Season {sn:02d}"
+        name = f"{folder} - S{sn:02d}E{ep:02d}"
     else:
         # Sport, news, anything the guide gives no number: by the day it aired.
         day = datetime.datetime.fromtimestamp(rec["begins_at"], _zone())
@@ -185,10 +206,36 @@ def hand_over(rec) -> None:
     src = recorder.broadcast_path(rec["uid"])
     if not os.path.exists(src):
         raise HandoverError("The recorded file is missing.")
-    rel = rec["plex_path"] and os.path.relpath(rec["plex_path"], root)
-    if not rel or rel.startswith(".."):
-        rel = relative_path(rec, root)
+    # Ask Plex how it numbers this episode: the guide is sometimes one off.
+    number = None
+    if k == "shows" and rec["season"] is not None and rec["episode"] is not None:
+        try:
+            with Plex(db.get_setting("plex_url"), db.get_setting("plex_token")) as plex:
+                number = plex.episode_numbering(section, rec["show_title"] or rec["title"],
+                                                rec["title"])
+        except Exception:  # noqa: BLE001
+            number = None           # Plex not answering is not a reason to stop
+    old = rec["plex_path"]
+    old_rel = old and os.path.relpath(old, root)
+    if old_rel and old_rel.startswith(".."):
+        old_rel = None
+    if old_rel and number is None:
+        rel = old_rel               # the same place as the last attempt
+    else:
+        rel = relative_path(rec, root, number)
     dest = os.path.join(root, rel)
+    moved_from = None
+    if old_rel and os.path.join(root, old_rel) != dest:
+        # Put under the wrong number before. Move our own file, no other.
+        prev = os.path.join(root, old_rel)
+        if prev.endswith(".ts") and os.path.isfile(prev) and not os.path.exists(dest):
+            _make_folders(os.path.dirname(dest))
+            os.replace(prev, dest)
+            moved_from = os.path.dirname(old_rel)
+            try:
+                os.rmdir(os.path.dirname(prev))
+            except OSError:
+                pass
     recorder._set(rec["id"], state="moving", plex_path=dest, error=None)
     try:
         _copy(src, dest)
@@ -198,11 +245,15 @@ def hand_over(rec) -> None:
     try:
         with Plex(db.get_setting("plex_url"), db.get_setting("plex_token")) as plex:
             plex.scan(section, _plex_folder(plex, section, os.path.dirname(rel)))
+            if moved_from:
+                plex.scan(section, _plex_folder(plex, section, moved_from))
             item = None
             deadline = time.time() + SCAN_WAIT_SECONDS
             while item is None:
                 item = plex.find_file(section, 1 if k == "movies" else 4,
-                                      os.path.basename(dest))
+                                      os.path.basename(dest),
+                                      title=(rec["show_title"] or rec["title"])
+                                      if k == "shows" else rec["title"])
                 if item is None:
                     if time.time() >= deadline:
                         raise HandoverError(
