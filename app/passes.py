@@ -497,27 +497,48 @@ def count_upcoming(pass_id: int) -> int:
     return len(recs) + len(grabs)
 
 
+class CancelFailed(Exception):
+    """Plex stopped answering part way. `done` is how many were cancelled."""
+    def __init__(self, message, done=0):
+        super().__init__(message)
+        self.done = done
+
+
 def cancel_upcoming(pass_id: int) -> int:
     """Cancel what this pass booked and has not started. Answers how many.
 
-    Plex's bookings go first: that is the part that can fail, and a failure
-    must leave everything as it was. Works after the pass is gone too, which
-    is what cancelling a lost pass's bookings is.
+    Plex is asked first whether it is there at all, so a down Plex changes
+    nothing. If it fails part way, CancelFailed says how many had gone.
+    Works after the pass is gone too, which is what cancelling a lost pass's
+    bookings is.
     """
     recs, grabs = _upcoming(pass_id)
+    done = 0
     if grabs:
-        with Plex(db.get_setting("plex_url"), db.get_setting("plex_token")) as plex:
-            for g in grabs:
-                key = g["subscription"] or plex.find_subscription(
-                    g["program_guid"], g["begins_at"])
-                if key:
-                    plex.delete_subscription(key)
-                forget(g["airing_id"])
-            from . import sync  # sync imports this module
-            sync.sync_recordings(plex)
+        try:
+            with Plex(db.get_setting("plex_url"), db.get_setting("plex_token")) as plex:
+                plex.server_info()
+                for g in grabs:
+                    # Only a key we stored. Looking one up by game and start
+                    # can find a recurring rule, and deleting that removes the
+                    # whole rule from Plex.
+                    if g["subscription"]:
+                        plex.delete_subscription(g["subscription"])
+                    forget(g["airing_id"])
+                    done += 1
+                from . import sync  # sync imports this module
+                sync.sync_recordings(plex)
+        except CancelFailed:
+            raise
+        except Exception as e:
+            raise CancelFailed(str(e), done) from e
     for r in recs:
-        recorder.cancel(r["id"])
-    return len(recs) + len(grabs)
+        # Asked again: one may have started since the list was made.
+        now = db.one("SELECT state, starts_at FROM recordings WHERE id = ?", (r["id"],))
+        if now and now["state"] == "scheduled" and (now["starts_at"] or 0) > _now():
+            recorder.cancel(r["id"])
+            done += 1
+    return done
 
 
 def orphans() -> list[dict]:
@@ -530,7 +551,7 @@ def orphans() -> list[dict]:
     groups: dict = {}
 
     def grp(pid):
-        return groups.setdefault(pid, {"lost_id": pid, "title": "", "section": "",
+        return groups.setdefault(pid, {"lost_id": pid, "title": "", "shown": "", "sports": False,
                                        "recorder": "plex", "n": 0})
     for r in db.query(
             "SELECT r.* FROM recordings r WHERE r.kind = 'recording' "
@@ -539,8 +560,9 @@ def orphans() -> list[dict]:
         g = grp(r["pass_id"])
         g["n"] += 1
         g["recorder"] = "couchelephant"
-        g["title"] = g["title"] or r["show_title"] or r["title"] or ""
-        g["section"] = g["section"] or r["section"] or ""
+        g["title"] = g["title"] or r["show_title"] or ""
+        g["shown"] = g["shown"] or r["show_title"] or r["title"] or ""
+        g["sports"] = g["sports"] or r["section"] == "sports"
     for o in db.query(
             "SELECT o.*, p.grandparent_title AS show, p.section AS section "
             "FROM our_grabs o LEFT JOIN programs p ON p.guid = o.program_guid "
@@ -548,14 +570,14 @@ def orphans() -> list[dict]:
             + " ORDER BY o.begins_at", (_now() + LEAD_SECONDS,)):
         g = grp(o["pass_id"])
         g["n"] += 1
-        g["title"] = g["title"] or o["show"] or o["title"] or ""
-        g["section"] = g["section"] or o["section"] or ""
+        g["title"] = g["title"] or o["show"] or ""
+        g["shown"] = g["shown"] or o["show"] or o["title"] or ""
+        g["sports"] = g["sports"] or o["section"] == "sports"
     out = []
     for g in groups.values():
-        sports = g["section"] == "sports"
-        out.append({"lost_id": g["lost_id"], "title": g["title"] or "Unknown",
-                    "upcoming": g["n"], "sports": sports, "recorder": g["recorder"],
-                    "can_follow": bool(g["title"]) and not sports})
+        out.append({"lost_id": g["lost_id"], "title": g["title"] or g["shown"] or "Unknown",
+                    "upcoming": g["n"], "sports": g["sports"], "recorder": g["recorder"],
+                    "can_follow": bool(g["title"]) and not g["sports"]})
     out.sort(key=lambda o: o["title"].lower())
     return out
 

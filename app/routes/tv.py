@@ -1268,6 +1268,12 @@ def tv_pass_delete(pass_id: str, who: str = Form("ce"),
     already booked stays, as before."""
     if who == "plex":
         return pass_routes.api_plexrule_delete(pass_id)
+    if pass_id.startswith("lost:") and pass_id[5:].isdigit():
+        # A lost pass's row, deleted the usual way by an older app.
+        if cancel_upcoming in ("1", "true", "yes"):
+            return tv_lost_cancel(int(pass_id[5:]))
+        return {"ok": True, "cancelled": 0, "message": "Nothing changed. Use Cancel all "
+                "or Follow again for a pass that was deleted."}
     if not pass_id.isdigit():
         return JSONResponse({"ok": False, "error": "No such pass."}, status_code=404)
     body, code = pass_routes.delete_pass(int(pass_id),
@@ -1287,8 +1293,11 @@ def tv_lost_cancel(lost_id: int):
     try:
         n = passes.cancel_upcoming(lost_id)
     except Exception as e:
-        return JSONResponse({"ok": False, "error": "Plex could not cancel the "
-                             f"recordings: {e}"}, status_code=502)
+        done = getattr(e, "done", 0)
+        return JSONResponse({"ok": False, "cancelled": done, "error":
+                             "Plex could not cancel the recordings."
+                             + (f" {done} were already cancelled." if done else "")
+                             + f" ({e})"}, status_code=502)
     return {"ok": True, "cancelled": n,
             "message": f"{n} upcoming recording(s) cancelled." if n else "Nothing to cancel."}
 

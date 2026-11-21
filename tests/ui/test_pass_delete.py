@@ -40,7 +40,7 @@ def test_removing_a_season_pass_asks_and_yes_cancels_the_recordings(season):
     text = box.inner_text()
     assert "Delete the Murder, She Wrote season pass?" in text
     assert "Also cancel the 3 upcoming recordings" in text
-    assert "Keep them" in text and "Cancel" in text
+    assert "Keep them" in text and "Never mind" in text
     season.click('#passdel [data-ans="yes"]')
     season.wait_for_selector("#passlist .empty", timeout=15000)
     assert _left() == 0 and db.one("SELECT COUNT(*) c FROM passes")["c"] == 0

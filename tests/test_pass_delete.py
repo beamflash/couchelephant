@@ -148,3 +148,80 @@ def test_a_lost_team_pass_can_be_cancelled_but_not_rebuilt(client, tuner, plex):
     r = client.post(f"/api/tv/passes/lost/{pid}/follow")
     assert r.status_code == 409 and db.one("SELECT COUNT(*) c FROM passes")["c"] == 0
     assert client.post(f"/api/tv/passes/lost/{pid}/cancel").json()["cancelled"] == 2
+
+
+# ---------- review fixes ----------
+
+def test_a_booking_that_started_meanwhile_is_not_cancelled(client, tuner, plex):
+    pid = _series_pass(n=2)
+    first = db.one("SELECT id FROM recordings ORDER BY id")["id"]
+    real = passes._upcoming
+
+    def stale(p):
+        got = real(p)
+        # It starts after the list was made.
+        with db.tx() as c:
+            c.execute("UPDATE recordings SET state = 'recording' WHERE id = ?", (first,))
+        return got
+    passes._upcoming = stale
+    try:
+        assert passes.cancel_upcoming(pid) == 1
+    finally:
+        passes._upcoming = real
+    assert _states() == ["recording"]
+
+
+def test_the_pass_is_paused_while_it_cancels_and_back_if_plex_fails(client, synced, tuner):
+    team = db.one("SELECT id, name FROM teams ORDER BY id LIMIT 1")
+    with db.tx() as c:
+        c.execute("INSERT INTO passes (kind, team_id, team_name, uid, enabled, created_at) "
+                  "VALUES ('team', ?, ?, 'u1', 1, 0)", (team["id"], team["name"]))
+    passes.run_passes()
+    pid = db.one("SELECT id FROM passes")["id"]
+    db.set_setting("plex_url", "http://127.0.0.1:1")
+    assert client.post(f"/api/tv/passes/{pid}/delete", data={"cancel_upcoming": "1"}).status_code == 502
+    assert db.one("SELECT enabled FROM passes")["enabled"] == 1
+
+
+def test_the_pass_is_disabled_before_the_cancelling_starts(client, tuner, plex):
+    pid = _series_pass(n=1)
+    seen = []
+    real = passes.cancel_upcoming
+    from app.routes import passes as pr
+    pr.passes.cancel_upcoming = lambda p: seen.append(
+        db.one("SELECT enabled FROM passes WHERE id = ?", (p,))["enabled"]) or 1
+    try:
+        client.post(f"/api/tv/passes/{pid}/delete", data={"cancel_upcoming": "1"})
+    finally:
+        pr.passes.cancel_upcoming = real
+    assert seen == [0]
+
+
+def test_a_keyless_plex_booking_never_deletes_a_found_rule(client, synced, tuner):
+    team = db.one("SELECT id, name FROM teams ORDER BY id LIMIT 1")
+    with db.tx() as c:
+        c.execute("INSERT INTO passes (kind, team_id, team_name, uid, enabled, created_at) "
+                  "VALUES ('team', ?, ?, 'u1', 1, 0)", (team["id"], team["name"]))
+    passes.run_passes()
+    pid = db.one("SELECT id FROM passes")["id"]
+    with db.tx() as c:
+        c.execute("UPDATE our_grabs SET subscription = NULL")
+    before = dict(fake_plex.STATE.subscriptions)
+    passes.cancel_upcoming(pid)
+    assert fake_plex.STATE.subscriptions == before
+    assert db.one("SELECT COUNT(*) c FROM our_grabs")["c"] == 0
+
+
+def test_a_lost_pass_with_no_show_name_cannot_be_followed(client, tuner, plex):
+    pid = _series_pass(n=2)
+    with db.tx() as c:
+        c.execute("UPDATE recordings SET show_title = NULL, section = NULL")
+    client.post(f"/api/tv/passes/{pid}/delete")
+    lost = client.get("/api/tv/passes/lost").json()["lost"][0]
+    assert lost["can_follow"] is False
+
+
+def test_the_usual_delete_of_a_lost_row_cancels_it(client, tuner, plex):
+    pid = _lost(client, n=2)
+    r = client.post(f"/api/tv/passes/lost:{pid}/delete", data={"cancel_upcoming": "1"}).json()
+    assert r["ok"] and r["cancelled"] == 2 and _states() == []

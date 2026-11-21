@@ -1262,11 +1262,22 @@ def delete_pass(pass_id: int, cancel_upcoming: bool = False):
     """
     cancelled = 0
     if cancel_upcoming:
+        # Paused first, so the sync cannot book the same games again while
+        # they are being cancelled.
+        with db.tx() as c:
+            was = c.execute("SELECT enabled FROM passes WHERE id = ?", (pass_id,)).fetchone()
+            c.execute("UPDATE passes SET enabled = 0 WHERE id = ?", (pass_id,))
         try:
             cancelled = passes.cancel_upcoming(pass_id)
         except Exception as e:
-            return {"ok": False, "error": "Plex could not cancel the recordings, so "
-                    f"nothing was changed: {e}"}, 502
+            if was and was["enabled"]:
+                with db.tx() as c:
+                    c.execute("UPDATE passes SET enabled = 1 WHERE id = ?", (pass_id,))
+            done = getattr(e, "done", 0)
+            left = ("" if not done else f" {done} were already cancelled.")
+            return {"ok": False, "cancelled": done, "error":
+                    f"Plex could not cancel the recordings, so the pass was kept.{left} "
+                    f"({e})"}, 502
     with db.tx() as c:
         c.execute("DELETE FROM passes WHERE id = ?", (pass_id,))
     if cancel_upcoming:

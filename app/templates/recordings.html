@@ -555,7 +555,7 @@ window.passTab = 'sports';
       '<button type="button" class="primary" data-ans="yes">Also cancel the ' + n +
       ' upcoming recording' + (n === 1 ? '' : 's') + '</button>' +
       '<button type="button" data-ans="keep">Keep them</button>' +
-      '<button type="button" data-ans="cancel">Cancel</button></div></div>';
+      '<button type="button" data-ans="cancel">Never mind</button></div></div>';
     document.body.appendChild(d);
     var yes = d.querySelector('[data-ans="yes"]'); yes.focus();
     var close = function () { d.remove(); };
