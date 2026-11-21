@@ -27,11 +27,14 @@ hidden += collect_submodules("zeroconf") + collect_submodules("ifaddr")
 # Let's Encrypt: the acme library reads its message types by name, and josepy
 # registers its JOSE classes on import.
 hidden += collect_submodules("acme") + collect_submodules("josepy")
+# PyNaCl (sealed issue reports) wraps libsodium through cffi.
+hidden += collect_submodules("nacl") + ["_cffi_backend"]
+binaries_nacl = collect_dynamic_libs("nacl")
 
 wanted = ("ffmpeg", "ffprobe", "comskip")
 exe_suffix = ".exe" if sys.platform == "win32" else ""
 binaries = [(str(tools_bin / (n + exe_suffix)), "bin") for n in wanted]
-binaries += collect_dynamic_libs("zeroconf")
+binaries += collect_dynamic_libs("zeroconf") + binaries_nacl
 missing = [src for src, _ in binaries if not Path(src).is_file()]
 if missing:
     raise SystemExit("missing tools, run fetch_tools.py / build_comskip.sh first: " + ", ".join(missing))

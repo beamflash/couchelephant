@@ -23,3 +23,8 @@ def test_version_has_no_side_effects_and_is_shared():
     from app import version
     from app.routes import _shared
     assert _shared.VERSION == version.VERSION
+
+
+def test_nacl_imports():
+    # The spec bundles it, so frozen builds can seal reports.
+    import nacl.public  # noqa: F401

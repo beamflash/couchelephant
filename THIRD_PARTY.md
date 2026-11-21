@@ -79,6 +79,12 @@ The source for the exact build is at the commit above.
 
 ---
 
+## PyNaCl
+
+- **Source:** https://github.com/pyca/pynacl
+- **Licence:** Apache-2.0. It bundles libsodium, licensed ISC.
+- **Use:** sealed boxes for issue reports (`app/sealing.py`).
+
 ## Programs bundled in the installers
 
 The Windows, macOS and Linux installers carry three programs, each run as a
