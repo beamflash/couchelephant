@@ -1294,12 +1294,16 @@ def tv_lost_cancel(lost_id: int):
         n = passes.cancel_upcoming(lost_id)
     except Exception as e:
         done = getattr(e, "done", 0)
+        what = ("A recording could not be cancelled" if getattr(e, "where", "") == "recorder"
+                else "Plex could not cancel the recordings")
         return JSONResponse({"ok": False, "cancelled": done, "error":
-                             "Plex could not cancel the recordings."
-                             + (f" {done} were already cancelled." if done else "")
+                             what + "." + (f" {done} were already cancelled." if done else "")
                              + f" ({e})"}, status_code=502)
-    return {"ok": True, "cancelled": n,
-            "message": f"{n} upcoming recording(s) cancelled." if n else "Nothing to cancel."}
+    left = passes.keyless(lost_id)
+    msg = f"{n} upcoming recording(s) cancelled." if n else "Nothing to cancel."
+    if left:
+        msg += f" {left} booking(s) in Plex have to be removed in Plex itself."
+    return {"ok": True, "cancelled": n, "message": msg}
 
 
 @router.post("/api/tv/passes/lost/{lost_id}/follow")

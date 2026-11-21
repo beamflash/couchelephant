@@ -554,6 +554,18 @@ def cancel(rec_id: int) -> None:
         c.execute("DELETE FROM recordings WHERE id = ?", (rec_id,))
 
 
+def cancel_if_waiting(rec_id: int) -> bool:
+    """Cancel it only if it has not started, checked and done under the lock
+    that starting takes. Answers whether it was cancelled."""
+    with _lock:
+        rec = get(rec_id)
+        if (not rec or rec["state"] != "scheduled" or rec_id in _jobs
+                or (rec["starts_at"] or 0) <= int(time.time())):
+            return False
+        cancel(rec_id)
+        return True
+
+
 # ---------- live viewing ----------
 
 def recording_on(vcn: str):

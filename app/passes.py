@@ -15,6 +15,7 @@ Selection order for a game:
   2. Prefer an airing flagged `premiere` (the live broadcast).
   3. Among equals, take the earliest start.
 """
+import threading
 import time
 
 from . import db, expectations, recorder, smartfilter, teamcat
@@ -22,6 +23,11 @@ from .plex import Plex, PlexError
 
 # Give a game this much slack before treating it as too late to schedule.
 LEAD_SECONDS = 120
+
+
+# Taken by a booking and by a pass being deleted, so a delete cannot land in the
+# middle of a booking and leave one behind.
+PASS_LOCK = threading.RLock()
 
 
 def _now():
@@ -460,11 +466,11 @@ def rehome(p, plex) -> int:
     if pass_recorder(p) == "couchelephant":
         for g in db.query("SELECT * FROM our_grabs WHERE pass_id = ? AND begins_at > ?",
                           (p["id"], now + LEAD_SECONDS)):
-            key = g["subscription"]
-            if not key:
-                key = plex.find_subscription(g["program_guid"], g["begins_at"])
-            if key:
-                plex.delete_subscription(key)
+            # Only a key we stored. One looked up by game and start can be a
+            # recurring rule, and deleting that removes the whole rule.
+            if not g["subscription"]:
+                continue
+            plex.delete_subscription(g["subscription"])
             forget(g["airing_id"])
             moved += 1
     else:
@@ -482,62 +488,81 @@ def _gone_pass(col_id: str, col_uid: str, alias: str) -> str:
 
 
 def _upcoming(pass_id: int):
-    """(our recordings, Plex bookings) of this pass that have not started."""
+    """What of this pass has not started: (our recordings, Plex bookings we
+    can cancel, Plex bookings with no stored key, which only Plex can drop)."""
+    now = _now()
     recs = db.query("SELECT * FROM recordings WHERE pass_id = ? AND kind = 'recording' "
-                    "AND state = 'scheduled'", (pass_id,))
+                    "AND state = 'scheduled' AND starts_at > ?", (pass_id, now))
     grabs = db.query("SELECT * FROM our_grabs WHERE pass_id = ? AND begins_at > ?",
-                     (pass_id, _now() + LEAD_SECONDS))
-    return recs, grabs
+                     (pass_id, now + LEAD_SECONDS))
+    keyed = [g for g in grabs if g["subscription"]]
+    return recs, keyed, [g for g in grabs if not g["subscription"]]
+
+
+def keyless(pass_id: int) -> int:
+    """Plex bookings of this pass we cannot cancel, for lack of a stored key."""
+    return len(_upcoming(pass_id)[2])
 
 
 def count_upcoming(pass_id: int) -> int:
-    """How many bookings of this pass are still ahead. Recording now, finished
-    and in Plex ones are not counted: they are never cancelled with a pass."""
-    recs, grabs = _upcoming(pass_id)
-    return len(recs) + len(grabs)
+    """How many bookings of this pass a delete would cancel. Recording now,
+    finished and in Plex ones are never cancelled with a pass."""
+    recs, keyed, _ = _upcoming(pass_id)
+    return len(recs) + len(keyed)
 
 
 class CancelFailed(Exception):
-    """Plex stopped answering part way. `done` is how many were cancelled."""
-    def __init__(self, message, done=0):
+    """Cancelling stopped part way. `done` is how many were cancelled, and
+    `where` is "plex" or "recorder", whichever failed."""
+    def __init__(self, message, done=0, where="plex"):
         super().__init__(message)
         self.done = done
+        self.where = where
 
 
 def cancel_upcoming(pass_id: int) -> int:
     """Cancel what this pass booked and has not started. Answers how many.
 
     Plex is asked first whether it is there at all, so a down Plex changes
-    nothing. If it fails part way, CancelFailed says how many had gone.
-    Works after the pass is gone too, which is what cancelling a lost pass's
-    bookings is.
+    nothing. If it fails part way, CancelFailed says how many had gone. A
+    Plex booking with no stored key is left alone and linked: only Plex can
+    drop it, and `keyless` says how many. Works after the pass is gone too,
+    which is what cancelling a lost pass's bookings is.
     """
-    recs, grabs = _upcoming(pass_id)
-    done = 0
+    recs, grabs, _ = _upcoming(pass_id)
+    done, failure = 0, None
     if grabs:
         try:
             with Plex(db.get_setting("plex_url"), db.get_setting("plex_token")) as plex:
-                plex.server_info()
-                for g in grabs:
-                    # Only a key we stored. Looking one up by game and start
-                    # can find a recurring rule, and deleting that removes the
-                    # whole rule from Plex.
-                    if g["subscription"]:
-                        plex.delete_subscription(g["subscription"])
-                    forget(g["airing_id"])
-                    done += 1
-                from . import sync  # sync imports this module
-                sync.sync_recordings(plex)
-        except CancelFailed:
-            raise
-        except Exception as e:
-            raise CancelFailed(str(e), done) from e
+                try:
+                    plex.server_info()
+                    for g in grabs:
+                        # Asked again: it may be gone or about to start.
+                        now = db.one("SELECT * FROM our_grabs WHERE airing_id = ?",
+                                     (g["airing_id"],))
+                        if (not now or not now["subscription"]
+                                or now["begins_at"] <= _now() + LEAD_SECONDS):
+                            continue
+                        plex.delete_subscription(now["subscription"])
+                        forget(g["airing_id"])
+                        done += 1
+                except Exception as e:  # noqa: BLE001
+                    failure = CancelFailed(str(e), done, "plex")
+                try:
+                    from . import sync  # sync imports this module
+                    sync.sync_recordings(plex)
+                except Exception:  # noqa: BLE001
+                    pass
+        except Exception as e:  # noqa: BLE001
+            failure = failure or CancelFailed(str(e), done, "plex")
+        if failure:
+            raise failure
     for r in recs:
-        # Asked again: one may have started since the list was made.
-        now = db.one("SELECT state, starts_at FROM recordings WHERE id = ?", (r["id"],))
-        if now and now["state"] == "scheduled" and (now["starts_at"] or 0) > _now():
-            recorder.cancel(r["id"])
-            done += 1
+        try:
+            if recorder.cancel_if_waiting(r["id"]):
+                done += 1
+        except Exception as e:  # noqa: BLE001
+            raise CancelFailed(str(e), done, "recorder") from e
     return done
 
 
@@ -555,7 +580,8 @@ def orphans() -> list[dict]:
                                        "recorder": "plex", "n": 0})
     for r in db.query(
             "SELECT r.* FROM recordings r WHERE r.kind = 'recording' "
-            "AND r.state = 'scheduled' AND " + _gone_pass("pass_id", "pass_uid", "r")
+            "AND r.state = 'scheduled' AND r.starts_at > " + str(_now()) + " AND "
+            + _gone_pass("pass_id", "pass_uid", "r")
             + " ORDER BY r.begins_at"):
         g = grp(r["pass_id"])
         g["n"] += 1
@@ -765,7 +791,13 @@ def _evaluate(rows, plex, dry, results):
                                 "channel": pick["channel_vcn"], "begins_at": pick["begins_at"]})
                 continue
             try:
-                _book(plex, p, pick)
+                with PASS_LOCK:
+                    # Deleted or paused since this run began: book nothing.
+                    live = db.one("SELECT 1 FROM passes WHERE id = ? AND enabled = 1",
+                                  (p["id"],))
+                    if not live:
+                        continue
+                    _book(plex, p, pick)
                 _log(p["id"], pick, "scheduled", reason, False)
                 results.append({"pass": label, "game": pick["title"],
                                 "action": "scheduled", "reason": reason,

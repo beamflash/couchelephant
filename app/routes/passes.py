@@ -1264,25 +1264,37 @@ def delete_pass(pass_id: int, cancel_upcoming: bool = False):
     if cancel_upcoming:
         # Paused first, so the sync cannot book the same games again while
         # they are being cancelled.
-        with db.tx() as c:
-            was = c.execute("SELECT enabled FROM passes WHERE id = ?", (pass_id,)).fetchone()
-            c.execute("UPDATE passes SET enabled = 0 WHERE id = ?", (pass_id,))
+        with passes.PASS_LOCK:
+            with db.tx() as c:
+                was = c.execute("SELECT enabled FROM passes WHERE id = ?",
+                                (pass_id,)).fetchone()
+                c.execute("UPDATE passes SET enabled = 0 WHERE id = ?", (pass_id,))
         try:
             cancelled = passes.cancel_upcoming(pass_id)
         except Exception as e:
-            if was and was["enabled"]:
-                with db.tx() as c:
-                    c.execute("UPDATE passes SET enabled = 1 WHERE id = ?", (pass_id,))
             done = getattr(e, "done", 0)
-            left = ("" if not done else f" {done} were already cancelled.")
-            return {"ok": False, "cancelled": done, "error":
-                    f"Plex could not cancel the recordings, so the pass was kept.{left} "
-                    f"({e})"}, 502
-    with db.tx() as c:
-        c.execute("DELETE FROM passes WHERE id = ?", (pass_id,))
+            what = ("A recording could not be cancelled" if getattr(e, "where", "") == "recorder"
+                    else "Plex could not cancel the recordings")
+            if done:
+                # What went is not booked again by a pass that is still on.
+                note = (f" {done} were already cancelled. The pass is paused so "
+                        "they are not booked again.")
+            else:
+                note = " The pass was kept."
+                if was and was["enabled"]:
+                    with db.tx() as c:
+                        c.execute("UPDATE passes SET enabled = 1 WHERE id = ?", (pass_id,))
+            return {"ok": False, "cancelled": done, "error": f"{what}.{note} ({e})"}, 502
+    with passes.PASS_LOCK:
+        with db.tx() as c:
+            c.execute("DELETE FROM passes WHERE id = ?", (pass_id,))
     if cancel_upcoming:
         msg = (f"Removed. {cancelled} upcoming recording(s) cancelled." if cancelled
                else "Removed.")
+        left = passes.keyless(pass_id)
+        if left:
+            msg += (f" {left} booking(s) in Plex have to be removed in Plex itself; "
+                    "they stay under the lost pass.")
     else:
         msg = ("No longer following. What is already set to record stays, and can "
                "be managed under its lost pass.")
