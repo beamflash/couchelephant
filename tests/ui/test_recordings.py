@@ -136,8 +136,11 @@ def test_removing_a_pass_empties_the_list(page):
     page.click('.subtab[data-sub="sports"]')
     page.wait_for_selector(".passrow", timeout=15000)
     page.click('.passrow [data-act="remove"]')
-    # The game it booked is still ahead, so deleting asks about it.
-    page.click('#passdel [data-ans="yes"]')
+    # Once the game it books is ahead, deleting asks about it. The booking can
+    # still be on its way, and then there is no question.
+    page.wait_for_selector('#passdel [data-ans="yes"], #passlist .empty', timeout=15000)
+    if page.locator('#passdel [data-ans="yes"]').is_visible():
+        page.click('#passdel [data-ans="yes"]')
     page.wait_for_selector("#passlist .empty", timeout=15000)
 
 
