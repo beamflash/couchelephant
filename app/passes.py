@@ -475,6 +475,91 @@ def rehome(p, plex) -> int:
     return moved
 
 
+def _gone_pass(col_id: str, col_uid: str, alias: str) -> str:
+    """SQL: this row names a pass that no longer exists."""
+    return (f"{alias}.{col_id} IS NOT NULL AND NOT EXISTS (SELECT 1 FROM passes x "
+            f"WHERE x.id = {alias}.{col_id} OR (x.uid IS NOT NULL AND x.uid = {alias}.{col_uid}))")
+
+
+def _upcoming(pass_id: int):
+    """(our recordings, Plex bookings) of this pass that have not started."""
+    recs = db.query("SELECT * FROM recordings WHERE pass_id = ? AND kind = 'recording' "
+                    "AND state = 'scheduled'", (pass_id,))
+    grabs = db.query("SELECT * FROM our_grabs WHERE pass_id = ? AND begins_at > ?",
+                     (pass_id, _now() + LEAD_SECONDS))
+    return recs, grabs
+
+
+def count_upcoming(pass_id: int) -> int:
+    """How many bookings of this pass are still ahead. Recording now, finished
+    and in Plex ones are not counted: they are never cancelled with a pass."""
+    recs, grabs = _upcoming(pass_id)
+    return len(recs) + len(grabs)
+
+
+def cancel_upcoming(pass_id: int) -> int:
+    """Cancel what this pass booked and has not started. Answers how many.
+
+    Plex's bookings go first: that is the part that can fail, and a failure
+    must leave everything as it was. Works after the pass is gone too, which
+    is what cancelling a lost pass's bookings is.
+    """
+    recs, grabs = _upcoming(pass_id)
+    if grabs:
+        with Plex(db.get_setting("plex_url"), db.get_setting("plex_token")) as plex:
+            for g in grabs:
+                key = g["subscription"] or plex.find_subscription(
+                    g["program_guid"], g["begins_at"])
+                if key:
+                    plex.delete_subscription(key)
+                forget(g["airing_id"])
+            from . import sync  # sync imports this module
+            sync.sync_recordings(plex)
+    for r in recs:
+        recorder.cancel(r["id"])
+    return len(recs) + len(grabs)
+
+
+def orphans() -> list[dict]:
+    """Bookings of passes that were deleted, one entry per lost pass.
+
+    Each has the show it was following, how many are still ahead, and whether
+    a pass can be made again from what the bookings hold: only a series whose
+    name they carry. A team pass cannot be rebuilt from its games.
+    """
+    groups: dict = {}
+
+    def grp(pid):
+        return groups.setdefault(pid, {"lost_id": pid, "title": "", "section": "",
+                                       "recorder": "plex", "n": 0})
+    for r in db.query(
+            "SELECT r.* FROM recordings r WHERE r.kind = 'recording' "
+            "AND r.state = 'scheduled' AND " + _gone_pass("pass_id", "pass_uid", "r")
+            + " ORDER BY r.begins_at"):
+        g = grp(r["pass_id"])
+        g["n"] += 1
+        g["recorder"] = "couchelephant"
+        g["title"] = g["title"] or r["show_title"] or r["title"] or ""
+        g["section"] = g["section"] or r["section"] or ""
+    for o in db.query(
+            "SELECT o.*, p.grandparent_title AS show, p.section AS section "
+            "FROM our_grabs o LEFT JOIN programs p ON p.guid = o.program_guid "
+            "WHERE o.begins_at > ? AND " + _gone_pass("pass_id", "pass_uid", "o")
+            + " ORDER BY o.begins_at", (_now() + LEAD_SECONDS,)):
+        g = grp(o["pass_id"])
+        g["n"] += 1
+        g["title"] = g["title"] or o["show"] or o["title"] or ""
+        g["section"] = g["section"] or o["section"] or ""
+    out = []
+    for g in groups.values():
+        sports = g["section"] == "sports"
+        out.append({"lost_id": g["lost_id"], "title": g["title"] or "Unknown",
+                    "upcoming": g["n"], "sports": sports, "recorder": g["recorder"],
+                    "can_follow": bool(g["title"]) and not sports})
+    out.sort(key=lambda o: o["title"].lower())
+    return out
+
+
 def change_recorder(pass_id: int) -> tuple[int, list[dict]]:
     """After a pass's recorder was changed: move its bookings and book again.
 

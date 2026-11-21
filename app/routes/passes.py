@@ -777,6 +777,7 @@ def api_rules():
             "booked": booked + db.one(
                 "SELECT COUNT(*) c FROM recordings WHERE pass_id = ? "
                 "AND kind = 'recording'", (p["id"],))["c"],
+            "upcoming": passes.count_upcoming(p["id"]),
             "waiting": p["kind"] == "team" and not p["team_id"],
             "detail": {
                 "team": ("Every game, from the live broadcast" if p["team_id"] else
@@ -784,6 +785,20 @@ def api_rules():
                 "series": "Every episode the guide carries",
                 "smart": ("Anything matching " + smartfilter.describe(tree or {})),
             }.get(p["kind"], ""),
+        })
+
+    # Bookings of a pass that was deleted, one row per lost pass.
+    for o in passes.orphans():
+        out.append({
+            "id": f"lost:{o['lost_id']}", "who": "orphan", "kind": "orphan",
+            "icon": "sports" if o["sports"] else "series",
+            "lost_id": o["lost_id"], "title": o["title"] + " (pass deleted)",
+            "show": o["title"], "team_id": None, "series": None, "filter": None,
+            "networks": [], "channels": [], "prefs": {},
+            "recorder": o["recorder"], "enabled": True,
+            "booked": o["upcoming"], "upcoming": o["upcoming"],
+            "can_follow": o["can_follow"],
+            "detail": "The pass was deleted, the recordings are still set",
         })
 
     # Plex's own recurring rules belong here too. A rule you just made would
@@ -1239,11 +1254,34 @@ def api_plexrule_delete(key: str):
     return JSONResponse({"ok": True, "message": "Removed from Plex."})
 
 
-@router.post("/passes/{pass_id}/delete")
-def pass_delete(pass_id: int):
+def delete_pass(pass_id: int, cancel_upcoming: bool = False):
+    """Stop following. With `cancel_upcoming` the bookings it made that have
+    not started go too. Without, they stay booked, as they always did.
+
+    Answers (body, status). Plex not answering leaves the pass in place.
+    """
+    cancelled = 0
+    if cancel_upcoming:
+        try:
+            cancelled = passes.cancel_upcoming(pass_id)
+        except Exception as e:
+            return {"ok": False, "error": "Plex could not cancel the recordings, so "
+                    f"nothing was changed: {e}"}, 502
     with db.tx() as c:
         c.execute("DELETE FROM passes WHERE id = ?", (pass_id,))
-    return RedirectResponse("/recordings", status_code=303)
+    if cancel_upcoming:
+        msg = (f"Removed. {cancelled} upcoming recording(s) cancelled." if cancelled
+               else "Removed.")
+    else:
+        msg = ("No longer following. What is already set to record stays, and can "
+               "be managed under its lost pass.")
+    return {"ok": True, "cancelled": cancelled, "message": msg}, 200
+
+
+@router.post("/passes/{pass_id}/delete")
+def pass_delete(pass_id: int, cancel_upcoming: str = Form("0")):
+    body, code = delete_pass(pass_id, cancel_upcoming in ("1", "true", "yes"))
+    return JSONResponse(body, status_code=code)
 
 
 @router.post("/passes/{pass_id}/toggle")

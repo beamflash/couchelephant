@@ -140,6 +140,47 @@ def main():
         raise SystemExit(f"the demo guide would not sync: {detail}")
     print("guide:", detail, flush=True)
 
+    @web.app.post("/test/seed-pass")
+    def _seed_pass(title: str, n: int = 3, lost: int = 0, section: str = "tv"):
+        """Test only: a season pass with n bookings of ours ahead, from airings
+        later in the demo week. With lost=1 the pass is deleted straight away,
+        which leaves the bookings behind as the owner found them."""
+        now = int(time.time())
+        rows = db.query(
+            """SELECT a.*, p.title, p.grandparent_title FROM airings a
+               JOIN programs p ON p.guid = a.program_guid
+               WHERE a.begins_at > ? AND a.drm = 0 AND a.channel_vcn = ?
+               ORDER BY a.begins_at""", (now + 7200, next(iter(demo_guide.CHANNELS))))
+        uid = f"seed-{title}-{now}"
+        with db.tx() as c:
+            c.execute("INSERT INTO passes (kind, series_title, series_guid, uid, recorder, "
+                      "enabled, created_at) VALUES ('series', ?, ?, ?, 'couchelephant', 1, ?)",
+                      (title, title, uid, now))
+            pid = c.execute("SELECT last_insert_rowid()").fetchone()[0]
+        made = []
+        for row in rows:
+            if len(made) >= n:
+                break
+            if recorder.booked(row):
+                continue
+            rid = recorder.book(row, "pass", pass_id=pid, pass_uid=uid)
+            with db.tx() as c:
+                c.execute("UPDATE recordings SET show_title = ?, section = ? WHERE id = ?",
+                          (title, section, rid))
+            made.append(rid)
+        if lost:
+            with db.tx() as c:
+                c.execute("DELETE FROM passes WHERE id = ?", (pid,))
+        return {"pass_id": pid, "booked": len(made)}
+
+    @web.app.get("/test/pass-state")
+    def _pass_state(title: str):
+        """Test only: is there a pass for this title, and how many of its
+        bookings are still set."""
+        return {"pass": bool(db.one("SELECT 1 FROM passes WHERE series_title = ?", (title,))),
+                "scheduled": db.one("SELECT COUNT(*) c FROM recordings WHERE show_title = ? "
+                                    "AND state = 'scheduled'", (title,))["c"]}
+
     threading.Thread(target=_ticking, daemon=True).start()
     airing = _longest_on_now()
     if airing:

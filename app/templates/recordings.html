@@ -415,9 +415,11 @@ window.passTab = 'sports';
       var h = '';
       rules.forEach(function (r) {
         var where = r.networks.concat(r.channels);
-        h += '<div class="passrow" data-id="' + esc(r.id) + '" data-who="' + r.who + '">' +
+        h += '<div class="passrow" data-id="' + esc(r.id) + '" data-who="' + r.who +
+             '" data-upcoming="' + (r.upcoming || 0) + '" data-title="' + esc(r.title) + '">' +
              '<i class="own ' + r.who + '" title="' +
              (r.who === 'ce' ? 'CouchElephant keeps this rule'
+                             : r.who === 'orphan' ? 'The pass was deleted'
                              : 'Plex holds this rule') + '"></i>' +
              (KIND_ICON[r.icon] || '');
         h += '<div class="pmeta"><b>' + esc(r.title) + '</b><span class="dim tiny">' +
@@ -436,8 +438,15 @@ window.passTab = 'sports';
                '<button type="button" class="tiny" data-act="toggle">' +
                  (r.enabled ? 'Pause' : 'Resume') + '</button>';
         }
-        h += '<button type="button" class="tiny danger" data-act="remove">Remove</button>' +
-             '</div></div>';
+        if (r.who === 'orphan') {
+          h += '<button type="button" class="tiny danger" data-act="lostcancel">Cancel all</button>';
+          if (r.can_follow) {
+            h += '<button type="button" class="tiny" data-act="lostfollow">Follow again</button>';
+          }
+        } else {
+          h += '<button type="button" class="tiny danger" data-act="remove">Remove</button>';
+        }
+        h += '</div></div>';
         if (r.who === 'ce') {
           h += '<div class="passdetail" data-detail="' + esc(r.id) + '" hidden></div>';
         }
@@ -456,9 +465,25 @@ window.passTab = 'sports';
       return;
     }
     if (act && act.act === 'remove') {
-      post(rowEl.dataset.who === 'plex'
-        ? '/api/plexrule/' + encodeURIComponent(id) + '/delete'
-        : '/passes/' + id + '/delete');
+      if (rowEl.dataset.who === 'plex') {
+        post('/api/plexrule/' + encodeURIComponent(id) + '/delete');
+        return;
+      }
+      var n = parseInt(rowEl.dataset.upcoming, 10) || 0;
+      var kind = window.passTab === 'sports' ? 'sports' : 'season';
+      // Nothing ahead means nothing to ask about.
+      if (!n) { post('/passes/' + id + '/delete', 'cancel_upcoming=0'); return; }
+      askDelete(rowEl.dataset.title, kind, n, function (cancel) {
+        post('/passes/' + id + '/delete', 'cancel_upcoming=' + (cancel ? '1' : '0'));
+      });
+      return;
+    }
+    if (act && act.act === 'lostcancel') {
+      post('/api/tv/passes/lost/' + id.replace('lost:', '') + '/cancel');
+      return;
+    }
+    if (act && act.act === 'lostfollow') {
+      post('/api/tv/passes/lost/' + id.replace('lost:', '') + '/follow');
       return;
     }
     if (act && act.act === 'edit') {
@@ -466,6 +491,7 @@ window.passTab = 'sports';
       return;
     }
 
+    if (rowEl.dataset.who === 'orphan') return;
     // Only our own passes can explain themselves. Plex does not tell us what
     // it would pick, so opening one of its rules has nothing to show.
     if (rowEl.dataset.who === 'plex') return;
@@ -510,8 +536,36 @@ window.passTab = 'sports';
       });
   });
 
-  function post(url) {
-    fetch(url, {method: 'POST'}).then(function () { window.loadPasses(); });
+  function post(url, body) {
+    fetch(url, {method: 'POST',
+                headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                body: body || ''})
+      .then(function () { window.loadPasses(); });
+  }
+
+  // "Delete the Murder, She Wrote season pass?" with the recordings it still
+  // has ahead. Yes is the default: that is what people expect a delete to do.
+  function askDelete(title, kind, n, done) {
+    var d = document.createElement('div');
+    d.className = 'ovl show'; d.id = 'passdel';
+    d.innerHTML = '<div class="ovlbox" style="width:min(440px,100%);padding:22px">' +
+      '<h2 style="margin:0 0 16px;font-size:18px">Delete the ' + esc(title) + ' ' +
+      kind + ' pass?</h2>' +
+      '<div style="display:flex;flex-direction:column;gap:8px">' +
+      '<button type="button" class="primary" data-ans="yes">Also cancel the ' + n +
+      ' upcoming recording' + (n === 1 ? '' : 's') + '</button>' +
+      '<button type="button" data-ans="keep">Keep them</button>' +
+      '<button type="button" data-ans="cancel">Cancel</button></div></div>';
+    document.body.appendChild(d);
+    var yes = d.querySelector('[data-ans="yes"]'); yes.focus();
+    var close = function () { d.remove(); };
+    d.addEventListener('click', function (e) {
+      var a = (e.target.closest('[data-ans]') || {}).dataset;
+      if (!a && e.target !== d) return;
+      close();
+      if (a && a.ans === 'yes') done(true);
+      else if (a && a.ans === 'keep') done(false);
+    });
   }
 
   window.loadPasses();

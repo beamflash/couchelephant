@@ -67,9 +67,12 @@ Recorded list.
 | `GET /api/tv/passes/options` | The same options for a new pass from the + button, before it is made. `kind` (`series`, `announced` or `team`), `id`, `title`. The answer has the shape of `/api/tv/record/options` |
 | `POST /api/tv/passes/create` | Make that pass. `kind`, `id`, `title`, `template`, `settings`, `networks`, `channels`, `recorder`. A series or a team goes through the web's own `POST /api/rules` |
 | `POST /api/tv/record/cancel` | Cancel one booking, with either recorder. `airing_id` |
-| `GET /api/tv/recordings` | `upcoming`: what is set to record, each with `booked_by` and `recorder`. `recorded`: everything recorded, each with `group` and `category` (`sports`, `tv`, `movies`). `passes`: every pass and Plex rule, each with `tab` (`sports` or `season`) |
+| `GET /api/tv/recordings` | `upcoming`: what is set to record, each with `booked_by` and `recorder`. `recorded`: everything recorded, each with `group` and `category` (`sports`, `tv`, `movies`). `passes`: every pass and Plex rule, each with `tab` (`sports` or `season`) and `upcoming`, how many of its bookings have not started. A pass that was deleted with recordings left booked is one more row with `who` `orphan`, titled "Title (pass deleted)", `lost_id`, `upcoming` and `can_follow` |
 | `POST /api/tv/passes/{id}` | Change a pass from a television. Any of `recorder`, `enabled`, `networks` (JSON), `start_minutes`, `end_minutes`. Only what is sent is changed |
-| `POST /api/tv/passes/{id}/delete` | Stop following. `who`: `ce` for a pass, `plex` for a Plex rule. What is already booked stays |
+| `POST /api/tv/passes/{id}/delete` | Stop following. `who`: `ce` for a pass, `plex` for a Plex rule. `cancel_upcoming` (`1` or `0`, default `0`): `1` also cancels what the pass booked and has not started, with either recorder, and the answer has `cancelled`. Recording, finished and moved recordings are never touched. If Plex cannot cancel, nothing changes and the answer is `502` |
+| `GET /api/tv/passes/lost` | Passes that were deleted with recordings left booked, one per lost pass: `lost_id`, `title`, `upcoming`, `can_follow` |
+| `POST /api/tv/passes/lost/{lost_id}/cancel` | Cancel every upcoming booking of a lost pass |
+| `POST /api/tv/passes/lost/{lost_id}/follow` | Follow the series again with default settings and give it those bookings. `409` for a lost team pass, which cannot be rebuilt from its games |
 | `POST /api/tv/record/move` | Hand one booked broadcast to the other recorder. `airing_id`, `recorder` |
 | `POST /api/tv/recordings/{id}/delete` | Delete for good, from Plex too. `403` unless this television's Allow delete is on |
 | `POST /api/tv/devices/{id}/settings` | Administrators. `allow_delete` for one television |
@@ -91,7 +94,7 @@ not a number.
 
 | | |
 | --- | --- |
-| `GET /api/rules` | Every rule, ours and Plex's own, with what it follows and where it may record from |
+| `GET /api/rules` | Every rule, ours and Plex's own, with what it follows and where it may record from, and `upcoming` for each of ours. Lost passes come last as `who` `orphan` |
 | `GET /api/rules/options` | Plex's own choices for a rule. `kind` (`team`/`series`), `team_id` or `series` |
 | `POST /api/rules` | Create one. `kind` is `team`, `series` or `smart`. With no source limit a team or series rule becomes a plain Plex rule instead; a smart one is always ours |
 | `POST /api/rules/{id}` | Change a pass: `networks`, `channels`, `enabled`, `settings`, and for a smart pass `filter` and `name` |
@@ -100,7 +103,7 @@ not a number.
 | `GET /api/rules/{id}/upcoming` | What that pass will record next, and why it chose each broadcast |
 | `POST /api/plexrule/{key}/delete` | Remove one of Plex's own rules |
 | `POST /passes/{id}/toggle` | Pause or resume a pass |
-| `POST /passes/{id}/delete` | Remove a pass |
+| `POST /passes/{id}/delete` | Remove a pass. `cancel_upcoming` as for `/api/tv/passes/{id}/delete`. Answers JSON |
 
 ## Past the end of the guide
 

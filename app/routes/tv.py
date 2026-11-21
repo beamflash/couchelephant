@@ -1024,6 +1024,8 @@ def _passes() -> list[dict]:
             "start_minutes": _whole(prefs.get("startOffsetMinutes")),
             "end_minutes": _whole(prefs.get("endOffsetMinutes")),
             "booked": r.get("booked") or 0,
+            "upcoming": r.get("upcoming") or 0,
+            "lost_id": r.get("lost_id"), "can_follow": bool(r.get("can_follow")),
             # A Plex rule is Plex's own. It can be removed here and nothing else.
             "editable": ours,
         })
@@ -1259,14 +1261,60 @@ async def tv_pass_edit(pass_id: int, recorder_choice: str = Form("", alias="reco
 
 
 @router.post("/api/tv/passes/{pass_id}/delete")
-def tv_pass_delete(pass_id: str, who: str = Form("ce")):
-    """Stop following. What is already booked or recorded is left alone."""
+def tv_pass_delete(pass_id: str, who: str = Form("ce"),
+                   cancel_upcoming: str = Form("0")):
+    """Stop following. `cancel_upcoming=1` also cancels what the pass booked
+    and has not started, and the answer says how many. Without it, what is
+    already booked stays, as before."""
     if who == "plex":
         return pass_routes.api_plexrule_delete(pass_id)
+    if not pass_id.isdigit():
+        return JSONResponse({"ok": False, "error": "No such pass."}, status_code=404)
+    body, code = pass_routes.delete_pass(int(pass_id),
+                                         cancel_upcoming in ("1", "true", "yes"))
+    return JSONResponse(body, status_code=code)
+
+
+@router.get("/api/tv/passes/lost")
+def tv_passes_lost():
+    """Bookings left behind by passes that were deleted, one per lost pass."""
+    return {"ok": True, "lost": passes.orphans()}
+
+
+@router.post("/api/tv/passes/lost/{lost_id}/cancel")
+def tv_lost_cancel(lost_id: int):
+    """Cancel every upcoming booking of a pass that is gone."""
+    try:
+        n = passes.cancel_upcoming(lost_id)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": "Plex could not cancel the "
+                             f"recordings: {e}"}, status_code=502)
+    return {"ok": True, "cancelled": n,
+            "message": f"{n} upcoming recording(s) cancelled." if n else "Nothing to cancel."}
+
+
+@router.post("/api/tv/passes/lost/{lost_id}/follow")
+def tv_lost_follow(lost_id: int):
+    """Make the series pass again, with default settings, and hand it the
+    bookings. Only a series can be rebuilt: it is named by its title, which
+    the bookings carry. A team is not, so that is refused rather than guessed."""
+    lost = next((o for o in passes.orphans() if o["lost_id"] == lost_id), None)
+    if not lost:
+        return JSONResponse({"ok": False, "error": "Nothing is left of that pass."},
+                            status_code=404)
+    if not lost["can_follow"]:
+        return JSONResponse({"ok": False, "error": "This pass cannot be rebuilt from "
+                             "its recordings. Cancel them, or follow the team again."},
+                            status_code=409)
+    pid, label, _ = record._make_pass("series", series=lost["title"], update=False,
+                                      who=lost["recorder"])
     with db.tx() as c:
-        c.execute("DELETE FROM passes WHERE id = ?", (pass_id,))
-    return {"ok": True, "message": "No longer following. What is already set to "
-                                   "record stays, and can be cancelled on its own."}
+        for table in ("recordings", "our_grabs"):
+            c.execute(f"UPDATE {table} SET pass_id = ?, pass_uid = "
+                      "(SELECT uid FROM passes WHERE id = ?) WHERE pass_id = ?",
+                      (pid, pid, lost_id))
+    passes.run_passes()
+    return {"ok": True, "pass_id": pid, "message": f"Following {label} again."}
 
 
 @router.post("/api/tv/record/move")

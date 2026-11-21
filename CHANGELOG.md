@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.5.31 - 2026-11-21
+
+### Added
+
+- **Deleting a pass asks about its recordings.** "Delete the Murder, She Wrote
+  season pass?" offers "Also cancel the 36 upcoming recordings" (the first
+  choice), "Keep them" or Cancel, on the web, iPhone, iPad and Apple TV. With
+  none ahead there is no question. Only recordings that have not started are
+  cancelled, with the recorder that holds them.
+- **A pass deleted earlier can be managed.** Recordings left booked by a pass
+  that is gone show in the Season pass or Sports pass tab as one row,
+  "Title (pass deleted)", with how many are set. "Cancel all" cancels them.
+  "Follow again" makes the series pass again with default settings and gives
+  it those recordings. A lost team pass can only be cancelled.
+- API: `cancel_upcoming` on both delete routes, `upcoming` on every pass, and
+  `/api/tv/passes/lost` with its cancel and follow actions.
+
 ## 1.5.30 - 2026-11-20
 
 ### Added
