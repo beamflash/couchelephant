@@ -55,3 +55,24 @@ def test_exception_text_included():
     text = "\n".join(logring.recent())
     assert "it broke" in text
     assert "Traceback" in text and "ValueError: kaboom" in text
+
+
+def test_warning_still_reaches_stderr_and_info_does_not(capfd, monkeypatch):
+    # clean state: no root handlers, as in the real app
+    monkeypatch.setattr(logging.root, "handlers", [])
+    log.info("quiet info")
+    log.warning("loud warning")
+    logging.getLogger("couchelephant.recorder").error("child error")
+    err = capfd.readouterr().err
+    assert "loud warning" in err
+    assert "child error" in err
+    assert "quiet info" not in err
+    assert len(logring.recent()) == 3
+
+
+def test_no_double_output_when_another_handler_exists(capfd, monkeypatch):
+    seen = logging.Handler()
+    seen.emit = lambda r: None
+    monkeypatch.setattr(logging.root, "handlers", [seen])
+    log.warning("handled elsewhere")
+    assert capfd.readouterr().err == ""

@@ -13,6 +13,18 @@ _lock = threading.Lock()
 _buf: collections.deque = collections.deque(maxlen=_MAX_RECORDS)  # (created, line)
 
 
+def _has_other_handler(name: str) -> bool:
+    """True if a handler besides ours sits in the logger's chain."""
+    lg = logging.getLogger(name)
+    while lg:
+        if any(h is not _handler for h in lg.handlers):
+            return True
+        if not lg.propagate:
+            break
+        lg = lg.parent
+    return False
+
+
 class _RingHandler(logging.Handler):
     def emit(self, record):
         try:
@@ -23,6 +35,9 @@ class _RingHandler(logging.Handler):
             line = f"{stamp} {record.levelname} {record.name}: {msg}"
             with _lock:
                 _buf.append((record.created, line))
+            # our handler must not silence the stderr fallback
+            if record.levelno >= logging.lastResort.level and not _has_other_handler(record.name):
+                logging.lastResort.handle(record)
         except Exception:
             self.handleError(record)
 
