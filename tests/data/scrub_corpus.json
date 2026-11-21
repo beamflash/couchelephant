@@ -195,6 +195,26 @@
    "name": "stream pass path",
    "input": "GET /hlsk/12.1795000000.0123456789abcdef0123456789abcdef/x.m3u8",
    "secret": "0123456789abcdef0123456789abcdef"
+  },
+  {
+   "name": "question mark in password",
+   "input": "https://user:pa?ss@example.net/x",
+   "secret": "ss@example.net"
+  },
+  {
+   "name": "hash in password",
+   "input": "https://user:pa#ss@example.net/x",
+   "secret": "example.net"
+  },
+  {
+   "name": "single word after connect to",
+   "input": "connect to plexbox:32400 failed",
+   "secret": "plexbox"
+  },
+  {
+   "name": "dotted host port",
+   "input": "upstream media.example.net:9000 down",
+   "secret": "media.example.net"
   }
  ],
  "must_survive": [
@@ -211,6 +231,19 @@
   "File app.py:123 line failed",
   "status:500 returned",
   "at 12:30:45 and 1.5.33",
-  "std::string was empty"
+  "std::string was empty",
+  "app.py:1234 in foo",
+  "Quality:1080p",
+  "resolution:1920x1080",
+  "date:2026-11-21",
+  "season:2024",
+  "Packers:2024 schedule",
+  "error code:10054",
+  "HTTPError: 500 [request:1102 <- get:1150]",
+  "dead::beef",
+  "cafe::",
+  "::",
+  "a::b",
+  "v1.5.33:12"
  ]
 }

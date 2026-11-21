@@ -110,8 +110,22 @@ def test_ipv6_private_keeps_shape_public_hashed():
 def test_pathological_input_is_fast():
     import time
     s = Scrubber()
-    for unit in ("a.", "eyJ.", "-----BEGIN PRIVATE KEY-----", "a:", "token", "1."):
+    for unit in ("a.", "eyJ.", "-----BEGIN PRIVATE KEY-----", "a:", "token", "1.",
+                 "[::", "x://", "@", "a::", "to a:1 "):
         big = unit * (200_000 // len(unit))
         t = time.perf_counter()
         s.text(big)
         assert time.perf_counter() - t < 1.0, unit
+
+
+def test_surrogate_and_case_in_hashing():
+    s = Scrubber()
+    assert s.host("\ud800h")  # no UnicodeEncodeError
+    assert s.address("http://\ud800h:1/").startswith("http://host-")
+    assert s.text("2001:DB8::1") == s.text("2001:db8::1")
+    assert "host-" in s.text("2001:DB8::1")
+
+
+def test_known_host_with_port_single_word():
+    s = Scrubber(known_hosts=["plexbox"])
+    assert "plexbox" not in s.text("retry plexbox:32400 later")

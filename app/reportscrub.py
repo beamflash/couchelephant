@@ -65,22 +65,36 @@ _KW_SPACE = re.compile(
     r"(?<![A-Za-z])(?i:token|key|secret|password)[ \t]+[A-Za-z0-9_-]{16,}")
 _HEX32 = re.compile(r"(?<![0-9A-Fa-f])[0-9A-Fa-f]{32,}(?![0-9A-Fa-f])")
 _RUN = re.compile(r"(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{20,}(?![A-Za-z0-9_-])")
-# Bounded so a long dotted string can't make the scan quadratic. The optional
-# front part is a user:pass@ that may hold a slash in the password.
-_URL = re.compile(
-    r"[A-Za-z][A-Za-z0-9+.-]{0,30}://(?:[^\s\"'<>@?#]{0,200}@)?[^\s/\"'<>?#]+")
+# Bounded so a long dotted string can't make the scan quadratic. The body is
+# the whole run up to a space or quote; _mask_url finds the host inside it.
+_URL = re.compile(r"[A-Za-z][A-Za-z0-9+.-]{0,30}://([^\s\"'<>]{1,300})")
 _IPV4 = re.compile(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?(?![\d.])")
 _V6_BRACKET = re.compile(
     r"\[([0-9A-Fa-f:.]{2,45})(?:%[A-Za-z0-9_.-]{1,20})?\](?::(\d{1,5}))?")
 _V6_BARE = re.compile(
     r"(?<![\w:.])([0-9A-Fa-f:]{2,39})(?:%[A-Za-z0-9_.-]{1,20})?(?![\w:])")
+# Bare text only counts as IPv6 when it looks like an address a LAN or a
+# provider hands out, so "dead::beef" and "a::b" are left alone.
+_V6_SHAPE = re.compile(
+    r"::1|fe[89ab][0-9a-f]:.*|f[cd][0-9a-f]{0,2}:.*|[23][0-9a-f]{3}:.*"
+    r"|(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}", re.I)
 _LOCAL_NAME = re.compile(
     r"(?<![\w.-])(?:[A-Za-z0-9-]{1,63}\.){1,6}"
     r"(?:lan|local|localdomain|home|internal|arpa)(?::(\d{1,5}))?(?![\w-])", re.I)
-# name:port. Only ports of 1024 and up, so "app.py:123" and "status:500" stay.
-_NAME_PORT = re.compile(
-    r"(?<![\w.:/@-])([A-Za-z][A-Za-z0-9-]{0,62}(?:\.[A-Za-z0-9-]{1,63}){0,6})"
-    r":(\d{4,5})(?![\d:.])")
+# name:port in free text. A dotted name is a host unless it ends like a source
+# file ("app.py:1234") or a number ("1.5.33:12"). A single word is a host only
+# after a connection word or an @, or when it is a known host: "Quality:1080p",
+# "season:2024" and "request:1102" are ordinary text.
+_CODE_EXT = {"py", "js", "ts", "swift", "go", "rs", "c", "h", "cpp", "java",
+             "kt", "rb", "sh", "html", "json", "yaml", "yml", "toml", "txt",
+             "log", "md"}
+_DOTTED_PORT = re.compile(
+    r"(?<![\w.:/@-])([A-Za-z][A-Za-z0-9-]{0,62}(?:\.[A-Za-z0-9-]{1,63}){1,6})"
+    r":(\d{2,5})(?![\w:.-])")
+_WORD_PORT = re.compile(
+    r"((?<![\w-])(?i:host|connect|connecting|connection|to|from|server|address"
+    r"|addr|upstream|proxy|peer)[ \t]{1,3}|@)"
+    r"([A-Za-z][A-Za-z0-9-]{0,62}):(\d{2,5})(?![\w:.-])")
 _ALREADY = re.compile(r"private-lan|host-[0-9a-f]{10}")
 
 
@@ -108,10 +122,9 @@ def _split_hostport(raw: str) -> tuple[str, int | None]:
     rest = raw.strip()
     if "://" in rest:
         rest = rest.split("://", 1)[1]
-    rest = re.split(r"[?#]", rest, maxsplit=1)[0]
-    # Up to the LAST @, so a password holding a slash or @ leaves no tail.
+    # Up to the LAST @, so a password holding / ? # or @ leaves no tail.
     rest = rest.rpartition("@")[2]
-    rest = rest.split("/", 1)[0]
+    rest = re.split(r"[/?#]", rest, maxsplit=1)[0]
     port = None
     if rest.startswith("["):
         host, sep, tail = rest[1:].partition("]")
@@ -144,6 +157,7 @@ class Scrubber:
                  known_secrets: Iterable[str] = (),
                  known_hosts: Iterable[str] = ()):
         self.salt = salt if salt is not None else os.urandom(16)
+        self._shown_cache: dict[str, str] = {}
         # Longest first, so a secret that holds another is removed whole.
         self._secrets = sorted({v for v in known_secrets
                                 if isinstance(v, str) and len(v) >= 4},
@@ -157,11 +171,16 @@ class Scrubber:
         self._hosts = sorted(names, key=len, reverse=True)
 
     def host(self, name: str) -> str:
-        digest = hashlib.sha256(self.salt + name.encode()).hexdigest()
+        digest = hashlib.sha256(self.salt + name.encode(errors="surrogatepass")).hexdigest()
         return "host-" + digest[:10]
 
     def _shown(self, name: str) -> str:
-        return "private-lan" if _is_private(name) else self.host(name)
+        name = name.lower()
+        got = self._shown_cache.get(name)
+        if got is None:
+            got = "private-lan" if _is_private(name) else self.host(name)
+            self._shown_cache[name] = got
+        return got
 
     def address(self, url_or_hostport: str) -> str:
         raw = url_or_hostport.strip()
@@ -176,7 +195,13 @@ class Scrubber:
         return out
 
     def _mask_url(self, m: re.Match) -> str:
-        return self.address(m.group(0))
+        scheme = m.group(0).split("://", 1)[0]
+        body = m.group(1)
+        # Everything up to the LAST @ is user:pass, whatever it holds.
+        _, at, rest = body.rpartition("@")
+        cut = re.search(r"[/?#]", rest)
+        host, tail = (rest[:cut.start()], rest[cut.start():]) if cut else (rest, "")
+        return self.address(f"{scheme}://{host}") + tail
 
     def _mask_ip(self, m: re.Match) -> str:
         s = m.group(0)
@@ -198,6 +223,8 @@ class Scrubber:
         s = m.group(1)
         if s.count(":") < 2:
             return m.group(0)
+        if not _V6_SHAPE.fullmatch(s):
+            return m.group(0)
         try:
             ipaddress.IPv6Address(s)
         except ValueError:
@@ -209,10 +236,16 @@ class Scrubber:
         name = s.rsplit(":", 1)[0] if m.group(1) else s
         return self.host(name.lower()) + (f":{m.group(1)}" if m.group(1) else "")
 
-    def _mask_name_port(self, m: re.Match) -> str:
-        if _ALREADY.fullmatch(m.group(1)):
+    def _mask_dotted_port(self, m: re.Match) -> str:
+        last = m.group(1).rsplit(".", 1)[1].lower()
+        if last in _CODE_EXT or last.isdigit():
             return m.group(0)
         return self.host(m.group(1).lower()) + ":" + m.group(2)
+
+    def _mask_word_port(self, m: re.Match) -> str:
+        if _ALREADY.fullmatch(m.group(2)):
+            return m.group(0)
+        return m.group(1) + self.host(m.group(2).lower()) + ":" + m.group(3)
 
     def text(self, s: str) -> str:
         if not isinstance(s, str):
@@ -225,7 +258,8 @@ class Scrubber:
         s = _IPV4.sub(self._mask_ip, s)
         s = _V6_BARE.sub(self._mask_v6_bare, s)
         s = _LOCAL_NAME.sub(self._mask_local, s)
-        s = _NAME_PORT.sub(self._mask_name_port, s)
+        s = _DOTTED_PORT.sub(self._mask_dotted_port, s)
+        s = _WORD_PORT.sub(self._mask_word_port, s)
         for h in self._hosts:
             s = re.sub(r"(?<![\w.-])" + re.escape(h) + r"(?![\w-])",
                        self.host(h), s, flags=re.I)
