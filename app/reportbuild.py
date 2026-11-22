@@ -5,17 +5,34 @@ through a Scrubber that was told this server's own secrets (make_scrubber).
 """
 import gzip
 import json
+import os
 import platform
+import re
 import secrets
 import shutil
 import time
 
 from . import db, health, logring, paths, recorder, sealing
-from .reportscrub import NEVER_SENT, Scrubber
+from .reportscrub import HOST_SETTINGS, SECRET_SETTINGS_ALL, Scrubber
 from .version import VERSION
 
 SOURCES = ("web", "ios", "ipados", "tvos", "server")
-_STARTED = time.time()  # close enough to process start; imported at boot
+
+
+def _process_start() -> float:
+    """When this process started: /proc where there is one, else import time."""
+    try:
+        with open("/proc/self/stat") as f:
+            # Fields after the ")" that ends the name; starttime is the 20th.
+            ticks = int(f.read().rpartition(")")[2].split()[19])
+        with open("/proc/uptime") as f:
+            up = float(f.read().split()[0])
+        return time.time() - (up - ticks / os.sysconf("SC_CLK_TCK"))
+    except (OSError, ValueError, IndexError, AttributeError):
+        return time.time()
+
+
+_STARTED = _process_start()
 
 
 class ReportTooLarge(Exception):
@@ -33,15 +50,25 @@ def make_scrubber() -> Scrubber:
     webhook and token.
     """
     s = db.all_settings()
-    secrets_ = [s.get(k) or "" for k in NEVER_SENT]
+    secrets_ = [s.get(k) or "" for k in SECRET_SETTINGS_ALL]
     for r in db.query("SELECT code FROM tv_devices WHERE code IS NOT NULL"):
         secrets_.append(r["code"])
     for r in db.query("SELECT webhook, token FROM destinations"):
         secrets_ += [r["webhook"] or "", r["token"] or ""]
-    hosts = [s.get("plex_url") or "", s.get("tuner_url") or "",
-             s.get("tuner_detected") or ""]
+    hosts = [s.get(k) or "" for k in HOST_SETTINGS]
     return Scrubber(known_secrets=[x for x in secrets_ if len(x) >= 4],
                     known_hosts=[h for h in hosts if h])
+
+
+def _encoder() -> str:
+    """What the recorder would use, from the cached probe only. Asking
+    recorder.encoder() could run ffmpeg for up to 30 seconds."""
+    if (db.get_setting("recorder_encoder") or "auto").lower() == "software":
+        return "software"
+    probed = recorder._vaapi
+    if probed is None:
+        return "unknown (not probed yet)"
+    return "vaapi" if probed else "software"
 
 
 def _disk() -> dict:
@@ -72,7 +99,7 @@ def server_part(scrub: Scrubber) -> dict:
     return {
         "version": VERSION,
         "uptime_seconds": int(time.time() - _STARTED),
-        "os": platform.platform(),
+        "os": scrub.text(platform.platform()),
         "container": paths._in_container(),
         "python": platform.python_version(),
         "log": [scrub.text(x) for x in logring.recent()],
@@ -81,10 +108,10 @@ def server_part(scrub: Scrubber) -> dict:
                   "detected": bool((s.get("tuner_detected") or "").strip())},
         "recorder": {"available": why is None,
                      "why_unavailable": scrub.text(why) if why else None,
-                     "encoder": recorder.encoder()},
+                     "encoder": scrub.text(_encoder())},
         "passes": passes,
         "schedule_failures": fails,
-        "notices": [n["code"] for n in health.open_notices()],
+        "notices": [scrub.text(n["code"]) for n in health.open_notices()],
         "disk": _disk(),
     }
 
@@ -95,7 +122,8 @@ def _walk(v, scrub):
     if isinstance(v, list):
         return [_walk(x, scrub) for x in v]
     if isinstance(v, dict):
-        return {k: _walk(x, scrub) for k, x in v.items()}
+        return {scrub.text(k) if isinstance(k, str) else k: _walk(x, scrub)
+                for k, x in v.items()}
     return v
 
 
@@ -105,6 +133,8 @@ def build_report(*, source: str, app: dict, trigger: dict, app_log: list[str],
                  now: int | None = None) -> dict:
     if source not in SOURCES:
         raise ValueError(f"bad source: {source!r}")
+    if report_id is not None and not re.fullmatch(r"[0-9a-f]{32}", report_id):
+        raise ValueError("report_id must be 32 lower-case hex characters")
     return {
         "v": 1,
         "reportId": report_id or secrets.token_hex(16),
@@ -144,13 +174,16 @@ def pack(report: dict, cap: int = 900_000, public: bytes | None = None) -> bytes
         raise ValueError("a public key is needed to seal a report")
     # Our own copy, so the caller's report keeps its logs.
     rep = json.loads(json.dumps(report))
+    _had_logs = any(h[k] for h, k in _logs(rep))
     while True:
         blob = _seal(rep, public)
         if len(blob) <= cap:
             return blob
         logs = [(h, k) for h, k in _logs(rep) if h[k]]
         if not logs:
-            raise ReportTooLarge("trigger and message alone exceed the cap")
+            raise ReportTooLarge(
+                "trigger and message alone exceed the cap" if not _had_logs
+                else "report too large even without logs")
         h, k = max(logs, key=lambda hk: sum(len(x) for x in hk[0][hk[1]]))
         # A fifth at a time, so a few MB does not take thousands of seals.
         drop = max(1, len(h[k]) // 5)

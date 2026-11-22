@@ -3,8 +3,14 @@ import pathlib
 
 import pytest
 
-from app import db
-from app.reportscrub import ADDRESS_SETTINGS, NEVER_SENT, SETTINGS_ALLOW, Scrubber
+from app import backingstore, db, dbstore
+from app.reportscrub import (
+    ADDRESS_SETTINGS,
+    NEVER_SENT,
+    SECRET_SETTINGS_ALL,
+    SETTINGS_ALLOW,
+    Scrubber,
+)
 
 CORPUS = json.loads(
     (pathlib.Path(__file__).parent / "data" / "scrub_corpus.json").read_text())
@@ -136,3 +142,21 @@ def test_nested_url_masked_in_all_positions():
     out = s.text("a http://a.example.com/x?u=https://b.example.org/y#https://c.example.net/")
     for h in ("a.example.com", "b.example.org", "c.example.net"):
         assert h not in out
+
+
+def test_every_secret_setting_any_module_knows_is_in_the_union():
+    for k in (*NEVER_SENT, *dbstore.SECRET_SETTINGS, *backingstore.SECRET_KEYS):
+        assert k in SECRET_SETTINGS_ALL
+
+
+def test_every_secret_looking_setting_read_in_app_is_classified():
+    import re
+    root = pathlib.Path(__file__).resolve().parent.parent / "app"
+    word = re.compile(r"password|token|secret|key|aud", re.I)
+    seen = set()
+    for f in root.rglob("*.py"):
+        for m in re.finditer(r"get_setting\(\s*[\"']([a-z_0-9]+)[\"']", f.read_text()):
+            seen.add(m.group(1))
+    for k in seen:
+        if word.search(k):
+            assert k in SECRET_SETTINGS_ALL, f"{k} reads like a secret but is not listed"

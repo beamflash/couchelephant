@@ -10,6 +10,8 @@ import os
 import re
 from collections.abc import Iterable
 
+from . import backingstore, dbstore
+
 REMOVED = "[removed]"
 
 # A new setting is invisible to reports until it is added here on purpose.
@@ -27,6 +29,14 @@ ADDRESS_SETTINGS = ("plex_url", "tuner_url")
 # Known settings that are never sent. Listed so db.DEFAULTS can't grow a
 # setting without someone deciding which list it belongs in.
 NEVER_SENT = ("plex_token", "tmdb_key", "sportsdb_key", "tuner_detected")
+# Every setting any part of the app treats as a secret, from one place: ours,
+# the export code's and the backing stores' (their passwords are stored raw
+# and can be any shape, so a caller must hand their values to the Scrubber).
+SECRET_SETTINGS_ALL = tuple(sorted(
+    set(NEVER_SENT) | set(dbstore.SECRET_SETTINGS) | set(backingstore.SECRET_KEYS)))
+# Settings that name a machine; their host part is masked wherever it appears.
+HOST_SETTINGS = ("plex_url", "tuner_url", "tuner_detected", "pg_host", "my_host",
+                 "away_domain")
 
 _PRIVATE_NETS = [ipaddress.ip_network(n) for n in (
     "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16",
