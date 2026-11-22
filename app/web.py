@@ -31,7 +31,17 @@ from . import (
     updates,
 )
 from .plex import Plex
-from .routes import account, data, guide, notices, record, settings, tv, tv_settings
+from .routes import (
+    account,
+    data,
+    guide,
+    notices,
+    record,
+    report,
+    settings,
+    tv,
+    tv_settings,
+)
 from .routes import passes as pass_routes
 from .routes import update as update_routes
 from .routes._shared import ASSET_V, BASE, VERSION, current_user  # noqa: F401
@@ -74,7 +84,7 @@ _OPEN_PREFIX = ("/static/",)
 # keep the guide, the schedule and the passes, which is what the app is for.
 _ADMIN_PREFIX = ("/settings", "/api/backups", "/api/backingstore", "/api/import",
                  "/api/export", "/api/tv/devices", "/api/update/apply",
-                 "/api/connect.svg", "/api/away")
+                 "/api/connect.svg", "/api/away", "/api/report")
 
 
 def _device_may(path):
@@ -82,6 +92,8 @@ def _device_may(path):
     video. Never the device list itself, or it could approve its friends."""
     if path.startswith("/api/tv/devices"):
         return False
+    if path in ("/api/report/server", "/api/report/email"):
+        return True
     # The channel logos too: a card with no picture draws the channel instead.
     return (path.startswith("/api/tv/") or path.startswith("/hls/")
             or path.startswith("/logo/"))
@@ -452,6 +464,6 @@ def healthz():
     })
 
 
-for r in (account, data, guide, notices, record, pass_routes, settings, tv, tv_settings,
+for r in (account, data, guide, notices, record, report, pass_routes, settings, tv, tv_settings,
           update_routes):
     app.include_router(r.router)

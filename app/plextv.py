@@ -3,6 +3,7 @@
 The token this handles is the user's account token. It goes in a header only,
 never in a URL, a log line or an error message.
 """
+import logging
 import os
 import threading
 import time
@@ -12,6 +13,8 @@ import httpx
 
 from . import paths
 from .version import VERSION
+
+log = logging.getLogger(__name__)
 
 BASE = os.environ.get("COUCHELEPHANT_PLEXTV_URL", "https://plex.tv").rstrip("/")
 TIMEOUT = 10.0
@@ -157,3 +160,15 @@ def servers(token: str) -> list:
                               r.get("accessToken", ""), conns,
                               bool(r.get("owned"))))
     return out
+
+
+def account_email(token: str) -> str | None:
+    """The email on the Plex account, or None. Never raises, never logs the
+    token; a plex.tv failure is only named by its class."""
+    try:
+        d = _call("GET", "/api/v2/user", token=token)
+        email = d.get("email") if isinstance(d, dict) else None
+        return email.strip() if isinstance(email, str) and email.strip() else None
+    except Exception as e:
+        log.info("plex.tv account email unavailable (%s)", type(e).__name__)
+        return None

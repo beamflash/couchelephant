@@ -24,6 +24,7 @@ class State:
         self.drip = 0           # seconds to dribble an answer out, a byte at a time
         self.fail_status = None  # answer every request with this status
         self.raw = None         # if set, every GET answers this JSON
+        self.email = "someone@example.com"  # the account's email
         self.valid_tokens = {TOKEN}  # account tokens /resources accepts
 
     def approve(self, pin_id, token=TOKEN):
@@ -122,6 +123,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send({"errors": [{"message": "not found"}]}, 404)
             return self._send({"id": pid, "code": pin["code"],
                                "authToken": pin["authToken"]})
+        if method == "GET" and u.path == "/api/v2/user":
+            if self.headers.get("X-Plex-Token") not in STATE.valid_tokens:
+                return self._send({"errors": [{"message": "unauthorized"}]}, 401)
+            return self._send({"email": STATE.email})
         if method == "GET" and u.path == "/api/v2/resources":
             if self.headers.get("X-Plex-Token") not in STATE.valid_tokens:
                 return self._send({"errors": [{"message": "unauthorized"}]}, 401)
