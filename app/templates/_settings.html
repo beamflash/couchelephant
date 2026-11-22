@@ -286,7 +286,7 @@
         {% if last_sync %}
         <div class="setblock" data-find="last sync result">
           <h3>Last sync</h3>
-          <table class="stack">
+          <table class="stack kv">
             <tr><td class="dim">Finished</td><td><time data-ts="{{ last_sync.ended_at }}" data-fmt="when">{{ last_sync.ended_at|fmt }}</time></td></tr>
             <tr><td class="dim">Result</td><td>
               {% if last_sync.ok %}<span class="pill ok">ok</span>
@@ -832,7 +832,7 @@
       <section data-sec="about" data-tab="about" data-tab-label="About" hidden>
         <h2>CouchElephant</h2>
         <p class="dim">A CouchElephant never forgets.</p>
-        <table class="stack" data-find="about version licence third party">
+        <table class="stack kv" data-find="about version licence third party">
           <tr><td class="dim">Version</td><td>{{ version }}</td></tr>
           <tr><td class="dim">What it does</td>
               <td>Follow a team, or a programme, and it records every one that comes up.

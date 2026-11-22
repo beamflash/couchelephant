@@ -87,37 +87,6 @@
     m.textContent = text; m.className = 'reportmsg ' + (cls || '');
   }
 
-  function consentScreen() {
-    shell('Send a report?');
-    box.appendChild(el('p', '',
-      'A report holds what you type here, your email if you give one, the problem ' +
-      'you were looking at, recent errors from this browser, and the state of this ' +
-      'CouchElephant: its version, settings, schedule and recent log. Names, ' +
-      'addresses and passwords are removed first.'));
-    box.appendChild(el('p', '',
-      'Only the person who makes CouchElephant can read it. It is sealed before it ' +
-      'leaves, and stored sealed.'));
-    box.appendChild(el('div', 'reportmsg', ''));
-    box.lastChild.id = 'reportmsg';
-    box.appendChild(buttons('Send', function (b) {
-      b.disabled = true; say('Saving your choice...', '');
-      fetch('/api/report/consent', {method: 'POST',
-        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-        body: 'agree=1'})
-        .then(function (r) { return r.json(); })
-        .then(function (j) {
-          if (!j.ok) throw new Error(j.error || 'refused');
-          lsSet(CONSENT_KEY, '1');
-          formScreen();
-        })
-        .catch(function (e) {
-          b.disabled = false;
-          say('Could not save your choice: ' + e.message + '. Nothing was sent.', 'bad');
-        });
-    }));
-    focusFirst();
-  }
-
   function summary() {
     if (trig.error) {
       return 'Problem: ' + trig.error.slice(0, 300) +
@@ -126,8 +95,22 @@
     return 'This goes with recent errors from this browser and the state of this CouchElephant.';
   }
 
-  function formScreen() {
-    shell('Report an issue');
+  // The first time, the agreement sits at the top of the same form; Send is
+  // the agreement. After that it is just the form.
+  function formScreen(first) {
+    shell(first ? 'Send a report?' : 'Report an issue');
+    if (first) {
+      var c = el('div', 'reportconsent'); c.id = 'reportconsent';
+      c.appendChild(el('p', '',
+        'A report holds what you type here, your email if you give one, the problem ' +
+        'you were looking at, recent errors from this browser, and the state of this ' +
+        'CouchElephant: its version, settings, schedule and recent log. Names, ' +
+        'addresses and passwords are removed first.'));
+      c.appendChild(el('p', '',
+        'Only the person who makes CouchElephant can read it. It is sealed before it ' +
+        'leaves, and stored sealed.'));
+      box.appendChild(c);
+    }
     box.appendChild(el('p', 'reportsum', summary()));
     var f1 = el('label', 'reportfield', 'Message (optional)');
     var msg = el('textarea'); msg.id = 'reportmessage'; msg.rows = 5; msg.maxLength = 20000;
@@ -140,7 +123,7 @@
     box.appendChild(f1); box.appendChild(f2);
     var m = el('div', 'reportmsg', ''); m.id = 'reportmsg';
     box.appendChild(m);
-    box.appendChild(buttons('Send', function (b) { send(b, msg, em); }));
+    box.appendChild(buttons('Send', function (b) { send(b, msg, em, first); }));
 
     var saved = lsGet(EMAIL_KEY);
     if (saved) em.value = saved;
@@ -156,12 +139,37 @@
   function post(path, body) {
     return fetch(path, {method: 'POST', headers: {'Content-Type': 'application/json'},
                         body: JSON.stringify(body)})
-      .then(function (r) { return r.json().then(function (j) { return [r.status, j]; }); });
+      .then(function (r) {
+        return r.json().then(function (j) { return [r.status, j]; },
+                             function () { return [r.status, null]; });
+      });
   }
 
-  function send(b, msg, em) {
+  // Records the agreement on the server. Resolves true, or says why in the dialog.
+  function agree() {
+    return fetch('/api/report/consent', {method: 'POST',
+      headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body: 'agree=1'})
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        if (!j.ok) throw new Error(j.error || 'refused');
+        lsSet(CONSENT_KEY, '1');
+      });
+  }
+
+  function send(b, msg, em, first) {
     if (busy) return;
     busy = true; b.disabled = true; say('Sending...', '');
+    if (first) {
+      agree().then(function () { send2(b, msg, em); }, function (e) {
+        busy = false; b.disabled = false;
+        say('Could not save your choice: ' + e.message + '. Nothing was sent.', 'bad');
+      });
+      return;
+    }
+    send2(b, msg, em);
+  }
+
+  function send2(b, msg, em) {
     var email = em.value.trim();
     var body = {
       trigger: trig.error ? {kind: trig.kind || 'error', error: trig.error, screen: trig.screen}
@@ -183,7 +191,12 @@
       })
       .then(function (r) {
         busy = false;
-        var j = r[1] || {};
+        var j = r[1];
+        if (!j) {
+          b.disabled = false;
+          say('CouchElephant answered with an error, so nothing was sent.', 'bad');
+          return;
+        }
         if (!j.ok) {
           b.disabled = false;
           say(j.error || 'The report could not be sent.', 'bad');
@@ -233,7 +246,7 @@
     dlg.classList.add('show');
     // Consent is per person: the server may already have heard yes from someone
     // else, but this browser has not.
-    if (lsGet(CONSENT_KEY) === '1') formScreen(); else consentScreen();
+    formScreen(lsGet(CONSENT_KEY) !== '1');
   }
 
   document.addEventListener('click', function (e) {
@@ -248,11 +261,11 @@
       open(trg);
       return;
     }
-    if (dlg && e.target === dlg) close();
+    if (dlg && e.target === dlg && !busy) close();
   }, true);
   document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape' && dlg && dlg.classList.contains('show')) {
-      e.stopPropagation(); close();
+      e.stopPropagation(); if (!busy) close();
     }
   }, true);
 

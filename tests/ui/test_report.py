@@ -54,8 +54,8 @@ def _open_report_from_settings(page):
 
 
 def _agree(page):
-    """The consent screen's Send."""
-    page.click("#reportsend")
+    """First time, the agreement sits in the form itself: nothing to click, the
+    one Send is the agreement. Kept so the tests read the same either way."""
     page.wait_for_selector("#reportmessage")
 
 
@@ -64,11 +64,12 @@ def test_settings_report_an_issue_opens_form_and_consent_first(page, fs):
     text = page.locator("#reportbox").inner_text()
     assert "Only the person who makes CouchElephant can read it" in text
     assert "sealed before it leaves, and stored sealed" in text
-    assert page.locator("#reportmessage").count() == 0, "consent comes before the form"
-    assert page.get_by_role("button", name="Never mind").is_visible()
-    _agree(page)
+    assert page.locator("#reportconsent").is_visible()
+    assert page.locator("#reportmessage").is_visible(), "one screen, consent and form"
     assert page.locator("#reportemail").is_visible()
-    assert not fs.docs, "agreeing sends nothing"
+    assert page.get_by_role("button", name="Send").count() == 1
+    assert page.get_by_role("button", name="Never mind").is_visible()
+    assert not fs.docs and not fs.requests, "opening sends nothing"
 
 
 def test_never_mind_sends_nothing(page, fs):
@@ -103,6 +104,7 @@ def test_second_send_skips_consent_and_prefills_remembered_email(page, fs):
     page.click("#reportopen")
     page.wait_for_selector("#reportmessage")
     assert page.input_value("#reportemail") == "me@example.org"
+    assert page.locator("#reportconsent").count() == 0
     assert "Only the person who makes" not in page.locator("#reportbox").inner_text()
 
 
@@ -110,7 +112,7 @@ def test_consent_is_per_browser_even_if_the_server_already_has_it(page, fs):
     from app import db
     db.set_setting("report_consent", "1")
     _open_report_from_settings(page)
-    assert page.locator("#reportmessage").count() == 0
+    assert page.locator("#reportconsent").is_visible()
     assert "sealed before it leaves" in page.locator("#reportbox").inner_text()
 
 
@@ -196,6 +198,102 @@ def test_dialog_error_is_visible_when_server_down(page, fs):
         "document.getElementById('reportmsg').textContent.includes('nothing was sent')")
     assert page.locator("#reportmsg.bad").is_visible()
     assert page.locator("#reportsend").is_enabled(), "it can be tried again"
+
+
+def test_send_records_consent_on_the_server(page, fs):
+    from app import db
+    _open_report_from_settings(page)
+    assert db.get_setting("report_consent") != "1"
+    page.click("#reportsend")
+    page.wait_for_selector("#reportid")
+    assert db.get_setting("report_consent") == "1"
+
+
+def test_escape_and_backdrop_do_nothing_while_sending(page, fs):
+    release = []
+    def slow(route):
+        release.append(route)           # held until the test lets it go
+    page.route("**/api/report/send", slow)
+    _open_report_from_settings(page)
+    page.click("#reportsend")
+    page.wait_for_function("document.getElementById('reportmsg').textContent === 'Sending...'")
+    page.keyboard.press("Escape")
+    page.mouse.click(5, 5)
+    assert page.locator("#reportdlg").is_visible()
+    release[0].continue_()
+    page.wait_for_selector("#reportid")
+
+
+def test_a_proxy_error_page_is_not_called_unreachable(page, fs):
+    _open_report_from_settings(page)
+    page.route("**/api/report/send", lambda r: r.fulfill(
+        status=502, content_type="text/html", body="<html>Bad Gateway</html>"))
+    page.click("#reportsend")
+    page.wait_for_function(
+        "document.getElementById('reportmsg').textContent.includes('answered with an error')")
+    text = page.locator("#reportmsg").inner_text()
+    assert "so nothing was sent" in text and "Could not reach" not in text
+
+
+NASTY = "it's \"bad\" <img src=x onerror=window.__x=1> & more &amp; <b>x</b>"
+
+
+def _assert_nothing_ran(page):
+    assert page.evaluate("typeof window.__x") == "undefined"
+    assert page.locator('img[src="x"]').count() == 0
+    assert page.locator("#reportbox b").count() == 0
+
+
+def test_a_failed_booking_error_with_markup_round_trips_and_runs_nothing(page, fs):
+    from app import db
+    _a_failed_chiefs_booking(page)
+    with db.tx() as c:
+        c.execute("UPDATE pass_actions SET reason = ? WHERE action = 'failed'", (NASTY,))
+    page.goto("/recordings")
+    page.wait_for_selector(".agrow.fail", timeout=15000)
+    page.locator(".agrow.fail .reportbtn").first.click()
+    page.wait_for_selector("#reportdlg.show")
+    summary = page.locator(".reportsum").inner_text()
+    assert NASTY in summary, summary
+    _assert_nothing_ran(page)
+    page.click("#reportsend")
+    page.wait_for_selector("#reportid")
+    assert NASTY in _opened(next(iter(fs.docs.values())))["trigger"]["error"]
+    _assert_nothing_ran(page)
+
+
+def test_the_shared_button_escapes_whatever_it_is_given(page, fs):
+    """The guide's error state, the panels and the banners all build their
+    button with CEReport.button, so the attribute escaping is tested here."""
+    page.route("**/partial/airings*", lambda r: r.fulfill(status=500, body="boom"))
+    from app import db
+    word = db.one("SELECT title FROM programs LIMIT 1")["title"].split()[0]
+    page.goto("/?q=" + word)
+    page.wait_for_selector("#allloaded .reportbtn", timeout=15000)
+    page.evaluate("""(t) => {
+        const d = document.createElement('div'); d.id = 'xss';
+        d.innerHTML = CEReport.button({error: t, screen: 'guide'});
+        document.body.appendChild(d); }""", NASTY)
+    page.click("#xss .reportbtn")
+    page.wait_for_selector("#reportdlg.show")
+    assert NASTY in page.locator(".reportsum").inner_text()
+    _assert_nothing_ran(page)
+
+
+def test_about_table_does_not_overlap_on_a_phone(phone, fs):
+    phone.goto("/settings")
+    phone.wait_for_selector("#setnav .nav-item")
+    phone.click('.nav-item[data-sec="about"]')
+    phone.wait_for_selector("#reportopen")
+    rows = phone.eval_on_selector_all(
+        'section[data-sec="about"] table.kv tr',
+        "els => els.map(r => { const t = [...r.children].map(c => c.getBoundingClientRect());"
+        " return {n: t.length, a: t[0], b: t[1]}; })")
+    assert len(rows) >= 5
+    for r in rows:
+        # label sits above its value, so the two boxes never share a line
+        assert r["a"]["bottom"] <= r["b"]["top"] + 1, r
+        assert r["a"]["width"] > 80, "label is not squeezed"
 
 
 def test_mobile_layout_dialog_fits(phone, fs):

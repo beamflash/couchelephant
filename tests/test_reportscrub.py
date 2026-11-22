@@ -114,6 +114,8 @@ def test_ipv6_private_keeps_shape_public_hashed():
 
 
 def test_pathological_input_is_fast():
+    # Guards against quadratic blowups, which take tens of seconds on this
+    # input, not micro speed. The bound is loose so a loaded box does not fail it.
     import time
     s = Scrubber()
     for unit in ("a.", "eyJ.", "-----BEGIN PRIVATE KEY-----", "a:", "token", "1.",
@@ -121,7 +123,7 @@ def test_pathological_input_is_fast():
         big = unit * (200_000 // len(unit))
         t = time.perf_counter()
         s.text(big)
-        assert time.perf_counter() - t < 1.0, unit
+        assert time.perf_counter() - t < 3.0, unit
 
 
 def test_surrogate_and_case_in_hashing():
