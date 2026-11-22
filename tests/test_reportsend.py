@@ -92,7 +92,6 @@ def test_queue_keeps_20_drops_oldest(fs, monkeypatch):
     t = [1_000_000]
     monkeypatch.setattr(reportsend, "_now", lambda: t[0])
     monkeypatch.setattr(reportsend, "LIMIT_PER_DAY", 100)
-    fs.fail_next(503, 40)
     ids = []
     for i in range(22):
         t[0] += 1
@@ -107,7 +106,6 @@ def test_queue_keeps_20_drops_oldest(fs, monkeypatch):
 def test_rate_limit_10_per_day_then_refused_not_queued(fs):
     for _ in range(10):
         assert reportsend.submit(_report(), "web")["sent"]
-    fs.fail_next(503)
     r = reportsend.submit(_report(), "web")
     assert not r["ok"] and r["reason"] == "limit"
     assert reportsend.queue_size() == 0
@@ -198,3 +196,30 @@ def test_flusher_only_starts_when_something_waits(fs, monkeypatch):
     reportsend.start_flusher()
     assert started == [1]
     monkeypatch.setattr(reportsend, "_flusher", None)
+
+
+def test_submit_never_raises_on_bad_url(fs, monkeypatch):
+    monkeypatch.setenv("COUCHELEPHANT_REPORT_FIRESTORE_URL", "nope://x")
+    r = reportsend.submit(_report(), "web")
+    assert r["ok"] and r["queued"]
+
+
+def test_flush_loop_survives_a_db_error(fs, monkeypatch):
+    calls = {"n": 0}
+
+    def size():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("db gone")
+        return 0
+    sleeps = iter([None, None])
+
+    def fake_sleep(_):
+        if next(sleeps, "stop") == "stop":
+            raise SystemExit
+    monkeypatch.setattr(reportsend.time, "sleep", fake_sleep)
+    monkeypatch.setattr(reportsend, "queue_size", size)
+    monkeypatch.setattr(reportsend, "flush_queue", lambda: 0)
+    monkeypatch.setattr(reportsend, "_flusher", object())
+    reportsend._flush_loop()
+    assert calls["n"] == 2 and reportsend._flusher is None

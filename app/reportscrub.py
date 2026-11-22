@@ -28,7 +28,8 @@ SETTINGS_ALLOW = (
 ADDRESS_SETTINGS = ("plex_url", "tuner_url")
 # Known settings that are never sent. Listed so db.DEFAULTS can't grow a
 # setting without someone deciding which list it belongs in.
-NEVER_SENT = ("plex_token", "tmdb_key", "sportsdb_key", "tuner_detected")
+NEVER_SENT = ("plex_token", "tmdb_key", "sportsdb_key", "tuner_detected",
+              "report_consent")
 # Every setting any part of the app treats as a secret, from one place: ours,
 # the export code's and the backing stores' (their passwords are stored raw
 # and can be any shape, so a caller must hand their values to the Scrubber).

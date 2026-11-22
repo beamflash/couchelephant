@@ -455,6 +455,7 @@ CREATE TABLE IF NOT EXISTS report_sent (
 """
 
 DEFAULTS = {
+    "report_consent": "",
     "plex_url": "",
     "plex_token": "",
     "timezone": "UTC",

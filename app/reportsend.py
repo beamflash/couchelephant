@@ -75,7 +75,8 @@ def _post(cfg, report_id, blob, source, app_version, created) -> str:
     try:
         r = httpx.post(url, params={"documentId": report_id, "key": cfg.api_key},
                        json=body, timeout=TIMEOUT)
-    except httpx.HTTPError as e:
+    except Exception as e:
+        # Includes InvalidURL and UnsupportedProtocol, so submit never raises.
         # The class only: a message could carry the url and its key.
         log.info("report %s not sent: %s", report_id, type(e).__name__)
         return "retry"
@@ -167,7 +168,12 @@ def _flush_loop():
         except Exception as e:
             log.warning("report queue flush failed: %s", type(e).__name__)
         with _lock:
-            if queue_size() == 0:
+            try:
+                empty = queue_size() == 0
+            except Exception as e:
+                log.warning("report queue size failed: %s", type(e).__name__)
+                empty = False
+            if empty:
                 _flusher = None
                 return
 

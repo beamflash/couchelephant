@@ -675,10 +675,24 @@ def test_report_reads_from_away():
         _signed_in(out, admin)
         assert out.get(path).status_code == 404          # a session is not enough away
         k = _signed_in(at(OUT), kid)
-        assert k.get(path).status_code in (403, 404)
+        assert k.get(path).status_code == 404
         # at home the sign-in rules are unchanged
         h = at(HOME)
         assert h.get(path).status_code == 401
         assert _signed_in(at(HOME), admin).get(path).status_code == 200
         assert _signed_in(at(HOME), kid).get(path).status_code == 403
         assert at(HOME).get(path, headers=key).status_code == 200
+
+
+def test_report_send_and_consent_for_signed_in_person_from_away():
+    # The away gate lets any signed-in session through to the normal rules.
+    _local_with_account()
+    kid = auth.create_user("kid", "a-good-password", role="user")
+    _away()
+    assert at(OUT).get("/api/report/consent").status_code == 401
+    k = _signed_in(at(OUT), kid)
+    assert k.get("/api/report/consent").json()["ok"] is True
+    assert k.post("/api/report/consent", data={"agree": "1"}).json() == {"ok": True}
+    r = k.post("/api/report/send", json={"trigger": {"kind": "support"}, "message": "x",
+                                         "email": ""})
+    assert r.status_code != 403 and r.status_code != 404

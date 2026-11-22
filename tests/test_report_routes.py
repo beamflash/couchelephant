@@ -132,3 +132,159 @@ def test_send_and_consent_are_not_admin_only():
     assert _admin_only("/api/report/email", "GET")
     assert not _admin_only("/api/report/send", "POST")
     assert not _admin_only("/api/report/consent", "POST")
+
+
+# ---- consent and send ----
+
+import base64
+import gzip
+import json
+from pathlib import Path
+
+from app import reportsend, sealing
+from tests import fake_firestore
+from tests.fake_firestore import STATE
+
+VEC = json.loads((Path(__file__).parent / "data" / "seal_vector.json").read_text())
+PRIV = base64.b64decode(VEC["private"])
+
+
+@pytest.fixture
+def fs(client, monkeypatch):
+    url, stop = fake_firestore.start()
+    STATE.reset()
+    monkeypatch.setenv("COUCHELEPHANT_REPORT_PUBLIC_KEY", VEC["public"])
+    monkeypatch.setenv("COUCHELEPHANT_REPORT_PROJECT", fake_firestore.PROJECT)
+    monkeypatch.setenv("COUCHELEPHANT_REPORT_API_KEY", fake_firestore.API_KEY)
+    monkeypatch.setenv("COUCHELEPHANT_REPORT_FIRESTORE_URL", url)
+    yield STATE
+    stop()
+
+
+def _body(**kw):
+    b = {"trigger": {"kind": "support"}, "message": "hello zebra", "email": "",
+         "client": {"ua": "test", "screen_size": "10x10"}, "app_log": ["a line"]}
+    b.update(kw)
+    return b
+
+
+def _agree(client):
+    assert client.post("/api/report/consent", data={"agree": "1"}).json() == {"ok": True}
+
+
+def _opened(fs):
+    doc = next(iter(fs.docs.values()))
+    sealed = base64.b64decode(doc["sealed"]["bytesValue"])
+    return json.loads(gzip.decompress(sealing.open_sealed(sealed, PRIV)))
+
+
+def test_send_refused_before_consent(client, fs):
+    assert client.get("/api/report/consent").json() == {"ok": True, "consented": False,
+                                                        "queued": 0}
+    r = client.post("/api/report/send", json=_body())
+    assert r.status_code == 403 and r.json() == {"ok": False, "error": "consent"}
+    assert not fs.docs
+
+
+def test_consent_then_send_creates_one_sealed_doc(client, fs):
+    _agree(client)
+    assert client.get("/api/report/consent").json()["consented"] is True
+    j = client.post("/api/report/send", json=_body()).json()
+    assert j["ok"] and j["sent"] and not j["queued"]
+    assert j["message"] == "Sent. Thank you." and len(j["reportId"]) == 32
+    assert len(fs.docs) == 1
+    rep = _opened(fs)
+    assert rep["message"] == "hello zebra" and rep["source"] == "web"
+    assert rep["reportId"] == j["reportId"] and rep["appLog"] == ["a line"]
+
+
+def test_consent_needs_agree(client):
+    assert client.post("/api/report/consent", data={"agree": "0"}).status_code == 400
+    assert client.get("/api/report/consent").json()["consented"] is False
+
+
+def test_send_includes_server_part(client, fs):
+    _agree(client)
+    client.post("/api/report/send", json=_body())
+    assert _opened(fs)["server"]["version"]
+
+
+def test_send_with_slow_server_part_still_sends(client, fs, monkeypatch):
+    from app.routes import report
+    monkeypatch.setattr(report, "DEADLINE", 0.05)
+    monkeypatch.setattr(report.reportbuild, "server_part",
+                        lambda s: __import__("time").sleep(0.5))
+    _agree(client)
+    assert client.post("/api/report/send", json=_body()).json()["sent"]
+    rep = _opened(fs)
+    assert rep["server"] is None and rep["serverNote"] == "server part timed out"
+
+
+def test_send_failure_queues_and_says_saved_copy(client, fs):
+    _agree(client)
+    fs.fail_next(503)
+    j = client.post("/api/report/send", json=_body()).json()
+    assert j["ok"] and j["queued"] and not j["sent"]
+    assert j["message"] == "Could not send. It is saved and will be sent later."
+    assert client.get("/api/report/consent").json()["queued"] == 1
+
+
+def test_non_admin_signed_in_person_may_send(client, fs):
+    _, kid = _signin_on()
+    client.cookies.set(auth.SESSION_COOKIE, auth.create_session(kid))
+    _agree(client)
+    assert client.post("/api/report/send", json=_body()).json()["sent"]
+    assert client.get("/api/report/server").status_code == 403
+
+
+def test_signed_out_cannot_send_when_signin_on(client, fs):
+    _signin_on()
+    assert client.post("/api/report/send", json=_body()).status_code == 401
+    assert client.post("/api/report/consent", data={"agree": "1"}).status_code == 401
+
+
+def test_email_validation_cases(client, fs):
+    _agree(client)
+    for ok in ("", "a@b.co"):
+        assert client.post("/api/report/send", json=_body(email=ok)).status_code == 200
+    for bad in ("junk", "a@" + "b" * 300, "a b@c.co"):
+        r = client.post("/api/report/send", json=_body(email=bad))
+        assert r.status_code == 400
+        assert r.json()["error"] == "That email address does not look right."
+
+
+def test_message_over_cap_refused(client, fs):
+    _agree(client)
+    assert client.post("/api/report/send", json=_body(message="x" * 20_000)).status_code == 200
+    assert client.post("/api/report/send", json=_body(message="x" * 20_001)).status_code == 400
+
+
+def test_crash_kind_accepted_and_bad_kind_refused(client, fs):
+    _agree(client)
+    assert client.post("/api/report/send",
+                       json=_body(trigger={"kind": "crash"})).status_code == 200
+    assert client.post("/api/report/send",
+                       json=_body(trigger={"kind": "nope"})).status_code == 400
+
+
+def test_double_post_same_second_does_not_duplicate(client, fs):
+    _agree(client)
+    a = client.post("/api/report/send", json=_body()).json()
+    b = client.post("/api/report/send", json=_body()).json()
+    assert a["reportId"] != b["reportId"] and len(fs.docs) == 2
+    # One report id through the queue twice is still one document.
+    fs.reset()
+    fs.fail_next(503)
+    c = client.post("/api/report/send", json=_body()).json()
+    assert c["queued"]
+    assert reportsend.flush_queue() == 1
+    assert len(fs.docs) == 1 and c["reportId"] in fs.docs
+
+
+def test_rate_limit_message_is_plain(client, fs, monkeypatch):
+    monkeypatch.setattr(reportsend, "LIMIT_PER_DAY", 1)
+    _agree(client)
+    assert client.post("/api/report/send", json=_body()).json()["sent"]
+    j = client.post("/api/report/send", json=_body()).json()
+    assert j["ok"] is False and "too many reports today" in j["error"].lower()
+    assert "tomorrow" in j["error"].lower()
