@@ -437,6 +437,21 @@ CREATE TABLE IF NOT EXISTS notify_state (
     last_sent_at   INTEGER,
     PRIMARY KEY (destination_id, event, key)
 );
+
+-- Issue reports that could not be sent yet. The blob is already sealed to the
+-- owner's key, so nothing readable sits here.
+CREATE TABLE IF NOT EXISTS report_queue (
+    report_id   TEXT PRIMARY KEY,
+    blob        BLOB NOT NULL,
+    source      TEXT,
+    app_version TEXT,
+    created     INTEGER
+);
+
+-- When each report left, for the per-install daily limit.
+CREATE TABLE IF NOT EXISTS report_sent (
+    ts INTEGER
+);
 """
 
 DEFAULTS = {

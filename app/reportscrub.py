@@ -36,7 +36,7 @@ SECRET_SETTINGS_ALL = tuple(sorted(
     set(NEVER_SENT) | set(dbstore.SECRET_SETTINGS) | set(backingstore.SECRET_KEYS)))
 # Settings that name a machine; their host part is masked wherever it appears.
 HOST_SETTINGS = ("plex_url", "tuner_url", "tuner_detected", "pg_host", "my_host",
-                 "away_domain")
+                 "away_domain", "cf_team_domain")
 
 _PRIVATE_NETS = [ipaddress.ip_network(n) for n in (
     "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16",

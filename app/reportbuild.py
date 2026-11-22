@@ -45,7 +45,7 @@ def make_scrubber() -> Scrubber:
 
     Device keys, poll secrets and session tokens are stored only as hashes
     (tv_devices.key_hash/poll_hash, sessions.token_hash), so no raw value of
-    those exists to pass. What is stored raw is passed: the NEVER_SENT
+    those exists to pass. What is stored raw is passed: the SECRET_SETTINGS_ALL
     settings, the pending pairing codes, and each notification destination's
     webhook and token.
     """

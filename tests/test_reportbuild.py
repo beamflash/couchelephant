@@ -214,3 +214,10 @@ def test_too_large_with_logs_gone_says_so():
 def test_uptime_is_since_process_start(client):
     assert server_part(make_scrubber())["uptime_seconds"] >= 0
     assert reportbuild._STARTED <= time.time()
+
+
+def test_cf_team_domain_is_masked(client):
+    db.set_setting("cf_team_domain", "myteam.cloudflareaccess.com")
+    log.info("verifying a token for myteam.cloudflareaccess.com")
+    out = json.dumps(server_part(make_scrubber()))
+    assert "myteam.cloudflareaccess.com" not in out

@@ -25,6 +25,7 @@ from . import (
     passes,
     paths,
     recorder,
+    reportsend,
     sync,
     tuner,
     updates,
@@ -306,6 +307,8 @@ async def startup():
     asyncio.create_task(backingstore_loop())
     asyncio.create_task(recorder_loop())
     asyncio.create_task(outside_loop())
+    # Reports still waiting from last time get their retry thread back.
+    await asyncio.to_thread(reportsend.start_flusher)
 
 
 @app.on_event("shutdown")
