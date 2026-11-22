@@ -84,15 +84,21 @@ _OPEN_PREFIX = ("/static/",)
 # keep the guide, the schedule and the passes, which is what the app is for.
 _ADMIN_PREFIX = ("/settings", "/api/backups", "/api/backingstore", "/api/import",
                  "/api/export", "/api/tv/devices", "/api/update/apply",
-                 "/api/connect.svg", "/api/away", "/api/report")
+                 "/api/connect.svg", "/api/away")
+
+
+# The issue-report reads that carry this server's own state. Sending a
+# report and its consent are open to any signed-in person, so not here.
+_REPORT_PARTS = ("/api/report/server", "/api/report/email")
 
 
 def _device_may(path):
-    """What a paired television may reach with its key: the lists and the
-    video. Never the device list itself, or it could approve its friends."""
+    """What a paired device may reach with its key: the lists and the video,
+    and the two issue-report reads (server part, account email). Never the
+    device list itself, or it could approve its friends."""
     if path.startswith("/api/tv/devices"):
         return False
-    if path in ("/api/report/server", "/api/report/email"):
+    if path in _REPORT_PARTS:
         return True
     # The channel logos too: a card with no picture draws the channel instead.
     return (path.startswith("/api/tv/") or path.startswith("/hls/")
@@ -112,6 +118,8 @@ def _admin_only(path, method):
         return method != "GET"
     if path == "/api/recorder/library-suggest":
         return True           # it lists folders on this computer
+    if path in _REPORT_PARTS:
+        return True           # the server's log and settings, scrubbed
     return path.startswith(_ADMIN_PREFIX)
 
 
@@ -250,6 +258,9 @@ async def _away_gate(request: Request, call_next):
     # TV settings change the Plex connection: a paired device with its
     # key, or at home. A signed-in person outside has Settings at home.
     if path.startswith("/api/tv/settings"):
+        return PlainTextResponse("Not found", status_code=404)
+    # Same for the report's server reads: a paired device from away, or home.
+    if path in _REPORT_PARTS:
         return PlainTextResponse("Not found", status_code=404)
     if current_user(request):
         return await call_next(request)

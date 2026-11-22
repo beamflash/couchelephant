@@ -649,3 +649,36 @@ def test_the_self_check_warns_about_a_proxy_nobody_trusted():
     items = c.get("/api/away/check").json()["items"]
     warn = next(i for i in items if i["name"] == "Proxy")
     assert warn["ok"] is False and "Trusted proxies" in warn["say"]
+
+
+# ---------- the issue report reads ----------
+
+REPORT = ("/api/report/server", "/api/report/email")
+
+
+def _paired_key(c):
+    asked = c.post("/api/tv/pair", data={"name": "Den"}).json()
+    return {"Authorization": "Bearer " + c.post(
+        "/api/tv/pair/poll", data={"secret": asked["secret"]}).json()["key"]}
+
+
+def test_report_reads_from_away():
+    home = at(HOME)
+    key = _paired_key(home)
+    admin = _local_with_account()
+    kid = auth.create_user("kid", "a-good-password", role="user")
+    _away()
+    for path in REPORT:
+        out = at(OUT)
+        assert out.get(path, headers=key).status_code == 200
+        assert out.get(path).status_code == 404
+        _signed_in(out, admin)
+        assert out.get(path).status_code == 404          # a session is not enough away
+        k = _signed_in(at(OUT), kid)
+        assert k.get(path).status_code in (403, 404)
+        # at home the sign-in rules are unchanged
+        h = at(HOME)
+        assert h.get(path).status_code == 401
+        assert _signed_in(at(HOME), admin).get(path).status_code == 200
+        assert _signed_in(at(HOME), kid).get(path).status_code == 403
+        assert at(HOME).get(path, headers=key).status_code == 200

@@ -104,3 +104,31 @@ def test_email_response_never_contains_token(client, tvfake):
     assert fake.TOKEN not in client.get("/api/report/email").text
     tvfake.fail_status = 401
     assert fake.TOKEN not in client.get("/api/report/email").text
+
+
+def test_server_part_failure_answers_note(client, monkeypatch):
+    from app.routes import report
+
+    def boom(s):
+        raise ValueError("secret detail")
+    monkeypatch.setattr(report.reportbuild, "server_part", boom)
+    r = client.get("/api/report/server")
+    assert r.json() == {"ok": True, "server": None, "note": "server part failed"}
+    assert "secret detail" not in r.text
+
+
+def test_email_timeout_is_empty(client, tvfake, monkeypatch):
+    from app.routes import report
+    db.set_setting("plex_token", fake.TOKEN)
+    monkeypatch.setattr(report, "DEADLINE", 0.05)
+    monkeypatch.setattr(report.plextv, "account_email",
+                        lambda t: __import__("time").sleep(0.5))
+    assert client.get("/api/report/email").json() == {"ok": True, "email": ""}
+
+
+def test_send_and_consent_are_not_admin_only():
+    from app.web import _admin_only
+    assert _admin_only("/api/report/server", "GET")
+    assert _admin_only("/api/report/email", "GET")
+    assert not _admin_only("/api/report/send", "POST")
+    assert not _admin_only("/api/report/consent", "POST")

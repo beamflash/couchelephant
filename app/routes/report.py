@@ -11,7 +11,7 @@ from .. import db, plextv, reportbuild
 router = APIRouter()
 log = logging.getLogger(__name__)
 
-DEADLINE = 5.0   # seconds; an app that times out still sends its own part
+DEADLINE = 5.0   # seconds each; an app that times out still sends its own part
 
 
 def _build():
@@ -24,11 +24,20 @@ async def report_server():
         part = await asyncio.wait_for(asyncio.to_thread(_build), DEADLINE)
     except TimeoutError:
         return {"ok": True, "server": None, "note": "server part timed out"}
+    except Exception as e:
+        log.warning("report server part failed (%s)", type(e).__name__)
+        return {"ok": True, "server": None, "note": "server part failed"}
     return {"ok": True, "server": part}
 
 
 @router.get("/api/report/email")
 async def report_email():
     token = db.get_setting("plex_token")
-    email = await asyncio.to_thread(plextv.account_email, token) if token else None
+    if not token:
+        return {"ok": True, "email": ""}
+    try:
+        email = await asyncio.wait_for(
+            asyncio.to_thread(plextv.account_email, token), DEADLINE)
+    except TimeoutError:
+        email = None
     return {"ok": True, "email": email or ""}
