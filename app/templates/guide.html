@@ -168,14 +168,24 @@
     busy = true; spinner.style.display = 'block';
     params.set('offset', offset);
     fetch('/partial/airings?' + params.toString())
-      .then(function (r) { return r.text(); })
+      .then(function (r) {
+        if (!r.ok) throw new Error('the guide answered HTTP ' + r.status);
+        return r.text();
+      })
       .then(function (html) {
         var t = html.trim();
         if (!t) { finished = true; done.style.display = 'block'; }
         else { body.insertAdjacentHTML('beforeend', t); CE.localizeTimes(body);
                offset = body.querySelectorAll('tr').length; }
       })
-      .catch(function () { finished = true; })
+      .catch(function (err) {
+        // Say so, with the report button, instead of quietly ending the list.
+        finished = true;
+        done.style.display = 'block';
+        done.innerHTML = 'Could not load more results. ' + CEReport.button({
+          error: 'Loading more guide results failed: ' + (err && err.message || err),
+          screen: 'guide'});
+      })
       .finally(function () { busy = false; spinner.style.display = 'none'; });
   }
   new IntersectionObserver(function (e) { if (e[0].isIntersecting) load(); },

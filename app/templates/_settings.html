@@ -160,7 +160,8 @@
             </td>
           </tr>
           {% if d.last_error %}
-          <tr><td colspan="4" class="tiny dim">Last send failed: {{ d.last_error }}</td></tr>
+          <tr><td colspan="4" class="tiny dim">Last send failed: {{ d.last_error }}
+            <button type="button" class="reportbtn tiny" data-report='{{ {"error": "Notification to " ~ d.name ~ " failed: " ~ d.last_error, "screen": "settings"}|tojson }}'>Report this problem</button></td></tr>
           {% endif %}
           <tr><td colspan="4">
             <details>
@@ -290,7 +291,8 @@
             <tr><td class="dim">Result</td><td>
               {% if last_sync.ok %}<span class="pill ok">ok</span>
               {% else %}<span class="pill bad">failed</span>{% endif %}</td></tr>
-            <tr><td class="dim">Detail</td><td class="tiny">{{ last_sync.detail }}</td></tr>
+            <tr><td class="dim">Detail</td><td class="tiny">{{ last_sync.detail }}
+              {% if not last_sync.ok %}<button type="button" class="reportbtn tiny" data-report='{{ {"error": "Last sync failed: " ~ last_sync.detail, "screen": "settings"}|tojson }}'>Report this problem</button>{% endif %}</td></tr>
           </table>
         </div>
         {% endif %}
@@ -842,6 +844,9 @@
               <td>{% if auth_mode == 'none' %}Off
                   {%- elif auth_mode == 'local' %}Accounts kept here
                   {%- else %}Cloudflare Access{% endif %}</td></tr>
+          <tr><td class="dim">Report an issue</td>
+              <td>Something wrong, or an idea?
+                  <button type="button" class="tiny" id="reportopen" data-report-open>Report an issue</button></td></tr>
         </table>
       </section>
 

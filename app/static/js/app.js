@@ -241,6 +241,9 @@
     if (!msg) return;
     msg.className = 'note said' + (kind ? ' ' + kind : '');
     msg.textContent = text;
+    if (kind === 'bad' && text) {
+      msg.insertAdjacentHTML('beforeend', ' ' + CEReport.button({error: text}));
+    }
     // The panel scrolls, and the reply sits at its foot. Bring it into view or
     // a failure looks the same as no response at all.
     if (msg.scrollIntoView) msg.scrollIntoView({block: 'nearest', behavior: 'smooth'});
@@ -460,6 +463,8 @@
     // names what to change, and a paraphrase loses exactly that part.
     h += '<div class="ovlsec"><h3>What Plex said</h3>';
     h += '<pre class="errbox">' + esc(f.error || 'No error was recorded.') + '</pre>';
+    h += CEReport.button({error: (f.title || '') + ': ' + (f.error || 'No error was recorded.'),
+                          screen: 'recordings'});
     if (!f.in_guide) {
       h += '<div class="note">That broadcast has left the Plex guide, so there ' +
            'is nothing left to book. It will come back if the guide carries it ' +

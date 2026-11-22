@@ -34,6 +34,7 @@
    exactly what happened to the setting tooltips. #}
 <script>window.CE_RECORDER = {{ recorder_info|default({'available': false, 'default': 'plex'})|tojson }};</script>
 <script src="/static/js/ce.js?v={{ asset_v }}"></script>
+<script src="/static/js/report.js?v={{ asset_v }}"></script>
 <script src="/static/js/update.js?v={{ asset_v }}" defer></script>
 <script src="/static/js/sources.js?v={{ asset_v }}"></script>
 <script src="/static/js/plexsignin.js?v={{ asset_v }}" defer></script>
@@ -217,12 +218,14 @@ Click to sync the guide now." aria-label="Sync the guide now">
 </div>
 
 <div class="ovl" id="ovl"><div class="ovlbox" id="ovlbox"></div></div>
+{% include "_report.html" %}
 <main>
 {% if not configured %}
   <div class="banner bad">No Plex server configured yet. Open
     <a href="/settings"><b>Settings</b></a> and add your server address and token.</div>
 {% elif last_sync and not last_sync.ok %}
-  <div class="banner bad">Last sync failed: {{ last_sync.detail }}</div>
+  <div class="banner bad">Last sync failed: {{ last_sync.detail }}
+    <button type="button" class="reportbtn tiny" data-report='{{ {"error": "Last sync failed: " ~ last_sync.detail, "screen": ""}|tojson }}'>Report this problem</button></div>
 {% endif %}
 {% block body %}{% endblock %}
 {% block footer %}

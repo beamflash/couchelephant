@@ -182,7 +182,9 @@ window.passTab = 'sports';
     // The error itself, not a summary of it. Plex's own words are usually the
     // only thing that says what to change.
     h += '<span class="agerr">' + esc(r.error || 'Plex refused the recording') +
-         '</span></div>';
+         '</span>' + CEReport.button({
+           error: (r.title || '') + ': ' + (r.error || 'Plex refused the recording'),
+           screen: 'recordings'}) + '</div>';
     h += '<div class="agwhy">' + (KIND_ICON[r.kind] || '') +
          '<span>' + esc(r.reason) + '</span>' +
          '<span class="pill bad">NOT RECORDING' +
@@ -504,7 +506,9 @@ window.passTab = 'sports';
     det.innerHTML = '<div class="empty tiny">Working out what it records next...</div>';
     fetch('/api/rules/' + id + '/upcoming').then(function (r) { return r.json(); })
       .then(function (d) {
-        if (!d.ok) { det.innerHTML = '<div class="empty tiny">' + esc(d.error) + '</div>'; return; }
+        if (!d.ok) { det.innerHTML = '<div class="empty tiny">' + esc(d.error) + ' ' +
+          CEReport.button({error: d.error || 'Could not work out what it records next',
+                           screen: 'recordings'}) + '</div>'; return; }
         if (!d.upcoming.length) {
           det.innerHTML = '<div class="empty tiny">Nothing coming up in the guide yet.</div>';
           return;
@@ -746,6 +750,10 @@ window.passTab = 'sports';
     if (!el) return;
     el.className = 'note' + (st.msg && st.msg.kind ? ' said ' + st.msg.kind : '');
     el.textContent = st.msg ? st.msg.text : '';
+    if (st.msg && st.msg.kind === 'bad') {
+      el.insertAdjacentHTML('beforeend', ' ' + CEReport.button({error: st.msg.text,
+                                                              screen: 'recordings'}));
+    }
   }
 
   // Drawn from state rather than straight from the answer, so redrawing the
@@ -759,6 +767,10 @@ window.passTab = 'sports';
       el.className = 'sfcount' + (st.previewError ? ' bad' : '');
       el.textContent = st.previewError ||
         'Add a condition, and this says how much it would record.';
+      if (st.previewError) {
+        el.insertAdjacentHTML('beforeend', ' ' + CEReport.button({error: st.previewError,
+                                                                screen: 'recordings'}));
+      }
       var s0 = document.getElementById('sfsample');
       if (s0) { s0.hidden = true; s0.innerHTML = ''; }
       return;
@@ -1323,7 +1335,9 @@ window.passTab = 'sports';
 
   window.loadRecorded = function () {
     fetch('/api/tv/recordings').then(CE.readJson).then(function (d) {
-      if (!d.ok) { wrap.innerHTML = '<div class="empty">' + esc(d.error || '') + '</div>'; return; }
+      if (!d.ok) { wrap.innerHTML = '<div class="empty">' + esc(d.error || '') + '<br>' +
+        CEReport.button({error: d.error || 'The recordings list did not load',
+                         screen: 'recordings'}) + '</div>'; return; }
       rows = d.recorded || [];
       canDelete = !!d.can_delete;
       draw();
@@ -1354,8 +1368,17 @@ window.passTab = 'sports';
       if (!confirm('Delete ' + (r.title || 'this recording') + '? ' + where)) return;
       fetch('/api/tv/recordings/' + r.id + '/delete', {method: 'POST'})
         .then(CE.readJson).then(function (j) {
-          if (!j.ok) alert(j.error);
           window.loadRecorded();
+          // Said where it can be reported from, not in a pop-up that vanishes.
+          if (!j.ok) {
+            var note = document.createElement('div');
+            note.className = 'banner bad';
+            note.innerHTML = esc(j.error || 'Could not delete it') + ' ' +
+              CEReport.button({error: j.error || 'Could not delete a recording',
+                               screen: 'recordings'});
+            wrap.parentNode.insertBefore(note, wrap);
+            setTimeout(function () { note.remove(); }, 20000);
+          }
         });
     }
   });
