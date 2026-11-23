@@ -184,6 +184,11 @@ def test_editing_a_pass_shows_and_changes_its_choice(page):
     page.click('.subtab[data-sub="sports"]')
     page.click(f'.passrow[data-id="{pid}"] [data-act="edit"]')
     page.wait_for_selector("#cpg", timeout=15000)
+    # The language names arrive after the panel and redraw the options; wait
+    # for that, or the pick can land on the element being replaced.
+    page.wait_for_function(
+        "() => /\\(English\\)/.test(document.getElementById('cpg').textContent)",
+        timeout=15000)
     assert page.locator("#cpg").input_value() == "any"
     page.select_option("#cpg", "one")
     page.click("#rgo")

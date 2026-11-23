@@ -544,7 +544,8 @@ def _dry_channels():
     db.set_setting("dry_run", "1")
     kick = _THE_GAME["kick"]     # the fake guide has games of its own
     out = [d for d in passes.run_passes()
-           if d.get("action") == "would schedule" and kick <= d["begins_at"] <= kick + 600]
+           if d.get("action") == "would schedule"
+           and kick - 600 <= d["begins_at"] <= kick + 600]
     return sorted(d["channel"] for d in out)
 
 
@@ -837,3 +838,69 @@ def test_changing_a_booked_pass_from_preferred_to_one_cancels_nothing_it_needs(p
     again, gone = _run_and_count()
     assert again == [] and gone == []
     assert len(db.query("SELECT 1 FROM our_grabs")) == len(first)
+
+
+# ---- language decides ties ----
+
+def _telemundo_first():
+    """Telemundo is the premiere and five minutes earlier than NBC."""
+    kick = _bills_game()
+    with db.tx() as c:
+        c.execute("UPDATE airings SET premiere = 0 WHERE id = 'nbc'")
+        c.execute("UPDATE airings SET begins_at = ?, ends_at = ? WHERE id = 'tele'",
+                  (kick - 300, kick + 3300))
+    return kick
+
+
+def test_one_airing_per_game_prefers_the_preferred_language(plex, synced):
+    _telemundo_first()
+    db.set_setting("preferred_language", "en")
+    _mode_pass("one")
+    assert _dry_channels() == ["41.1"], "English first, even though Telemundo is live"
+
+
+def test_one_airing_still_takes_the_other_language_when_it_is_the_only_one(plex, synced):
+    _telemundo_first()
+    with db.tx() as c:
+        c.execute("DELETE FROM airings WHERE id = 'nbc'")
+    db.set_setting("preferred_language", "en")
+    _mode_pass("one")
+    assert _dry_channels() == ["39.1"]
+
+
+def test_unknown_ranks_between_preferred_and_other(plex, synced):
+    _telemundo_first()
+    _set_lang("41.1", None)
+    db.set_setting("preferred_language", "en")
+    _mode_pass("one")
+    assert _dry_channels() == ["41.1"], "unknown beats a known other language"
+
+
+def _booked_both_with(pid, tele_first):
+    kick = _bills_game()
+    with db.tx() as c:
+        if tele_first:
+            c.execute("UPDATE airings SET premiere = 0 WHERE id = 'nbc'")
+            c.execute("UPDATE airings SET begins_at = ? WHERE id = 'tele'", (kick - 300,))
+    _book("nbc", NBC_GUID, "41.1", kick, pid, sub="1")
+    _book("tele", TELE_GUID, "39.1", kick - 300 if tele_first else kick + 300, pid, sub="2")
+    fake_plex.STATE.subscriptions.update({"1": {"key": "1"}, "2": {"key": "2"}})
+
+
+def test_switching_to_one_keeps_the_english_booking_even_if_telemundo_is_live(plex):
+    pid = _mode_pass("any")
+    _booked_both_with(pid, tele_first=True)
+    with db.tx() as c:
+        c.execute("UPDATE passes SET channels_per_game = 'one'")
+    passes.dedupe_games()
+    assert list(fake_plex.STATE.subscriptions) == ["1"]
+
+
+def test_switching_to_one_keeps_english_when_telemundo_is_the_premiere(plex):
+    pid = _mode_pass("any")
+    _booked_both_with(pid, tele_first=False)
+    with db.tx() as c:
+        c.execute("UPDATE airings SET premiere = 0 WHERE id = 'nbc'")
+        c.execute("UPDATE passes SET channels_per_game = 'one'")
+    passes.dedupe_games()
+    assert list(fake_plex.STATE.subscriptions) == ["1"]

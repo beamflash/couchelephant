@@ -202,11 +202,32 @@ def in_sources(row, networks: list[str], channels: list[str]) -> bool:
     return bool(net and net in networks)
 
 
-def choose_airing(airings: list) -> tuple[dict | None, str]:
-    """Pick one broadcast of a game, and say why. Returns (row, reason)."""
+def _language_rank(row, preferred: str) -> int:
+    """0 in the preferred language, 1 when the channel's language is unknown,
+    2 in another language."""
+    lang = airing_language(row)
+    return 0 if lang == preferred else (1 if lang is None else 2)
+
+
+def choose_airing(airings: list, preferred: str | None = None) -> tuple[dict | None, str]:
+    """Pick one broadcast of a game, and say why. Returns (row, reason).
+
+    With `preferred`, the preferred language's channels are looked at first,
+    then unknown ones, then the rest, and the usual rule (the live broadcast,
+    else the earliest) applies inside that group. Another language is still
+    chosen when it is the only one, so the game is never lost.
+    """
     usable = [a for a in airings if not a["drm"]]
     if not usable:
         return None, "every airing is DRM encrypted and cannot be recorded"
+    if preferred:
+        # Language only breaks ties between broadcasts of the game itself. A
+        # replay the next day in the preferred language is not the game.
+        base = min(usable, key=lambda a: (not a["premiere"], a["begins_at"]))
+        usable = [a for a in usable
+                  if abs(a["begins_at"] - base["begins_at"]) <= SAME_GAME_WINDOW]
+        best = min(_language_rank(a, preferred) for a in usable)
+        usable = [a for a in usable if _language_rank(a, preferred) == best]
     premieres = [a for a in usable if a["premiere"]]
     if premieres:
         pick = min(premieres, key=lambda a: a["begins_at"])
@@ -317,7 +338,7 @@ def choose_airings(airings: list, mode: str = "one",
     SAME_GAME_WINDOW of it. A replay on another channel the next day is not
     another broadcast of the game, and would only cost a tuner and disk.
     """
-    pick, why = choose_airing(airings)
+    pick, why = choose_airing(airings, preferred)
     if mode not in ("preferred", "any") or not pick:
         return [(pick, why)], False
     # Only broadcasts of the game itself: a replay on another channel the next
@@ -329,7 +350,7 @@ def choose_airings(airings: list, mode: str = "one",
         if not pool:
             name = language.name_of(preferred) or preferred
             return [(pick, f"{why}; no channel carries it in {name}")], False
-    anchor, why = choose_airing(pool)
+    anchor, why = choose_airing(pool, preferred)
     near = [a for a in pool
             if abs(a["begins_at"] - anchor["begins_at"]) <= SAME_GAME_WINDOW]
     by_channel = {}
@@ -765,29 +786,37 @@ def _pass_bookings(pass_id: int) -> list[dict]:
     return out
 
 
-def _keeper(bookings: list[dict]) -> dict:
+def _booking_rank(b: dict, preferred: str) -> int:
+    row = db.one("SELECT COALESCE(language_override, language) AS l FROM channels "
+                 "WHERE vcn = ?", (b["channel_vcn"],))
+    lang = row["l"] if row and row["l"] in language.LANGUAGES else None
+    return 0 if lang == preferred else (1 if lang is None else 2)
+
+
+def _keeper(bookings: list[dict], preferred: str | None = None) -> dict:
     """Which booking of one game stays: the airing `choose_airing` would pick
-    from the booked ones (the live broadcast, else the earliest). When the
-    guide no longer holds them, the earliest booked stays, because it is the
-    one a reader of the log saw first. Always the same answer for the same
-    bookings."""
+    from the booked ones (preferred language first, then the live broadcast,
+    else the earliest). When the guide no longer holds them, the best-ranked
+    and then earliest booked stays, because it is the one a reader of the log
+    saw first. Always the same answer for the same bookings."""
     ids = [b["id"] for b in bookings if b["id"]]
     found = db.query(_AIRING_SQL + f" AND a.id IN ({','.join('?' * len(ids))})",
                      (0, 2**62, *ids)) if ids else []
-    pick, _ = choose_airing(found) if found else (None, "")
+    pick, _ = choose_airing(found, preferred) if found else (None, "")
     if pick:
         for b in bookings:
             if b["id"] == pick["id"]:
                 return b
-    return min(bookings, key=lambda b: (b["begins_at"], str(b["id"])))
+    return min(bookings, key=lambda b: (_booking_rank(b, preferred) if preferred else 0,
+                                        b["begins_at"], str(b["id"])))
 
 
 def _extras(mode: str, bookings: list[dict], preferred: str) -> tuple[list[dict], str]:
     """The bookings of one game that the pass's mode says to cancel, and why."""
     if mode == "any":
-        return _doubles(bookings, []), "this channel already records this game"
+        return _doubles(bookings, [], preferred), "this channel already records this game"
     if mode == "one":
-        keep = _keeper(bookings)
+        keep = _keeper(bookings, preferred)
         return ([b for b in bookings if b is not keep],
                 "another channel already records this game")
     # preferred: the channels that are not in the preferred language go, and
@@ -799,14 +828,14 @@ def _extras(mode: str, bookings: list[dict], preferred: str) -> tuple[list[dict]
         langs[id(b)] = row["l"] if row else None
     wrong = [b for b in bookings if langs[id(b)] != preferred]
     if len(wrong) == len(bookings):
-        keep = _keeper(bookings)
+        keep = _keeper(bookings, preferred)
         wrong = [b for b in bookings if b is not keep]
         return wrong, "another channel carries this game in your preferred language"
-    return (wrong + _doubles(bookings, wrong),
+    return (wrong + _doubles(bookings, wrong, preferred),
             "another channel carries this game in your preferred language")
 
 
-def _doubles(bookings: list[dict], skip: list[dict]) -> list[dict]:
+def _doubles(bookings: list[dict], skip: list[dict], preferred: str) -> list[dict]:
     """More than one booking of one game on one channel: all but the keeper."""
     by_channel = {}
     for b in bookings:
@@ -815,7 +844,7 @@ def _doubles(bookings: list[dict], skip: list[dict]) -> list[dict]:
     out = []
     for rows in by_channel.values():
         if len(rows) > 1:
-            keep = _keeper(rows)
+            keep = _keeper(rows, preferred)
             out.extend(b for b in rows if b is not keep)
     return out
 

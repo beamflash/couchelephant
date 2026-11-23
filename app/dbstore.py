@@ -209,6 +209,18 @@ def fingerprint(rec: dict) -> str:
 
 # ---------------------------------------------------------------- writing
 
+def _drop_logo_file(path: str) -> None:
+    """Delete an artwork file nothing names any more, and only ever one that
+    sits inside the logo folder."""
+    root = os.path.realpath(_logo_dir())
+    real = os.path.realpath(path)
+    if os.path.dirname(real) == root and os.path.isfile(real):
+        try:
+            os.remove(real)
+        except OSError:
+            pass
+
+
 def remove_row(con, spec, key_cols, parts) -> None:
     """Drop one record from a store. A store that is only some columns of a
     row of a larger table (`where` set, like channel artwork and channel
@@ -217,8 +229,14 @@ def remove_row(con, spec, key_cols, parts) -> None:
     where = " AND ".join(f"{c} = ?" for c in key_cols)
     if spec.get("where"):
         clear = [c for c in spec["cols"] if c not in spec["pk"]]
+        old = None
+        if "custom_logo" in clear:
+            old = con.execute(f"SELECT custom_logo FROM {spec['table']} WHERE {where}",
+                              parts).fetchone()
         con.execute(f"UPDATE {spec['table']} SET "
                     + ", ".join(f"{c} = NULL" for c in clear) + f" WHERE {where}", parts)
+        if old and old[0]:
+            _drop_logo_file(old[0])
     else:
         con.execute(f"DELETE FROM {spec['table']} WHERE {where}", parts)
 

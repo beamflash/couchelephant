@@ -640,14 +640,27 @@ def _would_choose(row, passes_by_id=None, stand_in=False):
         return None
     if passes.pass_mode(p) != "one":
         if stand_in:
-            # The guide named the game, perhaps on another channel. Take the
-            # first choice among channels this pass is not already booking.
-            taken = {g["channel_vcn"] for g in db.query(
+            # The guide named the game, perhaps on another channel. In the
+            # preferred-language mode only that language's channels count, unless
+            # the game is on none. Then the channels this pass is not already
+            # booking (by us or by our own recorder). Nothing left means the
+            # game is already recorded everywhere it should be: False.
+            if passes.pass_mode(p) == "preferred":
+                want = passes.preferred_language()
+                ours = [a for a in allowed if passes.airing_language(a) == want]
+                allowed = ours or allowed
+            have = list(db.query(
                 "SELECT channel_vcn, begins_at FROM our_grabs WHERE pass_id = ? "
-                "AND airing_id != ?", (row["pass_id"], row["airing_id"]))
-                if any(abs(g["begins_at"] - a["begins_at"]) <= passes.SAME_GAME_WINDOW
-                       for a in allowed)}
+                "AND airing_id != ?", (row["pass_id"], row["airing_id"]))) + list(db.query(
+                "SELECT channel_vcn, begins_at FROM recordings WHERE pass_id = ? "
+                "AND kind = 'recording' AND state = 'scheduled' "
+                "AND COALESCE(airing_id, '') != ?", (row["pass_id"], row["airing_id"])))
+            taken = {g["channel_vcn"] for g in have
+                     if any(abs(g["begins_at"] - a["begins_at"]) <= passes.SAME_GAME_WINDOW
+                            for a in allowed)}
             allowed = [a for a in allowed if a["channel_vcn"] not in taken]
+            if not allowed:
+                return False
         else:
             # A pass that books each channel keeps each booking on its own
             # channel. Moving one onto the other's would book that channel twice.
@@ -655,7 +668,7 @@ def _would_choose(row, passes_by_id=None, stand_in=False):
             allowed = [a for a in allowed if a["channel_vcn"] == vcn]
         if not allowed:
             return None
-    pick, _why = passes.choose_airing(allowed)
+    pick, _why = passes.choose_airing(allowed, passes.preferred_language())
     return pick
 
 
@@ -817,6 +830,9 @@ def _settle_stand_in(plex, row, key, now, lead, passes_by_id=None):
     if item["matched_guid"]:
         named = _would_choose(dict(row, program_guid=item["matched_guid"]), passes_by_id,
                               stand_in=True)
+        if named is False:
+            _cancel(plex, row, "already recorded on every channel", now)
+            return "cancelled", None
         if not named:
             _cancel(plex, row, "the guide named this game on a channel the pass "
                                "does not take", now)

@@ -431,3 +431,76 @@ def test_a_stand_in_is_rebooked_onto_a_channel_the_pass_is_not_booking(client, s
     assert named["channel_vcn"] == "39.1", "the channel not already booked"
     assert sync._would_choose(row) is None or \
         sync._would_choose(row)["channel_vcn"] == "38.1"
+
+
+# ---- stand-ins and language ----
+
+def test_a_stand_in_in_preferred_never_moves_to_the_other_language(client, synced):
+    kick = _bills_game()
+    pid = _mode_pass("preferred")
+    _book("nbc", NBC_GUID, "41.1", kick, pid, sub="1")
+    _book("stand", "plex://episode/generic", "38.1", kick, pid, sub="2")
+    row = dict(db.one("SELECT * FROM our_grabs WHERE airing_id = 'stand'"),
+               booked_vcn="38.1", program_guid=TELE_GUID)
+    # The guide names the game on 39.1 (Spanish) only, and on 41.1, which is taken.
+    _airing_with_teams("tele_b", TELE_GUID, "41.1", kick + 120, KC_BUF, "A", "NFL")
+    got = sync._would_choose(row, stand_in=True)
+    assert got is False, "English is already booked, so the stand-in is redundant"
+
+
+def test_a_stand_in_in_preferred_falls_back_when_no_channel_is_in_the_language(client, synced):
+    kick = _bills_game()
+    pid = _mode_pass("preferred")
+    db.set_setting("preferred_language", "fr")
+    _book("stand", "plex://episode/generic", "38.1", kick, pid, sub="2")
+    row = dict(db.one("SELECT * FROM our_grabs"), booked_vcn="38.1", program_guid=TELE_GUID)
+    assert sync._would_choose(row, stand_in=True)["channel_vcn"] == "39.1"
+
+
+def test_a_stand_in_counts_our_own_recorders_bookings_as_taken(client, synced):
+    kick = _bills_game()
+    pid = _mode_pass("any")
+    with db.tx() as c:
+        c.execute("INSERT INTO recordings (uid, kind, state, program_guid, channel_vcn, "
+                  "begins_at, starts_at, source, pass_id) VALUES "
+                  "('u-r','recording','scheduled',?,'39.1',?,?,'pass',?)",
+                  (TELE_GUID, kick + 300, kick + 300, pid))
+    _book("nbc", NBC_GUID, "41.1", kick, pid, sub="1")
+    _book("stand", "plex://episode/generic", "38.1", kick, pid, sub="2")
+    row = dict(db.one("SELECT * FROM our_grabs WHERE airing_id = 'stand'"),
+               booked_vcn="38.1", program_guid=TELE_GUID)
+    assert sync._would_choose(row, stand_in=True) is False
+
+
+def test_a_three_to_one_flip_is_rejected(client, synced):
+    _listing("39.1", [SPANISH_SUMMARY] * 7 + [ENGLISH_SUMMARY] * 2)
+    sync.detect_languages()
+    assert db.one("SELECT language FROM channels WHERE vcn = '39.1'")["language"] == "es"
+    with db.tx() as c:
+        c.execute("DELETE FROM airings WHERE channel_vcn = '39.1'")
+    _listing("39.1", [SPANISH_SUMMARY] * 3 + [ENGLISH_SUMMARY] * 4)
+    from app import language
+    t = [SPANISH_SUMMARY] * 3 + [ENGLISH_SUMMARY] * 4
+    assert language.detect(t) == "en" and language.detect(t, decisive=True) is None
+    sync.detect_languages()
+    assert db.one("SELECT language FROM channels WHERE vcn = '39.1'")["language"] == "es"
+
+
+def test_removing_channel_artwork_deletes_the_file_but_never_one_outside(client, synced, tmp_path):
+    import os
+
+    from app import dbstore, paths
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
+    client.post("/settings/channels/41.1/logo", files={"logo": ("x.png", png, "image/png")})
+    path = db.one("SELECT custom_logo FROM channels WHERE vcn = '41.1'")["custom_logo"]
+    assert os.path.isfile(path)
+    spec = dbstore.STORES["channel_art"]
+    dbstore.remove_row(dbstore._con("main"), spec, spec["pk"], ["41.1"])
+    assert not os.path.exists(path)
+    outside = tmp_path / "keep.png"
+    outside.write_bytes(png)
+    with db.tx() as c:
+        c.execute("UPDATE channels SET custom_logo = ? WHERE vcn = '41.1'", (str(outside),))
+    dbstore.remove_row(dbstore._con("main"), spec, spec["pk"], ["41.1"])
+    assert outside.exists(), "only files inside the logo folder are removed"
+    assert paths.logos_dir()
