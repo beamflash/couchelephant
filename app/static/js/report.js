@@ -75,7 +75,7 @@
     send.type = 'button'; send.id = 'reportsend';
     var no = el('button', '', 'Never mind');
     no.type = 'button'; no.id = 'reportno';
-    no.addEventListener('click', close);
+    no.addEventListener('click', function () { if (!busy) close(); });
     if (onSend) send.addEventListener('click', function () { onSend(send); });
     row.appendChild(send); row.appendChild(no);
     return row;

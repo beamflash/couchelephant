@@ -1,6 +1,7 @@
 import base64
 import json
 import os
+import types
 from pathlib import Path
 
 import httpx
@@ -188,7 +189,9 @@ def test_flusher_only_starts_when_something_waits(fs, monkeypatch):
 
         def start(self):
             started.append(1)
-    monkeypatch.setattr(reportsend.threading, "Thread", T)
+    # Only reportsend's view of threading: patching threading.Thread itself
+    # also stops asyncio's executor shutdown in the test client, which hangs.
+    monkeypatch.setattr(reportsend, "threading", types.SimpleNamespace(Thread=T))
     monkeypatch.setattr(reportsend, "_flusher", None)
     reportsend.start_flusher()
     assert not started
@@ -223,3 +226,12 @@ def test_flush_loop_survives_a_db_error(fs, monkeypatch):
     monkeypatch.setattr(reportsend, "_flusher", object())
     reportsend._flush_loop()
     assert calls["n"] == 2 and reportsend._flusher is None
+
+
+def test_shipped_config_is_the_owners_project_and_is_blanked_in_tests():
+    from tests.conftest import SHIPPED_REPORT_CONFIG as shipped
+    assert shipped["PROJECT"] == "beamflash-ce-reports-open"
+    assert shipped["API_KEY"].startswith("AIza")
+    assert sealing.key_id(base64.b64decode(shipped["PUBLIC_KEY_B64"])) == shipped["KEY_ID"]
+    assert reportconfig.PROJECT == "" and reportconfig.API_KEY == ""
+    assert os.environ["COUCHELEPHANT_REPORT_FIRESTORE_URL"] == "http://127.0.0.1:9"

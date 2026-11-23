@@ -450,3 +450,40 @@ again: only our record is re-pointed there.
 The `expectations` table is deliberately separate from `programs` and
 `airings`. Those are read by every query in the app, and invented rows in them
 would mean auditing all of those queries, forever, for a flag they could forget.
+
+## Issue reports
+
+A person can send the owner a report from the web app (and, later, from the
+Apple apps). Only the owner can read it.
+
+- **Sealed.** `app/reportbuild.py` builds the report as JSON, gzips it and
+  seals it (`app/sealing.py`, a libsodium sealed box: X25519 and
+  XSalsa20-Poly1305, a fresh ephemeral key each time) to the public key in
+  `app/reportconfig.py`. The private key is not in this repository or any
+  app. Over 900,000 sealed bytes, the oldest log lines go first.
+- **Scrubbed first.** `app/reportscrub.py` runs on every string before
+  sealing. Settings go in only when named in `SETTINGS_ALLOW`, never as
+  "all settings". The stored values of secret settings are removed wherever
+  they appear, then patterns catch anything shaped like a token, key,
+  cookie, bearer header or JWT. Addresses on private ranges are masked to
+  their shape (range, port, scheme), and host names are hashed.
+- **The server's part.** `app/logring.py` keeps the last 5,000 log records
+  in memory, so there is a log to send even with no log file. The server
+  part adds the version, uptime, tuner and recorder state, passes, recent
+  failures and disk space.
+- **Where it goes.** `app/reportsend.py` writes one document to Firestore
+  over its REST API, in the owner's project. The web app and the server
+  write to `beamflash-ce-reports-open`. The Apple apps write to
+  `beamflash-ce-reports`, which enforces App Check. The document fields are
+  in [API.md](API.md).
+- **Rules.** `firestore.rules` allows create only, with exactly the
+  document's fields and types. Nobody can read, list, change or delete. The
+  owner reads with an admin key, which skips the rules.
+  `tests/firestore_rules/` tests them in the emulator.
+- **Queue and limits.** A send that fails is stored sealed in
+  `report_queue` (20 at most, oldest out) and tried every 15 minutes. At
+  most 10 reports a day leave one install. `keyId` says which public key
+  sealed a report, so the owner can change keys later.
+- **Consent.** Nothing is sent until someone agrees once
+  (`report_consent`). The web dialog shows what a report holds before the
+  first send.

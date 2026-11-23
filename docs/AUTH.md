@@ -85,7 +85,8 @@ once it holds a real certificate (see below).
 The admin tools behind Settings stay home only too: import and export,
 backups, the backing store, updates, the device list, the connect QR code and
 the library folder suggestions. `/api/tv/settings` answers from outside only to
-a paired device with its key.
+a paired device with its key. The two reads an issue report needs
+(`/api/report/server` and `/api/report/email`) follow the same rule.
 
 A request from outside with no `Host` header is refused while the switch is
 on.

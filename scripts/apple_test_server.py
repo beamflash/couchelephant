@@ -16,6 +16,10 @@ talks to replaced:
   - sign-in off, so a simulator is let in without a code;
   - one recording already under way, with an ad break 20 seconds in,
     for the Skip ad test;
+  - the fake Firestore on FIRESTORE_PORT (default 8792), so a report sent
+    from the apps or the server lands there and never at the owner's.
+    GET /test/reports lists what arrived (with the App Check header each
+    carried) and POST /test/reports/reset empties it;
   - with AWAY=1, Use away from home on: the same port also answers HTTPS
     with its own certificate, and GET /test/pin says the key's fingerprint,
     so the pinning tests can connect with it. Sign-in stays off, and the
@@ -57,7 +61,7 @@ os.makedirs(os.environ["COUCHELEPHANT_LIBRARY"])
 os.environ.setdefault("COUCHELEPHANT_FAKE_ANCHOR", str(int(time.time()) // 3600 * 3600))
 
 sys.path.insert(0, ROOT)
-from tests import demo_guide, fake_plex, fake_tuner, isolation  # noqa: E402
+from tests import demo_guide, fake_firestore, fake_plex, fake_tuner, isolation  # noqa: E402
 
 isolation.assert_isolated()
 
@@ -65,6 +69,7 @@ from app import db, oneport, recorder, sync, tls, web  # noqa: E402
 
 PORT = int(os.environ.get("PORT", "8790"))
 ALIAS_PORT = int(os.environ.get("ALIAS_PORT", "8791"))
+FIRESTORE_PORT = int(os.environ.get("FIRESTORE_PORT", "8792"))
 AD_BREAK = (20.0, 50.0)
 
 
@@ -93,6 +98,11 @@ def main():
     plex_url, _ = fake_plex.start()
     fake_tuner.LINEUP[:] = [(vcn, call) for vcn, (call, _) in demo_guide.CHANNELS.items()]
     tuner_url, _ = fake_tuner.start()
+    # Reports go to the fake, reachable from the simulator on its own port.
+    fake_firestore.ANY_PROJECT = True
+    fs_url, _ = fake_firestore.start("0.0.0.0", FIRESTORE_PORT)
+    os.environ["COUCHELEPHANT_REPORT_FIRESTORE_URL"] = fs_url
+    print(f"fake Firestore on port {FIRESTORE_PORT}", flush=True)
 
     db.init()
     for k, v in {"plex_url": plex_url, "plex_token": "demo", "dry_run": "0",
@@ -139,6 +149,21 @@ def main():
     if not ok:
         raise SystemExit(f"the demo guide would not sync: {detail}")
     print("guide:", detail, flush=True)
+
+    @web.app.get("/test/reports")
+    def _reports():
+        """Test only: every report the fake Firestore took, oldest first."""
+        st = fake_firestore.STATE
+        return {"reports": [{"id": k, "source": v["source"]["stringValue"],
+                             "size": int(v["size"]["integerValue"]),
+                             "appVersion": v["appVersion"]["stringValue"],
+                             "appCheck": st.appcheck.get(k)}
+                            for k, v in st.docs.items()]}
+
+    @web.app.post("/test/reports/reset")
+    def _reports_reset():
+        fake_firestore.STATE.reset()
+        return {"ok": True}
 
     @web.app.post("/test/seed-pass")
     def _seed_pass(title: str, n: int = 3, lost: int = 0, section: str = "tv"):

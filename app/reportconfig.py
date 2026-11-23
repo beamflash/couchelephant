@@ -7,10 +7,10 @@ from dataclasses import dataclass
 
 from . import sealing
 
-PROJECT = ""
-API_KEY = ""
-PUBLIC_KEY_B64 = ""
-KEY_ID = ""
+PROJECT = "beamflash-ce-reports-open"
+API_KEY = "AIzaSyByCybzCRkS28iPeUkhJW44OqjWqGGpblo"
+PUBLIC_KEY_B64 = "lXDT3ytNQ9XpHxuyUv3vRaE5dMLicWbUa1xOMhoaeBM="
+KEY_ID = "66a991f2"
 DEFAULT_URL = "https://firestore.googleapis.com"
 
 

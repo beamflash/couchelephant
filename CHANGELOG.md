@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.5.33 - 2026-11-23
+
+### Added
+
+- **Report this problem.** An error in the web app now offers a button that
+  sends a report to the developer, and the About page has **Report an
+  issue** for anything else. You can add a message and an email address.
+  The first time, it shows what a report holds and asks before sending.
+- **Reports are sealed.** A report is locked to the developer's key on the
+  server before it leaves, so only the developer can read it. Passwords,
+  tokens and keys are removed first, and the addresses on your network are
+  masked. A report that cannot be sent right away is kept, still sealed,
+  and sent later. At most 10 a day leave one install.
+
 ## 1.5.32 - 2026-11-21
 
 ### Fixed

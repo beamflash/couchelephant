@@ -210,6 +210,30 @@ and `tls=0` otherwise. `GET /api/tv/hello` has no new fields.
 | `GET`/`POST` `/login` | Sign in |
 | `POST /logout` | Sign out |
 
+## Issue reports
+
+A report is sealed to the owner's public key before it leaves the server, and
+only the owner can open it. See "Issue reports" in [ARCHITECTURE.md](ARCHITECTURE.md).
+
+| | |
+| --- | --- |
+| `GET /api/report/server` | The server's part of a report, scrubbed. Administrators and paired devices only, and from outside only with a device key. `{"ok": true, "server": {...}}`, or `"server": null` with a `note` when it timed out or failed |
+| `GET /api/report/email` | The Plex account's email, to fill in the contact line. Same access as above. `{"ok": true, "email": ""}` when there is none |
+| `GET /api/report/consent` | `consented` (whether reports may be sent at all) and `queued` (how many wait to be sent) |
+| `POST /api/report/consent` | Agree to sending reports. Form field `agree=1` |
+| `POST /api/report/send` | Build, seal and send a report. JSON: `message`, `email`, `trigger` (`kind` is `error`, `support` or `crash`, plus optional `error` and `screen`), `client` (`ua`, `screen_size`), `app_log` (up to 500 lines). Answers `sent` or `queued`, the `reportId`, and a `message` to show. `403` before consent |
+
+`consent` and `send` are open to any signed-in person. A send that cannot
+reach the owner is kept sealed and tried again every 15 minutes. At most 10
+reports a day leave one install.
+
+The document written to Firestore has exactly these fields, and the rules
+refuse anything else: `reportId` (32 hex, also the document id), `sealed`
+(bytes, at most 900,000), `size`, `created` (a timestamp up to 30 days old),
+`source` (`web`, `ios`, `ipados`, `tvos` or `server`), `appVersion`, `keyId`
+and `installId` (random, made once). Nothing in it is readable without the
+owner's private key.
+
 ## Health
 
 `GET /healthz` needs no sign-in and returns whether it is configured, whether

@@ -16,6 +16,9 @@ FIELDS = {"reportId": "stringValue", "sealed": "bytesValue", "size": "integerVal
           "installId": "stringValue"}
 PROJECT = "test-project"
 API_KEY = "test-api-key"
+# The Apple test server sets this: the apps there use their own project and
+# key, so any project and any key are let in (a key must still be there).
+ANY_PROJECT = False
 
 
 class State:
@@ -26,6 +29,7 @@ class State:
         self.docs = {}        # id -> fields dict
         self.bodies = []      # raw request bodies, for "no cleartext" checks
         self.requests = []    # (method, path, query)
+        self.appcheck = {}    # id -> X-Firebase-AppCheck header, or None
         self._fail = []       # statuses to answer, in order
 
     def fail_next(self, status, n=1):
@@ -60,8 +64,13 @@ class Handler(BaseHTTPRequestHandler):
         STATE.bodies.append(raw)
         if STATE._fail:
             return self._send(STATE._fail.pop(0))
-        want = f"/v1/projects/{PROJECT}/databases/(default)/documents/reports"
-        if u.path != want or q.get("key") != API_KEY or not q.get("documentId"):
+        m = re.fullmatch(r"/v1/projects/([a-z0-9-]+)/databases/\(default\)/documents/reports",
+                         u.path)
+        if ANY_PROJECT:
+            ok = bool(m) and bool(q.get("key"))
+        else:
+            ok = bool(m) and m.group(1) == PROJECT and q.get("key") == API_KEY
+        if not ok or not q.get("documentId"):
             return self._send(403)
         try:
             fields = json.loads(raw)["fields"]
@@ -80,12 +89,13 @@ class Handler(BaseHTTPRequestHandler):
         if q["documentId"] in STATE.docs:
             return self._send(409, {"error": {"status": "ALREADY_EXISTS"}})
         STATE.docs[q["documentId"]] = fields
+        STATE.appcheck[q["documentId"]] = self.headers.get("X-Firebase-AppCheck")
         self._send(200, {"name": "x"})
 
 
-def start():
-    """Run the fake on a free localhost port. Returns (url, stop)."""
-    srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+def start(host="127.0.0.1", port=0):
+    """Run the fake, on a free localhost port unless told. Returns (url, stop)."""
+    srv = ThreadingHTTPServer((host, port), Handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
 
     def stop():

@@ -26,12 +26,38 @@ os.environ["COUCHELEPHANT_FFMPEG"] = os.path.join(
 # Updates off unless a test brings a fake feed; never the real GitHub.
 os.environ["COUCHELEPHANT_RELEASES_URL"] = ""
 os.environ["COUCHELEPHANT_COMSKIP"] = os.path.join(_ROOT, "no-comskip")
+# Never the owner's real Firestore: a closed port, and a test that wants a
+# Firestore brings the fake. The shipped values are blanked per test below.
+os.environ["COUCHELEPHANT_REPORT_FIRESTORE_URL"] = "http://127.0.0.1:9"
 
 from tests import fake_plex, fake_tuner, isolation  # noqa: E402
 
 isolation.assert_isolated()                      # before anything is imported
 
-from app import adskip, auth, db, ratelimit, recorder, sync  # noqa: E402
+from app import (  # noqa: E402
+    adskip,
+    auth,
+    db,
+    ratelimit,
+    recorder,
+    reportconfig,  # noqa: E402
+    sync,
+)
+
+# The shipped report settings, kept for the test that checks them.
+SHIPPED_REPORT_CONFIG = {k: getattr(reportconfig, k)
+                         for k in ("PROJECT", "API_KEY", "PUBLIC_KEY_B64", "KEY_ID")}
+
+
+@pytest.fixture(autouse=True)
+def no_real_reports(request, monkeypatch):
+    """Reports are "not set up" unless a test sets the env to the fake. Only
+    a `live` test (opt in with COUCHELEPHANT_REPORT_LIVE=1) gets the real one."""
+    if request.node.get_closest_marker("live"):
+        monkeypatch.setenv("COUCHELEPHANT_REPORT_FIRESTORE_URL", reportconfig.DEFAULT_URL)
+        return
+    for k in SHIPPED_REPORT_CONFIG:
+        monkeypatch.setattr(reportconfig, k, "")
 
 
 def pytest_sessionfinish(session, exitstatus):

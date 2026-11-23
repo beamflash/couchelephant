@@ -288,3 +288,14 @@ def test_rate_limit_message_is_plain(client, fs, monkeypatch):
     j = client.post("/api/report/send", json=_body()).json()
     assert j["ok"] is False and "too many reports today" in j["error"].lower()
     assert "tomorrow" in j["error"].lower()
+
+
+def test_docs_name_every_report_route():
+    from pathlib import Path
+
+    from app.routes import report
+    api = (Path(__file__).resolve().parent.parent / "docs" / "API.md").read_text()
+    paths = {(m, r.path) for r in report.router.routes for m in r.methods}
+    assert paths
+    for method, path in paths:
+        assert f"`{method} {path}`" in api, f"docs/API.md does not name {method} {path}"

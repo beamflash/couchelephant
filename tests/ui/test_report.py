@@ -209,7 +209,7 @@ def test_send_records_consent_on_the_server(page, fs):
     assert db.get_setting("report_consent") == "1"
 
 
-def test_escape_and_backdrop_do_nothing_while_sending(page, fs):
+def test_escape_backdrop_and_never_mind_do_nothing_while_sending(page, fs):
     release = []
     def slow(route):
         release.append(route)           # held until the test lets it go
@@ -219,6 +219,7 @@ def test_escape_and_backdrop_do_nothing_while_sending(page, fs):
     page.wait_for_function("document.getElementById('reportmsg').textContent === 'Sending...'")
     page.keyboard.press("Escape")
     page.mouse.click(5, 5)
+    page.click("#reportno")
     assert page.locator("#reportdlg").is_visible()
     release[0].continue_()
     page.wait_for_selector("#reportid")
