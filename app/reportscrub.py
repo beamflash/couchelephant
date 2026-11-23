@@ -56,23 +56,31 @@ def _is_private(host: str) -> bool:
     return any(ip in n for n in _PRIVATE_NETS if n.version == ip.version)
 
 
+# Word characters and whitespace are spelled out, never \w \s \b: Python and
+# ICU (Swift) disagree on combining marks, joiners, \v and a few controls, and
+# a secret next to one must not slip past either engine. Same text in Swift.
+_WS = r" \x09-\x0d\x1c-\x1f\x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000"
+_S = "[" + _WS + "]"
+_NS = "[^" + _WS + "]"
+
 # The keyword, lower case after a non-letter or camelCase after a lower letter
 # (accessToken, clientSecret, apiKey).
 _KEY = (r"(?:(?<![A-Za-z])(?i:password|passwd|secret|api[_-]?key|token|key|auth)"
         r"|(?<=[a-z])(?:Password|Passwd|Secret|ApiKey|Token|Key|Auth))")
 _AUTH_HEADER = re.compile(
-    r"Authorization\s*:\s*(?:(?:Bearer|Basic|Token)\s+)?\S+", re.I)
-_COOKIE = re.compile(r"(?:Set-)?Cookie\s*:[^\n]*", re.I)
-_BEARER = re.compile(r"\bBearer\s+\S+", re.I)
+    "Authorization" + _S + "*:" + _S + "*(?:(?:Bearer|Basic|Token)" + _S + "+)?"
+    + _NS + "+", re.I)
+_COOKIE = re.compile("(?:Set-)?Cookie" + _S + r"*:[^\n]*", re.I)
+_BEARER = re.compile("(?<![A-Za-z0-9_])Bearer" + _S + "+" + _NS + "+", re.I)
 _JWT = re.compile(
     r"(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*")
 # Private halves of an EC/RSA JWK, which may have no digits to trip the
 # long-run rule below.
-_JWK_PRIVATE = re.compile(r'"(?:d|p|q|dp|dq|qi)"\s*:\s*"[^"]+"')
+_JWK_PRIVATE = re.compile(r'"(?:d|p|q|dp|dq|qi)"' + _S + "*:" + _S + r'*"[^"]+"')
 # keyword = value. A quoted value goes to its closing quote, an unquoted one
 # to the next space, or to & so a query string keeps its other parameters.
 _KV = re.compile(
-    _KEY + r"""["']?\s*[=:]\s*(?:"[^"\n]*"|'[^'\n]*'|[^\s&]+)""")
+    _KEY + """["']?""" + _S + "*[=:]" + _S + """*(?:"[^"\\n]*"|'[^'\\n]*'|[^""" + _WS + "&]+)")
 # "token Zx_cVbNm..." with nothing between the word and the secret.
 _KW_SPACE = re.compile(
     r"(?<![A-Za-z])(?i:token|key|secret|password)[ \t]+[A-Za-z0-9_-]{16,}")
@@ -83,24 +91,24 @@ _RUN = re.compile(r"(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{20,}(?![A-Za-z0-9_-])")
 _SCHEME = r"[A-Za-z][A-Za-z0-9+.-]{0,30}://"
 # The body stops where another scheme:// starts, so a URL nested in a path or
 # query is a match of its own and is masked on its own.
-_URL = re.compile(_SCHEME + r"((?:(?!" + _SCHEME + r")[^\s\"'<>]){1,1000})")
+_URL = re.compile(_SCHEME + "((?:(?!" + _SCHEME + ")[^" + _WS + "\"'<>]){1,1000})")
 # The host after an @ even when the user:pass in front of it was too long for
 # the URL pass to reach (also masks the host half of an email address).
 _AT_HOST = re.compile(
-    r"(?<=@)(?:[A-Za-z0-9-]{1,63}\.){1,6}[A-Za-z]{2,24}(?::(\d{2,5}))?(?![\w-])")
-_IPV4 = re.compile(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?(?![\d.])")
+    r"(?<=@)(?:[A-Za-z0-9-]{1,63}\.){1,6}[A-Za-z]{2,24}(?::([0-9]{2,5}))?(?![A-Za-z0-9_-])")
+_IPV4 = re.compile(r"(?<![0-9.])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?::[0-9]{1,5})?(?![0-9.])")
 _V6_BRACKET = re.compile(
-    r"\[([0-9A-Fa-f:.]{2,45})(?:%[A-Za-z0-9_.-]{1,20})?\](?::(\d{1,5}))?")
+    r"\[([0-9A-Fa-f:.]{2,45})(?:%[A-Za-z0-9_.-]{1,20})?\](?::([0-9]{1,5}))?")
 _V6_BARE = re.compile(
-    r"(?<![\w:.])([0-9A-Fa-f:]{2,39})(?:%[A-Za-z0-9_.-]{1,20})?(?![\w:])")
+    r"(?<![A-Za-z0-9_:.])([0-9A-Fa-f:]{2,39})(?:%[A-Za-z0-9_.-]{1,20})?(?![A-Za-z0-9_:])")
 # Bare text only counts as IPv6 when it looks like an address a LAN or a
 # provider hands out, so "dead::beef" and "a::b" are left alone.
 _V6_SHAPE = re.compile(
     r"::1|fe[89ab][0-9a-f]:.*|f[cd][0-9a-f]{0,2}:.*|[23][0-9a-f]{3}:.*"
     r"|(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}", re.I)
 _LOCAL_NAME = re.compile(
-    r"(?<![\w.-])(?:[A-Za-z0-9-]{1,63}\.){1,6}"
-    r"(?:lan|local|localdomain|home|internal|arpa)(?::(\d{1,5}))?(?![\w-])", re.I)
+    r"(?<![A-Za-z0-9_.-])(?:[A-Za-z0-9-]{1,63}\.){1,6}"
+    r"(?:lan|local|localdomain|home|internal|arpa)(?::([0-9]{1,5}))?(?![A-Za-z0-9_-])", re.I)
 # name:port in free text. A dotted name is a host unless it ends like a source
 # file ("app.py:1234") or a number ("1.5.33:12"). A single word is a host only
 # after a connection word or an @, or when it is a known host: "Quality:1080p",
@@ -109,12 +117,12 @@ _CODE_EXT = {"py", "js", "ts", "swift", "go", "rs", "c", "h", "cpp", "java",
              "kt", "rb", "sh", "html", "json", "yaml", "yml", "toml", "txt",
              "log", "md"}
 _DOTTED_PORT = re.compile(
-    r"(?<![\w.:/@-])([A-Za-z][A-Za-z0-9-]{0,62}(?:\.[A-Za-z0-9-]{1,63}){1,6})"
-    r":(\d{2,5})(?![\w:.-])")
+    r"(?<![A-Za-z0-9_.:/@-])([A-Za-z][A-Za-z0-9-]{0,62}(?:\.[A-Za-z0-9-]{1,63}){1,6})"
+    r":([0-9]{2,5})(?![A-Za-z0-9_:.-])")
 _WORD_PORT = re.compile(
-    r"((?<![\w-])(?i:host|connect|connecting|connection|to|from|server|address"
+    r"((?<![A-Za-z0-9_-])(?i:host|connect|connecting|connection|to|from|server|address"
     r"|addr|upstream|proxy|peer)[ \t]{1,3}|@)"
-    r"([A-Za-z][A-Za-z0-9-]{0,62}):(\d{2,5})(?![\w:.-])")
+    r"([A-Za-z][A-Za-z0-9-]{0,62}):([0-9]{2,5})(?![A-Za-z0-9_:.-])")
 _ALREADY = re.compile(r"private-lan|host-[0-9a-f]{10}")
 
 
@@ -292,7 +300,7 @@ class Scrubber:
         s = _DOTTED_PORT.sub(self._mask_dotted_port, s)
         s = _WORD_PORT.sub(self._mask_word_port, s)
         for h in self._hosts:
-            s = re.sub(r"(?<![\w.-])" + re.escape(h) + r"(?![\w-])",
+            s = re.sub(r"(?<![A-Za-z0-9_.-])" + re.escape(h) + r"(?![A-Za-z0-9_-])",
                        self.host(h), s, flags=re.I)
         s = _AUTH_HEADER.sub(REMOVED, s)
         s = _COOKIE.sub(REMOVED, s)

@@ -3,238 +3,371 @@
   {
    "name": "plex token in url query",
    "input": "GET http://192.168.1.20:32400/library/sections?X-Plex-Token=Xk3j9Qm2LpR7vT4wYz8N failed",
-   "secret": "Xk3j9Qm2LpR7vT4wYz8N"
+   "secret": "Xk3j9Qm2LpR7vT4wYz8N",
+   "expected": "GET http://private-lan:32400/library/sections?X-Plex-[removed] failed"
   },
   {
    "name": "plex token in header line",
    "input": "X-Plex-Token: Qw8e3Rt6Yu1Io4Pa7Sd2",
-   "secret": "Qw8e3Rt6Yu1Io4Pa7Sd2"
+   "secret": "Qw8e3Rt6Yu1Io4Pa7Sd2",
+   "expected": "X-Plex-[removed]"
   },
   {
    "name": "plex token bare in a log line",
    "input": "sync used token Zx9Cv3Bn7Ml1Kj5Hg2Fd for the call",
-   "secret": "Zx9Cv3Bn7Ml1Kj5Hg2Fd"
+   "secret": "Zx9Cv3Bn7Ml1Kj5Hg2Fd",
+   "expected": "sync used [removed] for the call"
   },
   {
    "name": "device key",
    "input": "registered device a1B2c3D4e5F6g7H8i9J0k1L2m3N4",
-   "secret": "a1B2c3D4e5F6g7H8i9J0k1L2m3N4"
+   "secret": "a1B2c3D4e5F6g7H8i9J0k1L2m3N4",
+   "expected": "registered device [removed]"
   },
   {
    "name": "bearer header",
    "input": "Authorization: Bearer abcDEF123ghiJKL456mnoPQR",
-   "secret": "abcDEF123ghiJKL456mnoPQR"
+   "secret": "abcDEF123ghiJKL456mnoPQR",
+   "expected": "[removed]"
   },
   {
    "name": "bearer without header name",
    "input": "sent Bearer shortTok9 upstream",
-   "secret": "shortTok9"
+   "secret": "shortTok9",
+   "expected": "sent [removed] upstream"
   },
   {
    "name": "jwt",
    "input": "session eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0In0.c2lnbmF0dXJl end",
-   "secret": "eyJhbGciOiJIUzI1NiJ9"
+   "secret": "eyJhbGciOiJIUzI1NiJ9",
+   "expected": "session [removed] end"
   },
   {
    "name": "pem private key",
    "input": "tls load failed\n-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSj\nAbCdEfGhIjKlMnOpQrStUvWxYz0123456789\n-----END PRIVATE KEY-----\nretrying",
-   "secret": "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSj"
+   "secret": "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSj",
+   "expected": "tls load failed\n[removed]\nretrying"
   },
   {
    "name": "pem ec private key",
    "input": "-----BEGIN EC PRIVATE KEY-----\nZm9vYmFyZm9vYmFy\n-----END EC PRIVATE KEY-----",
-   "secret": "Zm9vYmFyZm9vYmFy"
+   "secret": "Zm9vYmFyZm9vYmFy",
+   "expected": "[removed]"
   },
   {
    "name": "acme account key json",
    "input": "{\"kty\":\"EC\",\"crv\":\"P-256\",\"x\":\"f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU\",\"y\":\"x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0\",\"d\":\"jpsQnnGQmL-YBIffH1136cspYG6-0iY7X1fCE9-E9LI\"}",
-   "secret": "jpsQnnGQmL-YBIffH1136cspYG6-0iY7X1fCE9-E9LI"
+   "secret": "jpsQnnGQmL-YBIffH1136cspYG6-0iY7X1fCE9-E9LI",
+   "expected": "{\"kty\":\"EC\",\"crv\":\"P-256\",\"x\":\"[removed]\",\"y\":\"[removed]\",[removed]}"
   },
   {
    "name": "acme key no digits in d",
    "input": "{\"kty\":\"EC\",\"d\":\"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ\"}",
-   "secret": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ"
+   "secret": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ",
+   "expected": "{\"kty\":\"EC\",[removed]}"
   },
   {
    "name": "userinfo in url",
    "input": "fetch https://user:hunter2@example.net/x",
-   "secret": "hunter2"
+   "secret": "hunter2",
+   "expected": "fetch https://host-3d06fbbf5c/x"
   },
   {
    "name": "password equals",
    "input": "login with password=hunter2 now",
-   "secret": "hunter2"
+   "secret": "hunter2",
+   "expected": "login with [removed] now"
   },
   {
    "name": "password json",
    "input": "{\"password\": \"hunter2\", \"user\": \"bob\"}",
-   "secret": "hunter2"
+   "secret": "hunter2",
+   "expected": "{\"[removed], \"user\": \"bob\"}"
   },
   {
    "name": "api key colon",
    "input": "api_key: sk-test-notreal",
-   "secret": "sk-test-notreal"
+   "secret": "sk-test-notreal",
+   "expected": "[removed]"
   },
   {
    "name": "setting dump line",
    "input": "settings: plex_url=http://10.0.0.5:32400 plex_token=Mn4Bv7Cx1Zl9Kj3Hg6Fd tmdb_key=0123456789abcdef0123456789abcdef",
-   "secret": "Mn4Bv7Cx1Zl9Kj3Hg6Fd"
+   "secret": "Mn4Bv7Cx1Zl9Kj3Hg6Fd",
+   "expected": "settings: plex_url=http://private-lan:32400 plex_[removed] tmdb_[removed]"
   },
   {
    "name": "setting dump tmdb key",
    "input": "tmdb_key=0123456789abcdef0123456789abcdef",
-   "secret": "0123456789abcdef0123456789abcdef"
+   "secret": "0123456789abcdef0123456789abcdef",
+   "expected": "tmdb_[removed]"
   },
   {
    "name": "64 hex run",
    "input": "digest 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08 ok",
-   "secret": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+   "secret": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+   "expected": "digest [removed] ok"
   },
   {
    "name": "lan address in text",
    "input": "tuner unreachable at 10.20.30.40:5004",
-   "secret": "10.20.30.40"
+   "secret": "10.20.30.40",
+   "expected": "tuner unreachable at private-lan:5004"
   },
   {
    "name": "public address in text",
    "input": "dns says 203.0.113.77 for the host",
-   "secret": "203.0.113.77"
+   "secret": "203.0.113.77",
+   "expected": "dns says host-1525903f10 for the host"
   },
   {
    "name": "public host url in text",
    "input": "calling https://plex.example.net:8443/status",
-   "secret": "plex.example.net"
+   "secret": "plex.example.net",
+   "expected": "calling https://host-5b2267114d:8443/status"
   },
   {
    "name": "no digit token after word",
    "input": "token Zx_cVbNmLkJhGfDsAqWe used",
-   "secret": "Zx_cVbNmLkJhGfDsAqWe"
+   "secret": "Zx_cVbNmLkJhGfDsAqWe",
+   "expected": "[removed] used"
   },
   {
    "name": "no digit token bare in sync line",
    "input": "sync used QwErTyUiOpAsDfGhJkLz ok",
    "secret": "QwErTyUiOpAsDfGhJkLz",
-   "known": true
+   "known": true,
+   "expected": "sync used [removed] ok"
   },
   {
    "name": "truncated pem",
    "input": "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkq+hkiG9w0BAQEF/AASCBKcwg+gSj\nAbCdEf",
-   "secret": "AbCdEf"
+   "secret": "AbCdEf",
+   "expected": "[removed]"
   },
   {
    "name": "bare host port",
    "input": "Cannot connect to host plex.home.lan:32400 ssl:default",
-   "secret": "plex.home.lan"
+   "secret": "plex.home.lan",
+   "expected": "Cannot connect to host host-6ff1312318:32400 ssl:default"
   },
   {
    "name": "local name",
    "input": "resolving mediabox.local failed",
-   "secret": "mediabox"
+   "secret": "mediabox",
+   "expected": "resolving host-e3cb6ed2cb failed"
   },
   {
    "name": "single label host port",
    "input": "connect to nasbox:32400 refused",
-   "secret": "nasbox"
+   "secret": "nasbox",
+   "expected": "connect to host-84df2d7dd5:32400 refused"
   },
   {
    "name": "ipv6 private",
    "input": "tuner at fd00::1234 down",
-   "secret": "fd00::1234"
+   "secret": "fd00::1234",
+   "expected": "tuner at private-lan down"
   },
   {
    "name": "ipv6 link local zone",
    "input": "iface fe80::1%eth0 up",
-   "secret": "fe80::1"
+   "secret": "fe80::1",
+   "expected": "iface private-lan up"
   },
   {
    "name": "ipv6 bracket port",
    "input": "tuner at [fd00::1234]:5004 down",
-   "secret": "fd00::1234"
+   "secret": "fd00::1234",
+   "expected": "tuner at private-lan:5004 down"
   },
   {
    "name": "ipv6 public",
    "input": "reply from 2001:db8::77 late",
-   "secret": "2001:db8::77"
+   "secret": "2001:db8::77",
+   "expected": "reply from host-a5e1a7becc late"
   },
   {
    "name": "malformed url",
    "input": "x http://[bad.example.net y",
-   "secret": "bad.example.net"
+   "secret": "bad.example.net",
+   "expected": "x host-12a44c055f y"
   },
   {
    "name": "quoted password with spaces",
    "input": "{\"password\": \"hunter 2 x\"}",
-   "secret": "hunter 2 x"
+   "secret": "hunter 2 x",
+   "expected": "{\"[removed]}"
   },
   {
    "name": "password with comma and semicolon",
    "input": "password=ab,cdef;gh",
-   "secret": "cdef;gh"
+   "secret": "cdef;gh",
+   "expected": "[removed]"
   },
   {
    "name": "slash in password",
    "input": "https://user:pa/ss@plex.example.net/x",
-   "secret": "plex.example.net"
+   "secret": "plex.example.net",
+   "expected": "https://host-5b2267114d/x"
   },
   {
    "name": "slash in password tail",
    "input": "https://user:pa/ss@plex.example.net/x",
-   "secret": "ss@"
+   "secret": "ss@",
+   "expected": "https://host-5b2267114d/x"
   },
   {
    "name": "camel case key",
    "input": "\"accessToken\": \"abcdefghijklmnopqrstuvwx\"",
-   "secret": "abcdefghijklmnopqrstuvwx"
+   "secret": "abcdefghijklmnopqrstuvwx",
+   "expected": "\"access[removed]"
   },
   {
    "name": "client secret camel",
    "input": "clientSecret=zzzzzzzzzzzzzzzz",
-   "secret": "zzzzzzzzzzzzzzzz"
+   "secret": "zzzzzzzzzzzzzzzz",
+   "expected": "client[removed]"
   },
   {
    "name": "stream pass path",
    "input": "GET /hlsk/12.1795000000.0123456789abcdef0123456789abcdef/x.m3u8",
-   "secret": "0123456789abcdef0123456789abcdef"
+   "secret": "0123456789abcdef0123456789abcdef",
+   "expected": "GET /hlsk/12.1795000000.[removed]/x.m3u8"
   },
   {
    "name": "question mark in password",
    "input": "https://user:pa?ss@example.net/x",
-   "secret": "ss@example.net"
+   "secret": "ss@example.net",
+   "expected": "https://host-3d06fbbf5c/x"
   },
   {
    "name": "hash in password",
    "input": "https://user:pa#ss@example.net/x",
-   "secret": "example.net"
+   "secret": "example.net",
+   "expected": "https://host-3d06fbbf5c/x"
   },
   {
    "name": "single word after connect to",
    "input": "connect to plexbox:32400 failed",
-   "secret": "plexbox"
+   "secret": "plexbox",
+   "expected": "connect to host-69d404a8de:32400 failed"
   },
   {
    "name": "dotted host port",
    "input": "upstream media.example.net:9000 down",
-   "secret": "media.example.net"
+   "secret": "media.example.net",
+   "expected": "upstream host-291cd7cfa7:9000 down"
   },
   {
    "name": "nested url in fragment query",
    "input": "https://app.plex.tv/auth#?forwardUrl=https://media.example.net:32400/web",
-   "secret": "media.example.net"
+   "secret": "media.example.net",
+   "expected": "https://host-1f81c2bdc2/auth#?forwardUrl=https://host-291cd7cfa7:32400/web"
   },
   {
    "name": "nested url in query",
    "input": "GET http://10.0.0.5:8080/cb?next=https://media.example.net/home",
-   "secret": "media.example.net"
+   "secret": "media.example.net",
+   "expected": "GET http://private-lan:8080/cb?next=https://host-291cd7cfa7/home"
   },
   {
    "name": "second url after comma",
    "input": "http://a.example.com/x,https://b.example.org/y",
-   "secret": "b.example.org"
+   "secret": "b.example.org",
+   "expected": "http://host-26cf4dd765/x,https://host-ff26cb2137/y"
   },
   {
    "name": "very long userinfo",
    "input": "https://user:pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp@media.example.net/x",
-   "secret": "media.example.net"
+   "secret": "media.example.net",
+   "expected": "[removed]@host-291cd7cfa7/x"
+  },
+  {
+   "name": "zwj before local name",
+   "input": "resolving ‍mediabox.local failed",
+   "secret": "mediabox.local",
+   "expected": "resolving ‍host-e3cb6ed2cb failed"
+  },
+  {
+   "name": "variation selector after local name",
+   "input": "resolving mediabox.local️ failed",
+   "secret": "mediabox.local",
+   "expected": "resolving host-e3cb6ed2cb️ failed"
+  },
+  {
+   "name": "variation selector after known host",
+   "input": "retry plexbox️ later",
+   "secret": "plexbox",
+   "host": "plexbox",
+   "expected": "retry host-69d404a8de️ later"
+  },
+  {
+   "name": "combining mark after ipv6",
+   "input": "at fe80::1́ ok",
+   "secret": "fe80::1",
+   "expected": "at private-lań ok"
+  },
+  {
+   "name": "combining mark before bearer",
+   "input": "x́Bearer shortTok9 up",
+   "secret": "shortTok9",
+   "expected": "x́[removed] up"
+  },
+  {
+   "name": "vertical tab in password kv",
+   "input": "password\u000b=hunter2 now",
+   "secret": "hunter2",
+   "expected": "[removed] now"
+  },
+  {
+   "name": "vertical tab in basic auth header",
+   "input": "Authorization\u000b: Basic dXNlcjpwYXNz",
+   "secret": "dXNlcjpwYXNz",
+   "expected": "[removed]"
+  },
+  {
+   "name": "vertical tab in cookie header",
+   "input": "Set-Cookie\u000b: sid=abc; Path=/",
+   "secret": "sid=abc",
+   "expected": "[removed]"
+  },
+  {
+   "name": "kana before local name",
+   "input": "サーバーmediabox.localに接続できません",
+   "secret": "mediabox.local",
+   "expected": "サーバーhost-e3cb6ed2cbに接続できません"
+  },
+  {
+   "name": "kana around known host",
+   "input": "couchboxに接続できません",
+   "secret": "couchbox",
+   "host": "couchbox",
+   "expected": "host-b157c91587に接続できません"
+  },
+  {
+   "name": "kanji before ipv6",
+   "input": "名前がfe80::1の",
+   "secret": "fe80::1",
+   "expected": "名前がprivate-lanの"
+  },
+  {
+   "name": "superscript before local name",
+   "input": "²mediabox.local",
+   "secret": "mediabox.local",
+   "expected": "²host-e3cb6ed2cb"
+  },
+  {
+   "name": "superscript before bearer",
+   "input": "²Bearer abcdefg",
+   "secret": "abcdefg",
+   "expected": "²[removed]"
+  },
+  {
+   "name": "combining mark after at sign in url",
+   "input": "https://bob:pa/ss@́plex.example.net/x",
+   "secret": "plex.example.net",
+   "expected": "https://host-f68cdf8827/x"
   }
  ],
  "must_survive": [

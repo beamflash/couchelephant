@@ -13,15 +13,28 @@ from app.reportscrub import (
 )
 
 CORPUS = json.loads(
-    (pathlib.Path(__file__).parent / "data" / "scrub_corpus.json").read_text())
+    (pathlib.Path(__file__).parent / "data" / "scrub_corpus.json").read_text(
+        encoding="utf-8"))
+# The Swift suite uses the same salt, so the outputs can match byte for byte.
+CORPUS_SALT = b"\x07" * 16
+
+
+def _scrubber(case, salt=None):
+    known = [case["secret"]] if case.get("known") else []
+    hosts = [case["host"]] if case.get("host") else []
+    return Scrubber(salt=salt, known_secrets=known, known_hosts=hosts)
 
 
 @pytest.mark.parametrize("case", CORPUS["secrets"], ids=lambda c: c["name"])
 def test_corpus_no_secret_survives(case):
     # "known" cases have no shape to match; the caller supplies the value.
-    known = [case["secret"]] if case.get("known") else []
-    out = Scrubber(known_secrets=known).text(case["input"])
+    out = _scrubber(case).text(case["input"])
     assert case["secret"] not in out
+
+
+@pytest.mark.parametrize("case", CORPUS["secrets"], ids=lambda c: c["name"])
+def test_corpus_output_matches_expected(case):
+    assert _scrubber(case, CORPUS_SALT).text(case["input"]) == case["expected"]
 
 
 @pytest.mark.parametrize("s", CORPUS["must_survive"])
@@ -98,6 +111,29 @@ def test_known_host_matches_address_hash():
     assert s.host("media.example.net") in s.address("https://media.example.net")
 
 
+def test_corpus_has_expected_for_every_secret_case():
+    assert all("expected" in c for c in CORPUS["secrets"])
+
+
+@pytest.mark.parametrize("s", [
+    "resolving \u200dmediabox.local failed", "resolving mediabox.local\ufe0f failed",
+    "at fe80::1\u0301 ok", "\u00b2mediabox.local",
+    "\u30b5\u30fc\u30d0\u30fcmediabox.local\u306b\u63a5\u7d9a",
+])
+def test_word_guards_are_ascii_only(s):
+    assert "mediabox" not in Scrubber().text(s) and "fe80" not in Scrubber().text(s)
+
+
+@pytest.mark.parametrize("s,gone", [
+    ("password\u000b=hunter2 now", "hunter2"),
+    ("Authorization\u000b: Basic dXNlcjpwYXNz", "dXNlcjpwYXNz"),
+    ("Set-Cookie\u000b: sid=abc; Path=/", "sid=abc"),
+    ("Authorization\x1c:\x85Basic dXNlcjpwYXNz", "dXNlcjpwYXNz"),
+])
+def test_whitespace_class_is_explicit(s, gone):
+    assert gone not in Scrubber().text(s)
+
+
 @pytest.mark.parametrize("raw", ["http://[bad", "http://[::1", "http://h:99999"])
 def test_malformed_url_never_raises_or_leaks(raw):
     s = Scrubber()
@@ -118,12 +154,15 @@ def test_pathological_input_is_fast():
     # input, not micro speed. The bound is loose so a loaded box does not fail it.
     import time
     s = Scrubber()
-    for unit in ("a.", "eyJ.", "-----BEGIN PRIVATE KEY-----", "a:", "token", "1.",
+    pem = "-----BEGIN PRIVATE KEY-----x-----END PRIVATE KEY-----"
+    # A secret planted at the end must still be gone after the big input.
+    for unit in (pem, "a.", "eyJ.", "-----BEGIN PRIVATE KEY-----", "a:", "token", "1.",
                  "[::", "x://", "x:///", "a://a@", "@", "a::", "to a:1 "):
-        big = unit * (200_000 // len(unit))
+        big = unit * (200_000 // len(unit)) + " password=PlantedSecret9 "
         t = time.perf_counter()
-        s.text(big)
+        out = s.text(big)
         assert time.perf_counter() - t < 3.0, unit
+        assert "PlantedSecret9" not in out, unit
 
 
 def test_surrogate_and_case_in_hashing():
