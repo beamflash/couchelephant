@@ -157,7 +157,7 @@ immediately.
 
 `passes.group_by_game` is the one definition of a game: one programme guid, or
 two guids with the same two teams kicking off within 90 minutes (`SAME_GAME_WINDOW`),
-because two networks list one game under two guids. A pass's `channels_per_game`
+because two networks list one game under two guids. Also one game: a later guid of the same teams up to 6 hours (`LANGUAGE_WINDOW`) after, when it airs in a language the game does not have yet (unknown counts as its own), so a delayed English broadcast and the live Spanish one are not two games. Same-language guids stay two games, so a doubleheader keeps both. Stand-ins and repairs read the game through `passes.game_containing`, the same grouping the pass run uses. A pass's `channels_per_game`
 decides how many airings of each such group it books (`passes.choose_airings`):
 
 | Value | Books |

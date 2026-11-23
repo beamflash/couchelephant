@@ -601,3 +601,122 @@ def test_a_symlinked_logo_is_never_deleted(client, synced, tmp_path):
         assert target.exists() and os.path.islink(link)
     finally:
         os.remove(link)
+
+
+# ---- the stand-in, the pass run and the keeper agree ----
+
+def _stand_row(guid):
+    return dict(db.one("SELECT * FROM our_grabs WHERE airing_id = 'stand'"),
+                booked_vcn="38.1", program_guid=guid)
+
+
+def test_pass_run_stand_in_and_keeper_pick_the_same_airing_in_one_guid(plex, synced):
+    from tests.test_passes import _dry_channels
+    kick = _same_listing(2 * 3600)
+    pid = _mode_pass("one")
+    run = _dry_channels(3 * 3600)
+    _book("stand", "plex://episode/generic", "38.1", kick, pid, sub="2")
+    got = sync._would_choose(_stand_row(NBC_GUID), stand_in=True)
+    assert run == ["41.1"] and got["channel_vcn"] == "41.1"
+    with db.tx() as c:
+        c.execute("DELETE FROM our_grabs")
+    _book("tele", NBC_GUID, "39.1", kick, pid, sub="1")
+    _book("nbc", NBC_GUID, "41.1", kick + 7200, pid, sub="3")
+    assert passes._keeper(passes._pass_bookings(pid), "en")["channel_vcn"] == "41.1"
+
+
+def test_a_stand_in_agrees_with_the_run_across_language_mixes(plex, synced):
+    from tests.test_passes import _dry_channels
+    kick = _bills_game()
+    _airing_with_teams("cbs", "plex://episode/cbs", "42.1", kick + 120, KC_BUF, "B", "NFL")
+    db.set_setting("preferred_language", "en")
+    pid = _mode_pass("one")
+    for l41, l42 in (("en", "en"), (None, "en"), (None, None), ("en", None)):
+        _set_lang("41.1", l41)
+        _set_lang("42.1", l42)
+        run = _dry_channels()
+        _book("stand", "plex://episode/generic", "38.1", kick, pid, sub="9")
+        got = sync._would_choose(_stand_row(TELE_GUID), stand_in=True)
+        with db.tx() as c:
+            c.execute("DELETE FROM our_grabs WHERE airing_id = 'stand'")
+        assert run == [got["channel_vcn"]], (l41, l42)
+
+
+# ---- one game across languages, up to six hours apart ----
+
+def _delayed_english(gap):
+    """Telemundo live under its own guid, NBC `gap` later under another."""
+    kick = _bills_game()
+    with db.tx() as c:
+        c.execute("UPDATE airings SET begins_at = ?, ends_at = ? WHERE id = 'tele'",
+                  (kick, kick + 3600))
+        c.execute("UPDATE airings SET premiere = 0, begins_at = ?, ends_at = ? "
+                  "WHERE id = 'nbc'", (kick + gap, kick + gap + 3600))
+    db.set_setting("preferred_language", "en")
+    return kick
+
+
+def _games():
+    return passes.group_by_game(passes.candidate_airings(159, team_name="Kansas City Chiefs"))
+
+
+def test_the_delayed_english_broadcast_and_the_live_spanish_one_are_one_game(plex, synced):
+    from tests.test_passes import _dry_channels
+    kick = _delayed_english(2 * 3600)
+    games = [g for g in _games().values() if any(a["id"] in ("nbc", "tele") for a in g)]
+    assert len(games) == 1
+    _mode_pass("one")
+    assert _dry_channels(3 * 3600) == ["41.1"], "one booking, and it is the English one"
+    assert kick
+
+
+def test_an_english_doubleheader_three_hours_apart_is_still_two_games(plex, synced):
+    kick = _bills_game()
+    _set_lang("39.1", "en")
+    with db.tx() as c:
+        c.execute("UPDATE airings SET begins_at = ?, ends_at = ? WHERE id = 'tele'",
+                  (kick + 3 * 3600, kick + 4 * 3600))
+    games = [g for g in _games().values() if any(a["id"] in ("nbc", "tele") for a in g)]
+    assert len(games) == 2
+
+
+def test_a_spanish_doubleheader_on_telemundo_is_still_two_games(plex, synced):
+    kick = _bills_game()
+    _airing_with_teams("tele2", "plex://episode/tele-g2", "39.1", kick + 3 * 3600, KC_BUF,
+                       "Kansas City Chiefs vs. Buffalo Bills 2", "Fútbol Americano NFL")
+    games = [g for g in _games().values() if any(a["id"] in ("tele", "tele2") for a in g)]
+    assert len(games) == 2
+    assert not any({"tele", "tele2"} <= {a["id"] for a in g} for g in games)
+
+
+def test_languages_further_apart_than_six_hours_are_two_games(plex, synced):
+    _delayed_english(7 * 3600)
+    games = [g for g in _games().values() if any(a["id"] in ("nbc", "tele") for a in g)]
+    assert len(games) == 2
+
+
+# ---- the stand-in's anchor ----
+
+def test_a_stand_in_anchors_on_the_day_the_game_was_expected_not_a_replay(plex, synced):
+    kick = _bills_game()
+    # The named guid also replays next day on 42.1; the game itself was at kick.
+    _airing_with_teams("replay", NBC_GUID, "42.1", kick + 86400, KC_BUF, "A", "NFL")
+    _set_lang("42.1", "en")
+    db.set_setting("preferred_language", "en")
+    pid = _mode_pass("one")
+    # The first future airing has already started, so only the replay is "earliest future".
+    with db.tx() as c:
+        c.execute("DELETE FROM airings WHERE id IN ('nbc', 'tele')")
+        c.execute("INSERT INTO expectations (pass_id, source, source_id, title, subtitle, "
+                  "expected_at, precision, updated_at) VALUES (?,?,?,?,?,?,?,?)",
+                  (pid, "thesportsdb", "x", "Kansas City Chiefs", "m", kick, "time", 0))
+    exp = db.one("SELECT id FROM expectations")["id"]
+    _airing_with_teams("nbc", NBC_GUID, "41.1", kick - 100, KC_BUF, "A", "NFL")
+    with db.tx() as c:
+        c.execute("UPDATE airings SET begins_at = ? WHERE id = 'nbc'", (kick + 200,))
+    _book("stand", "plex://episode/generic", "38.1", kick, pid, sub="2")
+    with db.tx() as c:
+        c.execute("UPDATE our_grabs SET expectation_id = ? WHERE airing_id = 'stand'", (exp,))
+    row = _stand_row(NBC_GUID)
+    got = sync._would_choose(row, stand_in=True)
+    assert got["channel_vcn"] == "41.1" and got["begins_at"] == kick + 200

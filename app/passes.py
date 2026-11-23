@@ -271,6 +271,14 @@ def group_by_game(rows: list) -> dict[str, list]:
     SAME_GAME_WINDOW, because two networks list one game under two guids. Never
     matched on title: "at" and "vs." differ by network. A row with no teams
     groups by guid alone.
+
+    One more case, for a pass that wants one airing per game. A network can show
+    the game later than another does (Telemundo live at 19:00, NBC at 21:00
+    under its own guid). Two guids of the same teams up to LANGUAGE_WINDOW apart
+    are also one game WHEN the later guid airs in a language the game does not
+    have yet (an unknown language counts as one of its own). Two guids in the same language stay
+    two games however close, so an English doubleheader, or a Spanish one on
+    Telemundo, keeps both games.
     """
     by_guid = {}
     for r in rows:
@@ -283,7 +291,10 @@ def group_by_game(rows: list) -> dict[str, list]:
         start = min(a["begins_at"] for a in airings)
         teams = _team_set(airings[0])
         mate = open_game.get(teams) if teams else None
-        if mate and start - mate[1] <= SAME_GAME_WINDOW:
+        gap = start - mate[1] if mate else None
+        if mate and (gap <= SAME_GAME_WINDOW or (
+                gap <= LANGUAGE_WINDOW
+                and not _guid_languages(airings) <= _guid_languages(games[mate[0]]))):
             games[mate[0]].extend(airings)
             continue
         games[guid] = list(airings)
@@ -292,6 +303,26 @@ def group_by_game(rows: list) -> dict[str, list]:
     for g in games.values():
         g.sort(key=lambda a: (a["begins_at"], a["id"]))
     return games
+
+
+def _guid_languages(airings: list) -> frozenset:
+    """The channel languages one programme airs in. None stands for unknown."""
+    return frozenset(airing_language(a) for a in airings)
+
+
+def game_containing(rows: list, guid: str, anchor: int) -> list:
+    """The game that holds this programme guid, seen the way a pass run sees it.
+
+    `rows` is everything the pass could record. Every guid with an airing near
+    `anchor` is taken with ALL of its airings, then grouped by `group_by_game`,
+    so a stand-in or a repair chooses from the very same set the pass run does.
+    """
+    near = {a["program_guid"] for a in rows
+            if abs(a["begins_at"] - anchor) <= LANGUAGE_WINDOW}
+    for game in group_by_game([a for a in rows if a["program_guid"] in near]).values():
+        if any(a["program_guid"] == guid for a in game):
+            return game
+    return []
 
 
 def game_guids(airings: list) -> list[str]:

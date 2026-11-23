@@ -631,16 +631,17 @@ def _would_choose(row, passes_by_id=None, stand_in=False):
         # and all but one programme's worth is thrown away here.
         mine = passes.rule_airings(p, program_guid=row["program_guid"])
         if stand_in and mine:
-            # The guide named the game under ONE guid (the earliest match), but
-            # another network lists it under its own. Read the whole game as
-            # the pass run does, so the choice is the same one.
-            t0 = min(a["begins_at"] for a in mine)
-            near = [a for a in passes.rule_airings(p)
-                    if abs(a["begins_at"] - t0) <= passes.SAME_GAME_WINDOW]
-            for game in passes.group_by_game(near).values():
-                if any(a["program_guid"] == row["program_guid"] for a in game):
-                    mine = game
-                    break
+            # The guide named the game under ONE guid, but another network lists
+            # it under its own. Read the whole game as the pass run does. The
+            # anchor is the airing nearest the day the schedule expected the
+            # game, so a game named after it started is not anchored on a replay.
+            item = db.one("SELECT expected_at FROM expectations WHERE id = ?",
+                          (row.get("expectation_id"),)) if row.get("expectation_id") else None
+            want = item["expected_at"] if item and item["expected_at"] else None
+            anchor = (min(mine, key=lambda a: abs(a["begins_at"] - want))
+                      if want else min(mine, key=lambda a: a["begins_at"]))["begins_at"]
+            mine = passes.game_containing(passes.rule_airings(p), row["program_guid"],
+                                          anchor) or mine
     except Exception:
         # An unusable filter is the pass's problem, not grounds for touching
         # a recording that already exists.
