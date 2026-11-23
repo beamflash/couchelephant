@@ -33,10 +33,17 @@
   language (English, Español, Français, Português, Deutsch or Italiano), and
   Settings, Guide changes it. An install that never answered stays on English.
 - **Channel languages.** Plex's guide does not say what language a channel is
-  in, so CouchElephant reads it from the titles and descriptions after each
-  sync. Settings, Channels, Languages shows what it found for each channel and
+  in, so CouchElephant reads it from the show descriptions after each sync. Settings, Channels, Languages shows what it found for each channel and
   lets you choose the language yourself. Yours always wins, and it is kept in an
   export.
+
+### Fixed
+
+- **Problem reports remove secrets before cutting long lines.** A very long log
+  line was cut first and cleaned after, so part of a token at the cut could
+  stay in a report. Lines are now cleaned first, and a word cut at the limit is
+  dropped. Matching of known names no longer depends on how letters outside
+  English change case.
 
 ## 1.5.34 - 2026-11-23
 
