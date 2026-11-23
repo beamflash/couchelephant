@@ -641,7 +641,7 @@ def _would_choose(row, passes_by_id=None, stand_in=False):
             anchor = (min(mine, key=lambda a: abs(a["begins_at"] - want))
                       if want else min(mine, key=lambda a: a["begins_at"]))["begins_at"]
             mine = passes.game_containing(passes.rule_airings(p), row["program_guid"],
-                                          anchor) or mine
+                                          anchor, passes.pass_mode(p)) or mine
     except Exception:
         # An unusable filter is the pass's problem, not grounds for touching
         # a recording that already exists.

@@ -3,6 +3,7 @@ import json
 import time
 
 from app import db, passes, sync
+from tests import fake_plex
 from tests.test_passes import (
     KC_BUF,
     NBC_GUID,
@@ -656,8 +657,9 @@ def _delayed_english(gap):
     return kick
 
 
-def _games():
-    return passes.group_by_game(passes.candidate_airings(159, team_name="Kansas City Chiefs"))
+def _games(mode="one"):
+    return passes.group_by_game(
+        passes.candidate_airings(159, team_name="Kansas City Chiefs"), mode)
 
 
 def test_the_delayed_english_broadcast_and_the_live_spanish_one_are_one_game(plex, synced):
@@ -720,3 +722,93 @@ def test_a_stand_in_anchors_on_the_day_the_game_was_expected_not_a_replay(plex, 
     row = _stand_row(NBC_GUID)
     got = sync._would_choose(row, stand_in=True)
     assert got["channel_vcn"] == "41.1" and got["begins_at"] == kick + 200
+
+
+# ---- the narrowed language merge ----
+
+def _two_guids(first, second, gap=3 * 3600):
+    """Game 1 on `first`, a second guid `gap` later on `second`, both premieres.
+    Each is (vcn, language). Telemundo and NBC are 39.1 and 41.1."""
+    kick = _bills_game()
+    with db.tx() as c:
+        c.execute("DELETE FROM airings WHERE id IN ('nbc', 'tele')")
+    (v1, l1), (v2, l2) = first, second
+    _airing_with_teams("g1", NBC_GUID, v1, kick, KC_BUF, "G1", "NFL")
+    _airing_with_teams("g2", TELE_GUID, v2, kick + gap, KC_BUF, "G2", "NFL")
+    _set_lang(v1, l1)
+    if v2 != v1:
+        _set_lang(v2, l2)
+    db.set_setting("preferred_language", "en")
+    return kick
+
+
+def _ids(game_list):
+    return sorted(sorted(a["id"] for a in g) for g in game_list.values()
+                  if any(a["id"] in ("g1", "g2") for a in g))
+
+
+def test_a_cross_language_doubleheader_with_game_two_on_nbc_is_two_games(plex, synced):
+    from tests.test_passes import _dry_channels
+    _two_guids(("39.1", "es"), ("41.1", "en"))
+    assert _ids(_games("one")) == [["g1"], ["g2"]]
+    _mode_pass("one")
+    assert _dry_channels(4 * 3600) == ["39.1", "41.1"]
+
+
+def test_a_cross_language_doubleheader_with_game_two_on_telemundo_is_two_games(plex, synced):
+    from tests.test_passes import _dry_channels
+    _two_guids(("41.1", "en"), ("39.1", "es"))
+    assert _ids(_games("one")) == [["g1"], ["g2"]]
+    _mode_pass("one")
+    assert _dry_channels(4 * 3600) == ["39.1", "41.1"]
+
+
+def test_an_unknown_language_never_merges_games(plex, synced):
+    from tests.test_passes import _dry_channels
+    _two_guids(("39.1", None), ("41.1", "en"))
+    assert _ids(_games("one")) == [["g1"], ["g2"]]
+    _mode_pass("one")
+    assert _dry_channels(4 * 3600) == ["39.1", "41.1"]
+
+
+def test_a_delayed_non_premiere_nbc_still_joins_the_live_telemundo_game(plex, synced):
+    from tests.test_passes import _dry_channels
+    _two_guids(("39.1", "es"), ("41.1", "en"), gap=2 * 3600)
+    with db.tx() as c:
+        c.execute("UPDATE airings SET premiere = 0 WHERE id = 'g2'")
+    assert _ids(_games("one")) == [["g1", "g2"]]
+    _mode_pass("one")
+    assert _dry_channels(3 * 3600) == ["41.1"]
+
+
+def test_any_books_the_live_telemundo_and_the_delayed_nbc(plex, synced):
+    from tests.test_passes import _dry_channels
+    _two_guids(("39.1", "es"), ("41.1", "en"), gap=2 * 3600)
+    with db.tx() as c:
+        c.execute("UPDATE airings SET premiere = 0 WHERE id = 'g2'")
+    assert _ids(_games("any")) == [["g1"], ["g2"]]
+    _mode_pass("any")
+    assert _dry_channels(3 * 3600) == ["39.1", "41.1"]
+
+
+def test_a_replay_days_later_does_not_change_which_languages_a_programme_has(plex, synced):
+    kick = _two_guids(("39.1", "es"), ("41.1", "en"), gap=2 * 3600)
+    with db.tx() as c:
+        c.execute("UPDATE airings SET premiere = 0 WHERE id = 'g2'")
+    # The Telemundo guid is shown on an English channel ten days later: that must
+    # not make the game "already English" and keep the delayed NBC apart.
+    _airing_with_teams("g1b", NBC_GUID, "43.1", kick + 10 * 86400, KC_BUF, "G1", "NFL")
+    _set_lang("43.1", "en")
+    assert _ids(_games("one")) == [["g1", "g1b", "g2"]]
+
+
+def test_dedupe_never_merges_by_language_so_two_real_games_are_both_kept(plex):
+    pid = _mode_pass("one")
+    kick = _two_guids(("39.1", "es"), ("41.1", "en"), gap=2 * 3600)
+    _book("g1", NBC_GUID, "39.1", kick, pid, sub="1")
+    _book("g2", TELE_GUID, "41.1", kick + 2 * 3600, pid, sub="2")
+    fake_plex.STATE.subscriptions.update({"1": {"key": "1"}, "2": {"key": "2"}})
+    assert passes.dedupe_games() == []
+    assert len(fake_plex.STATE.subscriptions) == 2
+    got = {b["channel_vcn"]: b["channel_language"] for b in passes._pass_bookings(pid)}
+    assert got == {"39.1": "es", "41.1": "en"}

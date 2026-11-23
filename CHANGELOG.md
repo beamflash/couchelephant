@@ -17,6 +17,11 @@
   together are counted, not a replay the next day. Turn it back to one airing
   per game and the next run cancels the extras. A pass that books more than one
   channel is always kept by CouchElephant, because Plex cannot say it.
+  When one network shows a game hours later than another (live on Telemundo,
+  repeated on NBC under its own listing), "one airing per game" and "preferred
+  language" count them as one game, but only when the later one is not a
+  premiere and both channels' languages are known, so a doubleheader keeps
+  both games.
 - **The cost is shown before you save.** Picking either of the last two options
   says how many recordings the pass would make over the next 30 days compared
   with one per game, and how many would run at once. If that is more than your

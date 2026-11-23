@@ -855,7 +855,7 @@ def api_rule_upcoming(rule_id: int):
     logos = _logo_map()
     mode, preferred = passes.pass_mode(r), passes.preferred_language()
     out = []
-    for airings in passes.group_by_game(passes.rule_airings(r)).values():
+    for airings in passes.group_by_game(passes.rule_airings(r), mode).values():
         allowed = [a for a in airings if passes.in_sources(a, nets, chans)]
         if not allowed:
             out.append({

@@ -262,28 +262,34 @@ def _team_set(row) -> frozenset:
     return frozenset(ids) if len(ids) >= 2 else frozenset()
 
 
-def group_by_game(rows: list) -> dict[str, list]:
+def group_by_game(rows: list, mode: str | None = None) -> dict[str, list]:
     """Airings grouped by game. The key is the game's first programme guid.
 
-    The ONE place that decides what a game is, so a later per-pass setting for
-    simulcasts only has to bypass this. One programme guid is one game. Two
-    guids are also one game when they name the same teams and kick off within
-    SAME_GAME_WINDOW, because two networks list one game under two guids. Never
-    matched on title: "at" and "vs." differ by network. A row with no teams
-    groups by guid alone.
+    The ONE place that decides what a game is. One programme guid is one game.
+    Two guids are also one game when they name the same teams and kick off
+    within SAME_GAME_WINDOW, because two networks list one game under two
+    guids. Never matched on title: "at" and "vs." differ by network. A row with
+    no teams groups by guid alone.
 
-    One more case, for a pass that wants one airing per game. A network can show
-    the game later than another does (Telemundo live at 19:00, NBC at 21:00
-    under its own guid). Two guids of the same teams up to LANGUAGE_WINDOW apart
-    are also one game WHEN the later guid airs in a language the game does not
-    have yet (an unknown language counts as one of its own). Two guids in the same language stay
-    two games however close, so an English doubleheader, or a Spanish one on
-    Telemundo, keeps both games.
+    One more case, only for `mode` "one" or "preferred" (a pass that does not
+    want every channel). A network can show the game later than another does
+    (Telemundo live at 19:00, NBC at 21:00 under its own guid), and "one
+    airing" must not book both. So a later guid of the same teams up to
+    LANGUAGE_WINDOW after is also the same game, but ONLY when all of this
+    holds: its airings are not flagged premiere (a real second game of a
+    doubleheader is a premiere, a delayed or repeated broadcast usually is not),
+    every language involved is known (an unknown channel never merges
+    anything), and it airs in a language the game does not have yet. Priority:
+    never lose a real game, then never book other-language in "one", then
+    tidy grouping, so any doubt keeps two games. With no mode, or "any", this
+    case is off.
     """
+    merge_languages = mode in ("one", "preferred")
     by_guid = {}
     for r in rows:
         by_guid.setdefault(r["program_guid"], []).append(r)
     games = {}
+    langs = {}           # game key -> the languages it airs in
     open_game = {}       # team set -> (key, earliest kickoff) of the latest game
     firsts = sorted(by_guid, key=lambda g: (min(a["begins_at"] for a in by_guid[g]), g))
     for guid in firsts:
@@ -291,13 +297,18 @@ def group_by_game(rows: list) -> dict[str, list]:
         start = min(a["begins_at"] for a in airings)
         teams = _team_set(airings[0])
         mate = open_game.get(teams) if teams else None
-        gap = start - mate[1] if mate else None
-        if mate and (gap <= SAME_GAME_WINDOW or (
-                gap <= LANGUAGE_WINDOW
-                and not _guid_languages(airings) <= _guid_languages(games[mate[0]]))):
+        merge = False
+        if mate:
+            gap = start - mate[1]
+            merge = gap <= SAME_GAME_WINDOW or (
+                merge_languages and gap <= LANGUAGE_WINDOW
+                and _delayed_broadcast(airings, start, langs[mate[0]]))
+        if merge:
             games[mate[0]].extend(airings)
+            langs[mate[0]] |= _guid_languages(airings, start)
             continue
         games[guid] = list(airings)
+        langs[guid] = set(_guid_languages(airings, start))
         if teams:
             open_game[teams] = (guid, start)
     for g in games.values():
@@ -305,12 +316,29 @@ def group_by_game(rows: list) -> dict[str, list]:
     return games
 
 
-def _guid_languages(airings: list) -> frozenset:
-    """The channel languages one programme airs in. None stands for unknown."""
-    return frozenset(airing_language(a) for a in airings)
+def _guid_languages(airings: list, start: int) -> frozenset:
+    """The channel languages one programme airs in, counting only the airings
+    within LANGUAGE_WINDOW of its first one. None stands for unknown."""
+    return frozenset(airing_language(a) for a in airings
+                     if a["begins_at"] - start <= LANGUAGE_WINDOW)
 
 
-def game_containing(rows: list, guid: str, anchor: int) -> list:
+def _delayed_broadcast(airings: list, start: int, game_langs) -> bool:
+    """Whether this guid is the same game shown later in another language."""
+    near = [a for a in airings if a["begins_at"] - start <= LANGUAGE_WINDOW]
+    for a in near:
+        try:
+            if a["premiere"]:
+                return False
+        except (IndexError, KeyError):
+            return False         # not known to be a repeat, so not merged
+    mine = _guid_languages(airings, start)
+    if None in mine or None in game_langs:
+        return False
+    return not mine <= game_langs
+
+
+def game_containing(rows: list, guid: str, anchor: int, mode: str | None = None) -> list:
     """The game that holds this programme guid, seen the way a pass run sees it.
 
     `rows` is everything the pass could record. Every guid with an airing near
@@ -319,7 +347,7 @@ def game_containing(rows: list, guid: str, anchor: int) -> list:
     """
     near = {a["program_guid"] for a in rows
             if abs(a["begins_at"] - anchor) <= LANGUAGE_WINDOW}
-    for game in group_by_game([a for a in rows if a["program_guid"] in near]).values():
+    for game in group_by_game([a for a in rows if a["program_guid"] in near], mode).values():
         if any(a["program_guid"] == guid for a in game):
             return game
     return []
@@ -417,7 +445,7 @@ def plan(rows: list, networks: list[str], channels: list[str], mode: str,
     airing are left out.
     """
     out = []
-    for airings in group_by_game(rows).values():
+    for airings in group_by_game(rows, mode).values():
         allowed = [a for a in airings if in_sources(a, networks, channels)]
         if not allowed:
             continue
@@ -803,6 +831,13 @@ def _cancel(recs, grabs) -> int:
     return done
 
 
+def _channel_language(vcn):
+    """The language a channel counts as (override, else detected), or None."""
+    row = db.one("SELECT COALESCE(language_override, language) AS l FROM channels "
+                 "WHERE vcn = ?", (vcn,))
+    return row["l"] if row else None
+
+
 def _pass_bookings(pass_id: int) -> list[dict]:
     """What this pass booked by itself and has not started, in the shape
     `group_by_game` reads. Bookings made by hand carry another source and are
@@ -815,14 +850,16 @@ def _pass_bookings(pass_id: int) -> list[dict]:
             (pass_id, now + LEAD_SECONDS)):
         out.append({"id": g["airing_id"], "program_guid": g["program_guid"],
                     "teams": g["teams"], "begins_at": g["begins_at"],
-                    "channel_vcn": g["channel_vcn"], "grab": g, "rec": None})
+                    "channel_vcn": g["channel_vcn"], "grab": g, "rec": None,
+                    "channel_language": _channel_language(g["channel_vcn"])})
     for r in db.query(
             "SELECT r.*, p.teams FROM recordings r LEFT JOIN programs p ON p.guid = r.program_guid "
             "WHERE r.pass_id = ? AND r.source = 'pass' AND r.kind = 'recording' "
             "AND r.state = 'scheduled' AND r.starts_at > ?", (pass_id, now)):
         out.append({"id": r["airing_id"], "program_guid": r["program_guid"],
                     "teams": r["teams"], "begins_at": r["begins_at"],
-                    "channel_vcn": r["channel_vcn"], "grab": None, "rec": r})
+                    "channel_vcn": r["channel_vcn"], "grab": None, "rec": r,
+                    "channel_language": _channel_language(r["channel_vcn"])})
     return out
 
 
@@ -904,6 +941,8 @@ def dedupe_games(dry: bool = False) -> list[dict]:
     preferred = preferred_language()
     for p in db.query("SELECT id, channels_per_game FROM passes"):
         mode = pass_mode(p)
+        # No mode: a booking row does not say whether its airing was a premiere,
+        # so the language merge stays off and only the 90-minute rule groups.
         games = group_by_game(_pass_bookings(p["id"]))
         for bookings in games.values():
             if len(bookings) < 2:
@@ -1156,7 +1195,7 @@ def _evaluate(rows, plex, dry, results):
         label = rule_label(p)
         networks, channels = allowed_sources(p)
         try:
-            games = group_by_game(rule_airings(p))
+            games = group_by_game(rule_airings(p), pass_mode(p))
         except smartfilter.FilterError as e:
             # One unusable filter must not stop every other pass running.
             _log(p["id"], None, "failed", f"the filter cannot be read: {e}", dry)
