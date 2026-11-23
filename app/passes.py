@@ -846,6 +846,20 @@ def _channel_language(vcn):
     return row["l"] if row else None
 
 
+def _grab_alive(g) -> bool:
+    """Whether a started booking of ours is real: Plex still lists its
+    subscription, or Plex has a grab for it. A booking Plex lost covers nothing
+    and must not be the one cleanup keeps (it would cancel the live one beside
+    it, and the pass run would book it again, every run)."""
+    if g["subscription"] and db.one("SELECT 1 FROM plex_subscriptions WHERE key = ?",
+                                    (g["subscription"],)):
+        return True
+    return bool(db.one(
+        "SELECT 1 FROM plex_grabs WHERE channel_vcn = ? AND begins_at = ? "
+        "AND status IN ('scheduled','inprogress','complete')",
+        (g["channel_vcn"], g["begins_at"])))
+
+
 def _pass_bookings(pass_id: int) -> list[dict]:
     """What this pass booked by itself, in the shape `group_by_game` reads.
     Bookings made by hand carry another source and are never listed, so nothing
@@ -861,6 +875,8 @@ def _pass_bookings(pass_id: int) -> list[dict]:
             "SELECT o.*, p.teams FROM our_grabs o LEFT JOIN programs p ON p.guid = o.program_guid "
             "WHERE o.pass_id = ? AND o.source = 'pass' AND o.begins_at > ?",
             (pass_id, since)):
+        if g["begins_at"] <= now + LEAD_SECONDS and not _grab_alive(g):
+            continue          # lost: Plex dropped it and nothing records it
         out.append({"id": g["airing_id"], "program_guid": g["program_guid"],
                     "teams": g["teams"], "begins_at": g["begins_at"],
                     "channel_vcn": g["channel_vcn"], "grab": g, "rec": None,
@@ -870,6 +886,8 @@ def _pass_bookings(pass_id: int) -> list[dict]:
             "SELECT r.*, p.teams FROM recordings r LEFT JOIN programs p ON p.guid = r.program_guid "
             "WHERE r.pass_id = ? AND r.source = 'pass' AND r.kind = 'recording' "
             "AND r.state IN ('scheduled', 'recording') AND r.begins_at > ?", (pass_id, since)):
+        if r["state"] != "recording" and r["begins_at"] < now - LEAD_SECONDS:
+            continue          # never started, so not a recording under way
         out.append({"id": r["airing_id"], "program_guid": r["program_guid"],
                     "teams": r["teams"], "begins_at": r["begins_at"],
                     "channel_vcn": r["channel_vcn"], "grab": None, "rec": r,
@@ -1208,6 +1226,34 @@ def _handle_pick(p, plex, dry, results, read_at, label, airings, pick, reason, c
                         "channel": pick["channel_vcn"], "begins_at": pick["begins_at"]})
 
 
+def game_picks(p, preferred: str):
+    """What a pass would do with each game, for the run AND the Upcoming panel
+    so they cannot disagree.
+
+    Yields (airings, allowed, picks, per_channel) per game. `airings` is the
+    whole game, including airings that began up to LANGUAGE_WINDOW ago (they keep
+    the game together and let `already_handled` see what is recording).
+    `allowed` is what can still be booked and the source limit accepts, empty
+    when nothing is, and `picks` the choice from it. A game with nothing left
+    to book at all is not yielded. Raises smartfilter.FilterError.
+    """
+    networks, channels = allowed_sources(p)
+    mode = pass_mode(p)
+    cutoff = _now() - LEAD_SECONDS
+    for airings in group_by_game(rule_airings(p, lookback=LANGUAGE_WINDOW), mode).values():
+        # Only what can still be booked is chosen from. An airing that has
+        # started is never picked; it only keeps its game together.
+        bookable = [a for a in airings if a["begins_at"] >= cutoff]
+        if not bookable:
+            continue
+        allowed = [a for a in bookable if in_sources(a, networks, channels)]
+        if not allowed:
+            yield airings, [], None, False
+            continue
+        picks, per_channel = choose_airings(allowed, mode, preferred)
+        yield airings, allowed, picks, per_channel
+
+
 def _evaluate(rows, plex, dry, results):
     # Read once for the whole run. It cannot change while this is running, and
     # it was being asked once per game per pass.
@@ -1217,27 +1263,14 @@ def _evaluate(rows, plex, dry, results):
         label = rule_label(p)
         networks, channels = allowed_sources(p)
         try:
-            # Airings that started up to LANGUAGE_WINDOW ago are read too, so a
-            # game whose first airing is under way is still one game with the
-            # later one, and what is being recorded counts as handled.
-            games = group_by_game(rule_airings(p, lookback=LANGUAGE_WINDOW), pass_mode(p))
+            games = list(game_picks(p, preferred))
         except smartfilter.FilterError as e:
             # One unusable filter must not stop every other pass running.
             _log(p["id"], None, "failed", f"the filter cannot be read: {e}", dry)
             results.append({"pass": label, "game": "", "action": "failed",
                             "reason": f"the filter cannot be read: {e}"})
             continue
-        for airings in games.values():
-            # The source limit is applied before the choice, not after, so the
-            # rule picks the best airing among the ones it is allowed to use
-            # rather than picking first and then finding it disallowed.
-            # Only what can still be booked is chosen from. An airing that has
-            # started is never picked; it only keeps its game together.
-            cutoff = _now() - LEAD_SECONDS
-            bookable = [a for a in airings if a["begins_at"] >= cutoff]
-            if not bookable:
-                continue
-            allowed = [a for a in bookable if in_sources(a, networks, channels)]
+        for airings, allowed, picks, per_channel in games:
             if not allowed:
                 where = " or ".join(networks + channels)
                 reason = f"no airing is on {where}"
@@ -1245,7 +1278,6 @@ def _evaluate(rows, plex, dry, results):
                 results.append({"pass": label, "game": airings[0]["title"],
                                 "action": "skipped", "reason": reason})
                 continue
-            picks, per_channel = choose_airings(allowed, pass_mode(p), preferred)
             if not picks[0][0]:
                 reason = picks[0][1]
                 if networks or channels:

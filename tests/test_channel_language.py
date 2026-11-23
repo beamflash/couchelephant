@@ -895,6 +895,8 @@ def test_dedupe_sees_an_in_progress_booking_and_never_keeps_two_or_cancels_it(pl
     _book("nbc", NBC_GUID, "41.1", now - 600, pid, sub="1")
     _book("tele", TELE_GUID, "39.1", now + 1800, pid, sub="2")
     fake_plex.STATE.subscriptions.update({"1": {"key": "1"}, "2": {"key": "2"}})
+    with db.tx() as c:
+        c.execute("INSERT INTO plex_subscriptions (key) VALUES ('1')")
     # Telemundo is the better-ranked booking, but the one in progress stays.
     _set_lang("41.1", "es")
     _set_lang("39.1", "en")
@@ -911,5 +913,59 @@ def test_dedupe_never_cancels_an_in_progress_booking_even_when_it_is_the_extra(p
     _book("nbc", NBC_GUID, "41.1", now - 600, pid, sub="1")
     _book("tele", TELE_GUID, "39.1", now - 400, pid, sub="2")
     fake_plex.STATE.subscriptions.update({"1": {"key": "1"}, "2": {"key": "2"}})
+    with db.tx() as c:
+        c.execute("INSERT INTO plex_subscriptions (key) VALUES ('1')")
+        c.execute("INSERT INTO plex_subscriptions (key) VALUES ('2')")
     assert passes.dedupe_games() == []
     assert len(fake_plex.STATE.subscriptions) == 2
+
+
+# ---- a lost started booking, and the Upcoming panel ----
+
+def test_a_lost_started_booking_does_not_make_the_pass_churn(plex, synced):
+    now = int(time.time())
+    _airing_with_teams("nbc", NBC_GUID, "41.1", now - 600, KC_BUF, "A at B", "NFL")
+    _airing_with_teams("tele", TELE_GUID, "39.1", now + 1800, KC_BUF, "A vs. B", "NFL")
+    with db.tx() as c:
+        c.execute("UPDATE airings SET premiere = 0 WHERE id = 'tele'")
+    _set_lang("41.1", "en")
+    _set_lang("39.1", "es")
+    db.set_setting("preferred_language", "en")
+    db.set_setting("dry_run", "0")
+    pid = _mode_pass("one")
+    _book("nbc", NBC_GUID, "41.1", now - 600, pid, sub="1")     # Plex lost it
+
+    def mine(out):
+        return [(d["action"], d["channel"]) for d in out
+                if d.get("game") in ("A at B", "A vs. B") and d["action"] != "skipped"]
+
+    db.set_setting("dry_run", "1")
+    assert ("would schedule", "39.1") in mine(passes.run_passes()), "the game is not lost"
+    # Telemundo is booked (the fake Plex cannot book these airings itself).
+    _book("tele", TELE_GUID, "39.1", now + 1800, pid, sub="2")
+    fake_plex.STATE.subscriptions.update({"2": {"key": "2"}})
+    with db.tx() as c:
+        c.execute("INSERT INTO plex_subscriptions (key) VALUES ('2')")
+    for _ in range(3):
+        assert passes.dedupe_games() == [], "the dead NBC row is not a keeper"
+        assert mine(passes.run_passes()) == []
+    assert list(fake_plex.STATE.subscriptions) == ["2"]
+
+
+def test_a_started_booking_plex_still_holds_is_kept(plex, synced):
+    now = int(time.time())
+    _airing_with_teams("nbc", NBC_GUID, "41.1", now - 600, KC_BUF, "A at B", "NFL")
+    pid = _mode_pass("one")
+    _book("nbc", NBC_GUID, "41.1", now - 600, pid, sub="1")
+    with db.tx() as c:
+        c.execute("INSERT INTO plex_subscriptions (key) VALUES ('1')")
+    assert [b["id"] for b in passes._pass_bookings(pid)] == ["nbc"]
+
+
+def test_the_upcoming_panel_agrees_with_the_run_while_nbc_records(client, synced):
+    _under_way(nbc_ago=130, tele_in=170)
+    pid = _mode_pass("one")
+    rows = client.get(f"/api/rules/{pid}/upcoming").json()["upcoming"]
+    ours = [u for u in rows if u["title"] in ("A at B", "A vs. B")]
+    assert all(u["status"] != "will schedule" for u in ours), ours
+    assert not any(u["vcn"] == "41.1" and u["status"] == "will schedule" for u in ours)

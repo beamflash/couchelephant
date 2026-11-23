@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.5.36 - 2026-11-23
+
+### Fixed
+
+- **A booking Plex lost no longer makes a pass book and cancel in a loop.** When
+  the first channel of a game had started but Plex had dropped its recording,
+  the pass booked the other channel, the next cleanup kept the dead booking and
+  cancelled the good one, and the pass booked it again, on every run. A started
+  booking now counts only while Plex still holds it.
+- **The Upcoming list on a pass matches what the pass does.** While one channel
+  of a game was recording, Upcoming still showed the other channel as "will
+  schedule". It now uses the same choosing as the pass run, including a game
+  that is already under way.
+
 ## 1.5.35 - 2026-11-23
 
 ### Added

@@ -853,10 +853,11 @@ def api_rule_upcoming(rule_id: int):
         return JSONResponse({"ok": False, "error": "no such pass"}, status_code=404)
     nets, chans = passes.allowed_sources(r)
     logos = _logo_map()
-    mode, preferred = passes.pass_mode(r), passes.preferred_language()
     out = []
-    for airings in passes.group_by_game(passes.rule_airings(r), mode).values():
-        allowed = [a for a in airings if passes.in_sources(a, nets, chans)]
+    # The very choosing the run does (`passes.game_picks`), including a game
+    # already under way and what is recording of it.
+    for airings, allowed, picks, per_channel in passes.game_picks(
+            r, passes.preferred_language()):
         if not allowed:
             out.append({
                 "title": airings[0]["title"],
@@ -867,7 +868,6 @@ def api_rule_upcoming(rule_id: int):
                 "rejected": len(airings), "status": "skipped",
             })
             continue
-        picks, per_channel = passes.choose_airings(allowed, mode, preferred)
         for pick, reason in picks:
             if not pick:
                 continue

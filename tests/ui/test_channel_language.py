@@ -195,3 +195,20 @@ def test_editing_a_pass_shows_and_changes_its_choice(page):
     page.wait_for_function(
         "() => /Done/.test(document.getElementById('rgo').textContent)", timeout=30000)
     assert db.one("SELECT channels_per_game c FROM passes WHERE id = ?", (pid,))["c"] == "one"
+
+
+def test_opening_a_pass_does_not_offer_a_second_channel_while_the_first_records(page):
+    from app import db
+    from tests.test_channel_language import _under_way
+    from tests.test_passes import _mode_pass
+    _under_way(nbc_ago=130, tele_in=170)
+    _mode_pass("one")
+    page.goto("/recordings")
+    page.click('.subtab[data-sub="sports"]')
+    page.wait_for_selector(".passrow", timeout=15000)
+    page.click(".passrow .pmeta")
+    page.wait_for_selector(".passdetail table", timeout=15000)
+    row = page.locator(".passdetail tr", has_text="A vs. B").first.inner_text().lower()
+    assert "will schedule" not in row, "Telemundo is not offered while NBC records"
+    assert "plex already has it" in row
+    assert db.one("SELECT 1 FROM plex_grabs WHERE status = 'inprogress'")
