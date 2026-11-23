@@ -1,0 +1,47 @@
+// Issue reports: the owner's Firestore takes new, well-formed, sealed
+// reports and nothing else. No reads, no updates, no deletes, for anyone.
+// The owner reads them with the admin SDK, which skips these rules.
+//
+// Two Firebase projects use this same file (task 0 step 2):
+//   beamflash-ce-reports       the Apple apps, App Check enforced on the project
+//   beamflash-ce-reports-open  the web app and the server, no App Check
+// Rules cannot see App Check, so there is no appCheck condition here. The
+// enforcement is a project setting, not a line in this file.
+//
+// The fields match what app/reportsend.py writes.
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /reports/{id} {
+      allow create: if validReport(id, request.resource.data);
+      allow read, list, update, delete: if false;
+    }
+    // Everything else is closed.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function validReport(id, d) {
+      return d.keys().hasOnly(['reportId', 'sealed', 'size', 'created',
+                               'source', 'appVersion', 'keyId', 'installId'])
+        && d.keys().hasAll(['reportId', 'sealed', 'size', 'created',
+                            'source', 'appVersion', 'keyId', 'installId'])
+        && d.reportId is string
+        && d.reportId == id
+        && id.matches('^[0-9a-f]{32}$')
+        && d.sealed is bytes
+        && d.size is int
+        && d.size == d.sealed.size()
+        && d.size <= 900000
+        && d.created is timestamp
+        // 30 days back: a server with no internet queues reports and sends
+        // them later, with the time each was made.
+        && d.created > request.time - duration.value(30, 'd')
+        && d.created < request.time + duration.value(1, 'd')
+        && d.source in ['web', 'ios', 'ipados', 'tvos', 'server']
+        && d.appVersion is string && d.appVersion.size() <= 64
+        && d.keyId is string && d.keyId.size() <= 64
+        && d.installId is string && d.installId.size() <= 64;
+    }
+  }
+}

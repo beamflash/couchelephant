@@ -229,6 +229,18 @@ pytest tests/ui                 # browser
 Playwright is optional: without it the `ui/` tests skip with a reason rather
 than failing.
 
+## The Firestore rules test
+
+`firestore.rules` (issue reports) is tested in the Firestore emulator, which
+needs Java 21+ and the `firebase` CLI. `pytest tests/test_firestore_rules.py`
+runs it, and skips with a reason when a tool is missing. By hand:
+
+```bash
+(cd tests/firestore_rules && npm install)
+firebase emulators:exec --only firestore --project ce-rules-test \
+  "npm --prefix tests/firestore_rules test"
+```
+
 ## Testing against a real server
 
 The suite covers the app. It cannot cover your server, and the interesting
