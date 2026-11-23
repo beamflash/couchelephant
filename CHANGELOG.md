@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.5.34 - 2026-11-23
+
+### Fixed
+
+- **A pass books one airing per game, across channels.** When two networks
+  listed one game under two programmes (Chiefs at Bills on NBC and again on
+  Telemundo, five minutes apart), a pass booked both and used a second tuner.
+  A game is now the same two teams with kickoffs within 90 minutes, whatever
+  the title or channel, and the pass books one airing of it, chosen the usual
+  way (the live broadcast, else the earliest). A game booked on one channel
+  counts as booked on all of them.
+- **Existing double bookings are cleaned up.** Every pass run now looks for
+  upcoming bookings a pass made itself where one pass holds the same game
+  twice, keeps the one the pass would have chosen and cancels the rest, in
+  Plex too. The pass log says "another channel already records this game".
+  Bookings you made by hand are never touched.
+
 ## 1.5.33 - 2026-11-23
 
 ### Added

@@ -3,25 +3,27 @@
 Things agreed for a future build, not yet started. Newest at the bottom.
 When one is built, move it into `CHANGELOG.md` and delete it here.
 
-## Bug: a pass books the same game on two channels
-
-Found 2026-11-22. The Chiefs pass booked Chiefs at Bills (Thu 2026-11-26)
-twice: once on 41.1 KSHBDT (NBC) and once on 39.1 KGKCLD (Telemundo). The
-second booking uses a second tuner and records a game nobody asked for.
-A pass must book ONE airing per game unless the user turns on the option below.
-
 ## Feature: simultaneous and other-language broadcasts on sports passes
 
-- Add a per-pass setting on team and season passes: "Also record the same game
-  on other channels (simulcasts and other languages)".
-- **Default is OFF.** With it off, the pass books one airing per game and
-  never books a simulcast or an other-language feed.
-- With it on, the user picks what to add: simulcasts in the same language,
-  other languages, or both. Show the extra tuner use before saving.
-- One game across channels is ONE game: match on teams plus kickoff, not on
-  title, since "at" and "vs." titles differ by network.
-- Existing passes keep the default (off). The upgrade must cancel extra
-  bookings that the old behavior made, and leave one per game.
+- Add a per-pass choice on team and season passes, "Channels per game", with
+  three options:
+  1. **One airing per game** (the default).
+  2. **All airings in my preferred language**: every channel that carries the
+     game in the preferred language (simulcasts).
+  3. **All airings, any language**: every channel that carries the game, in
+     any language.
+- **Default is option 1.** The pass never books a second channel unless the
+  user picks option 2 or 3.
+- "Preferred language" is one server setting (default English), shown next to
+  the choice.
+- Show the extra tuner use before saving.
+- One game across channels is ONE game: same teams, kickoffs close together
+  (the 1.5.34 grouping).
+- Open question: where the language of an airing comes from. The Plex guide
+  shows it only indirectly today (for example grandparent title "Fútbol
+  Americano NFL" on Telemundo). Check the guide data for a language field
+  before building, else use a per-channel language setting.
+- Existing passes keep option 1.
 - Show it in the web UI and the Apple apps (iPhone, iPad, TV).
 
 ## Feature: guide search

@@ -849,7 +849,7 @@ def api_rule_upcoming(rule_id: int):
     nets, chans = passes.allowed_sources(r)
     logos = _logo_map()
     out = []
-    for guid, airings in passes.group_by_game(passes.rule_airings(r)).items():
+    for airings in passes.group_by_game(passes.rule_airings(r)).values():
         allowed = [a for a in airings if passes.in_sources(a, nets, chans)]
         if not allowed:
             out.append({
@@ -873,7 +873,7 @@ def api_rule_upcoming(rule_id: int):
             "logo": bool(logos.get(pick["channel_vcn"])),
             "airing_id": pick["id"], "reason": reason,
             "rejected": len(airings) - 1,
-            "status": passes.already_handled(guid) or "will schedule",
+            "status": passes.already_handled(passes.game_guids(airings)) or "will schedule",
         })
     out.sort(key=lambda x: x["b"] or 0)
     return JSONResponse({"ok": True, "title": passes.rule_label(r), "upcoming": out})

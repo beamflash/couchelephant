@@ -217,11 +217,56 @@ def choose_airing(airings: list) -> tuple[dict | None, str]:
                   f"{len(usable)}")
 
 
+# Two channels airing one game kick off minutes apart (the live case measured
+# 5 minutes). 90 minutes covers that with room, and stays short of a baseball
+# doubleheader, where game 2 starts about three hours after game 1.
+SAME_GAME_WINDOW = 90 * 60
+
+
+def _team_set(row) -> frozenset:
+    """The team ids a programme names, or an empty set when it names fewer than two."""
+    ids = set()
+    for t in db.unjs(row["teams"], []) or []:
+        if isinstance(t, dict) and t.get("id") is not None:
+            ids.add(t["id"])
+    return frozenset(ids) if len(ids) >= 2 else frozenset()
+
+
 def group_by_game(rows: list) -> dict[str, list]:
-    games = {}
+    """Airings grouped by game. The key is the game's first programme guid.
+
+    The ONE place that decides what a game is, so a later per-pass setting for
+    simulcasts only has to bypass this. One programme guid is one game. Two
+    guids are also one game when they name the same teams and kick off within
+    SAME_GAME_WINDOW, because two networks list one game under two guids. Never
+    matched on title: "at" and "vs." differ by network. A row with no teams
+    groups by guid alone.
+    """
+    by_guid = {}
     for r in rows:
-        games.setdefault(r["program_guid"], []).append(r)
+        by_guid.setdefault(r["program_guid"], []).append(r)
+    games = {}
+    open_game = {}       # team set -> (key, earliest kickoff) of the latest game
+    firsts = sorted(by_guid, key=lambda g: (min(a["begins_at"] for a in by_guid[g]), g))
+    for guid in firsts:
+        airings = by_guid[guid]
+        start = min(a["begins_at"] for a in airings)
+        teams = _team_set(airings[0])
+        mate = open_game.get(teams) if teams else None
+        if mate and start - mate[1] <= SAME_GAME_WINDOW:
+            games[mate[0]].extend(airings)
+            continue
+        games[guid] = list(airings)
+        if teams:
+            open_game[teams] = (guid, start)
+    for g in games.values():
+        g.sort(key=lambda a: (a["begins_at"], a["id"]))
     return games
+
+
+def game_guids(airings: list) -> list[str]:
+    """Every programme guid one game is listed under."""
+    return sorted({a["program_guid"] for a in airings})
 
 
 def last_read() -> int:
@@ -234,7 +279,7 @@ def last_read() -> int:
                   "WHERE ok = 1")["t"]
 
 
-def already_handled(program_guid: str, read_at: int | None = None) -> str | None:
+def already_handled(program_guid, read_at: int | None = None) -> str | None:
     """Why this game needs no booking, or None.
 
     THE LIVE STATE, NEVER THE LOG. This used to answer yes to any programme
@@ -251,7 +296,14 @@ def already_handled(program_guid: str, read_at: int | None = None) -> str | None
     guid names one episode and so one game, which is why it is what is asked
     about here: the rebroadcast of a game shares its programme, and recording
     either of them is recording the game.
+
+    `program_guid` may be a list: a game listed under several guids is handled
+    when ANY of them is.
     """
+    guids = [program_guid] if isinstance(program_guid, str) else list(program_guid)
+    if not guids:
+        return None
+    marks = ",".join("?" * len(guids))
     # Our own booking, and then whether it is real. `our_grabs` alone is an
     # intention; Plex listing the subscription is the fact. The second half of
     # the OR is the moment between booking one and reading Plex back: the row
@@ -259,22 +311,22 @@ def already_handled(program_guid: str, read_at: int | None = None) -> str | None
     # it yet, and without this two runs in a row would book the game twice.
     if read_at is None:
         read_at = last_read()
-    if recorder.booked(program_guid=program_guid):
+    if any(recorder.booked(program_guid=g) for g in guids):
         return "CouchElephant is recording it"
     mine = db.one(
         """SELECT 1 FROM our_grabs o
              LEFT JOIN plex_subscriptions s ON s.key = o.subscription
-            WHERE o.program_guid = ?
+            WHERE o.program_guid IN (""" + marks + """)
               AND (s.key IS NOT NULL OR o.created_at >= ?) LIMIT 1""",
-        (program_guid, read_at))
+        (*guids, read_at))
     if mine:
         return "already booked by a pass"
     hit = db.one(
         """SELECT g.status FROM plex_grabs g
            JOIN airings a ON a.channel_vcn = g.channel_vcn AND a.begins_at = g.begins_at
-           WHERE a.program_guid = ?
+           WHERE a.program_guid IN (""" + marks + """)
              AND g.status IN ('scheduled','inprogress','complete')
-           LIMIT 1""", (program_guid,))
+           LIMIT 1""", tuple(guids))
     if hit:
         return f"Plex already has it ({hit['status']})"
     return None
@@ -530,6 +582,12 @@ def cancel_upcoming(pass_id: int) -> int:
     which is what cancelling a lost pass's bookings is.
     """
     recs, grabs, _ = _upcoming(pass_id)
+    return _cancel(recs, grabs)
+
+
+def _cancel(recs, grabs) -> int:
+    """Cancel these bookings, the one way every cleanup does it. Answers how
+    many went. `grabs` need a stored key. Raises CancelFailed."""
     done, failure = 0, None
     if grabs:
         try:
@@ -564,6 +622,87 @@ def cancel_upcoming(pass_id: int) -> int:
         except Exception as e:  # noqa: BLE001
             raise CancelFailed(str(e), done, "recorder") from e
     return done
+
+
+def _pass_bookings(pass_id: int) -> list[dict]:
+    """What this pass booked by itself and has not started, in the shape
+    `group_by_game` reads. Bookings made by hand carry another source and are
+    never listed, so nothing below can touch them."""
+    now = _now()
+    out = []
+    for g in db.query(
+            "SELECT o.*, p.teams FROM our_grabs o LEFT JOIN programs p ON p.guid = o.program_guid "
+            "WHERE o.pass_id = ? AND o.source = 'pass' AND o.begins_at > ?",
+            (pass_id, now + LEAD_SECONDS)):
+        out.append({"id": g["airing_id"], "program_guid": g["program_guid"],
+                    "teams": g["teams"], "begins_at": g["begins_at"],
+                    "grab": g, "rec": None})
+    for r in db.query(
+            "SELECT r.*, p.teams FROM recordings r LEFT JOIN programs p ON p.guid = r.program_guid "
+            "WHERE r.pass_id = ? AND r.source = 'pass' AND r.kind = 'recording' "
+            "AND r.state = 'scheduled' AND r.starts_at > ?", (pass_id, now)):
+        out.append({"id": r["airing_id"], "program_guid": r["program_guid"],
+                    "teams": r["teams"], "begins_at": r["begins_at"],
+                    "grab": None, "rec": r})
+    return out
+
+
+def _keeper(bookings: list[dict]) -> dict:
+    """Which booking of one game stays: the airing `choose_airing` would pick
+    from the booked ones (the live broadcast, else the earliest). When the
+    guide no longer holds them, the earliest booked stays, because it is the
+    one a reader of the log saw first. Always the same answer for the same
+    bookings."""
+    ids = [b["id"] for b in bookings if b["id"]]
+    found = db.query(_AIRING_SQL + f" AND a.id IN ({','.join('?' * len(ids))})",
+                     (0, 2**62, *ids)) if ids else []
+    pick, _ = choose_airing(found) if found else (None, "")
+    if pick:
+        for b in bookings:
+            if b["id"] == pick["id"]:
+                return b
+    return min(bookings, key=lambda b: (b["begins_at"], str(b["id"])))
+
+
+def dedupe_games(dry: bool = False) -> list[dict]:
+    """Cancel the extra bookings a pass made of one game on several channels.
+
+    Older versions booked every guid of a game. Per pass, upcoming bookings
+    the pass made itself are grouped as `group_by_game` groups them, one is
+    kept (`_keeper`) and the rest are cancelled the way a pass delete cancels,
+    in Plex too. Safe to run every time: with one booking per game it finds
+    nothing. A Plex booking with no stored key cannot be cancelled and stays.
+    """
+    results = []
+    for p in db.query("SELECT id FROM passes"):
+        games = group_by_game(_pass_bookings(p["id"]))
+        for bookings in games.values():
+            if len(bookings) < 2:
+                continue
+            keep = _keeper(bookings)
+            for b in bookings:
+                if b is keep or (b["grab"] is not None and not b["grab"]["subscription"]):
+                    continue
+                row = (db.one("SELECT a.*, pr.title FROM airings a JOIN programs pr "
+                              "ON pr.guid = a.program_guid WHERE a.id = ?", (b["id"],))
+                       or {"id": b["id"], "program_guid": b["program_guid"], "title": None,
+                           "channel_vcn": None, "begins_at": b["begins_at"]})
+                why = "another channel already records this game"
+                if dry:
+                    _log(p["id"], row, "would cancel", why, True)
+                    results.append({"action": "would cancel", "reason": why})
+                    continue
+                try:
+                    with PASS_LOCK:
+                        _cancel([b["rec"]] if b["rec"] else [],
+                                [b["grab"]] if b["grab"] else [])
+                    _log(p["id"], row, "cancelled", why, False)
+                    results.append({"action": "cancelled", "reason": why})
+                except Exception as e:  # noqa: BLE001
+                    msg = f"{type(e).__name__}: {e}"
+                    _log(p["id"], row, "failed", "could not cancel the extra booking: " + msg, False)
+                    results.append({"action": "failed", "reason": msg})
+    return results
 
 
 def orphans() -> list[dict]:
@@ -728,6 +867,8 @@ def run_passes(force_dry_run: bool | None = None) -> list[dict]:
     """Evaluate every enabled pass. Returns a list of decision dicts."""
     dry = db.get_setting("dry_run") == "1" if force_dry_run is None else force_dry_run
     results = []
+    # First, tidy what older versions double booked. Idempotent.
+    dedupe_games(dry)
     rows = db.query("SELECT * FROM passes WHERE enabled = 1")
     if not rows:
         return results
@@ -758,7 +899,7 @@ def _evaluate(rows, plex, dry, results):
             results.append({"pass": label, "game": "", "action": "failed",
                             "reason": f"the filter cannot be read: {e}"})
             continue
-        for guid, airings in games.items():
+        for airings in games.values():
             # The source limit is applied before the choice, not after, so the
             # rule picks the best airing among the ones it is allowed to use
             # rather than picking first and then finding it disallowed.
@@ -778,7 +919,7 @@ def _evaluate(rows, plex, dry, results):
                 results.append({"pass": label, "game": allowed[0]["title"],
                                 "action": "skipped", "reason": reason})
                 continue
-            blocked = already_handled(guid, read_at)
+            blocked = already_handled(game_guids(airings), read_at)
             if blocked:
                 results.append({"pass": label, "game": pick["title"],
                                 "action": "skipped", "reason": blocked,

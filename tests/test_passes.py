@@ -361,3 +361,148 @@ def test_a_pass_with_no_name_at_all_still_falls_back_to_the_id():
                        [{"id": 4242, "name": "Kansas City Chiefs"}],
                        "Chiefs at Somebody", "NFL Football")
     assert [r["id"] for r in passes.candidate_airings(4242)] == ["byid"]
+
+
+# ---- one airing per game, across channels ----
+
+KC_BUF = [{"id": 159, "name": "Kansas City Chiefs"}, {"id": 337, "name": "Buffalo Bills"}]
+NBC_GUID = "plex://episode/6a163c64ecdb6926550b22ad"
+TELE_GUID = "plex://episode/6af24cdda0ee977335a83e21"
+KICK = 1795742100
+
+
+def _two_channel_game(teams2=None, gap=300):
+    _airing_with_teams("nbc", NBC_GUID, "41.1", KICK, KC_BUF,
+                       "Kansas City Chiefs at Buffalo Bills", "NFL Football")
+    _airing_with_teams("tele", TELE_GUID, "39.1", KICK + gap, teams2 or KC_BUF,
+                       "Kansas City Chiefs vs. Buffalo Bills", "Fútbol Americano NFL")
+
+
+def _all():
+    return db.query("SELECT a.*, p.title, p.teams, p.grandparent_title, p.rating_key, "
+                    "p.summary, NULL channel_network FROM airings a JOIN programs p "
+                    "ON p.guid = a.program_guid")
+
+
+def test_two_guids_of_one_game_are_one_game():
+    _two_channel_game()
+    games = passes.group_by_game(_all())
+    assert len(games) == 1
+    only = next(iter(games.values()))
+    assert {a["id"] for a in only} == {"nbc", "tele"}
+    assert passes.game_guids(only) == sorted([NBC_GUID, TELE_GUID])
+
+
+def test_team_order_does_not_matter():
+    _two_channel_game(teams2=list(reversed(KC_BUF)))
+    assert len(passes.group_by_game(_all())) == 1
+
+
+def test_the_same_teams_a_week_apart_are_two_games():
+    _two_channel_game(gap=7 * 86400)
+    assert len(passes.group_by_game(_all())) == 2
+
+
+def test_a_doubleheader_is_two_games():
+    # Game 2 of a baseball doubleheader starts about three hours after game 1.
+    _two_channel_game(gap=3 * 3600)
+    assert len(passes.group_by_game(_all())) == 2
+
+
+def test_different_teams_at_one_time_are_two_games():
+    _two_channel_game(teams2=[{"id": 159, "name": "Kansas City Chiefs"},
+                              {"id": 1, "name": "Denver Broncos"}])
+    assert len(passes.group_by_game(_all())) == 2
+
+
+def test_rows_with_no_teams_still_group_by_guid():
+    _airing_with_teams("n1", "g1", "41.1", KICK, [], "Show", "Talk")
+    _airing_with_teams("n2", "g2", "39.1", KICK + 60, [], "Show", "Talk")
+    assert len(passes.group_by_game(_all())) == 2
+
+
+def test_a_repeat_of_the_same_guid_stays_in_its_game():
+    _two_channel_game()
+    _airing_with_teams("nbc2", NBC_GUID, "41.1", KICK + 2 * 86400, KC_BUF,
+                       "Kansas City Chiefs at Buffalo Bills", "NFL Football")
+    games = passes.group_by_game(_all())
+    assert len(games) == 1 and len(next(iter(games.values()))) == 3
+
+
+def test_a_pass_books_one_airing_of_a_two_guid_game(plex, synced):
+    now = int(time.time())
+    kick = now + 3 * 3600
+    _airing_with_teams("nbc", NBC_GUID, "41.1", kick, KC_BUF, "A at B", "NFL Football")
+    _airing_with_teams("tele", TELE_GUID, "39.1", kick + 300, KC_BUF, "A vs. B", "Fútbol")
+    db.set_setting("dry_run", "1")
+    with db.tx() as c:
+        c.execute("INSERT INTO passes (kind, team_id, team_name, enabled, created_at) "
+                  "VALUES ('team', 159, 'Kansas City Chiefs', 1, 0)")
+    out = [d for d in passes.run_passes() if d["game"] in ("A at B", "A vs. B")]
+    assert len(out) == 1 and out[0]["action"] == "would schedule"
+
+
+def test_a_booked_sibling_guid_makes_the_game_handled():
+    _two_channel_game()
+    with db.tx() as c:
+        c.execute("""INSERT INTO our_grabs (airing_id, program_guid, title, channel_vcn,
+                                            begins_at, source, subscription, created_at)
+                     VALUES ('nbc',?,'G','41.1',?,'pass','7',?)""",
+                  (NBC_GUID, KICK, int(time.time())))
+    assert passes.already_handled(TELE_GUID) is None, "alone, the other guid is open"
+    assert passes.already_handled([TELE_GUID, NBC_GUID]) == "already booked by a pass"
+
+
+def _book(airing_id, guid, vcn, begins, pass_id, source="pass", sub="9"):
+    with db.tx() as c:
+        c.execute("""INSERT INTO our_grabs (airing_id, program_guid, title, channel_vcn,
+                                            begins_at, source, subscription, pass_id,
+                                            created_at)
+                     VALUES (?,?,'G',?,?,?,?,?,0)""",
+                  (airing_id, guid, vcn, begins, source, sub, pass_id))
+
+
+def _pass():
+    with db.tx() as c:
+        c.execute("INSERT INTO passes (kind, team_id, team_name, enabled, created_at) "
+                  "VALUES ('team', 159, 'Kansas City Chiefs', 1, 0)")
+    return db.one("SELECT id FROM passes")["id"]
+
+
+def test_cleanup_cancels_the_extra_pass_booking(plex):
+    kick = int(time.time()) + 3 * 3600
+    _airing_with_teams("nbc", NBC_GUID, "41.1", kick, KC_BUF, "A at B", "NFL")
+    _airing_with_teams("tele", TELE_GUID, "39.1", kick + 300, KC_BUF, "A vs. B", "Fútbol")
+    pid = _pass()
+    _book("nbc", NBC_GUID, "41.1", kick, pid, sub="1")
+    _book("tele", TELE_GUID, "39.1", kick + 300, pid, sub="2")
+    fake_plex.STATE.subscriptions.update({"1": {"key": "1"}, "2": {"key": "2"}})
+    out = passes.dedupe_games()
+    assert list(fake_plex.STATE.subscriptions) == ["1"], "Plex's grab is gone too"
+    assert [d["action"] for d in out] == ["cancelled"], out
+    assert [g["airing_id"] for g in db.query("SELECT airing_id FROM our_grabs")] == ["nbc"]
+    log = db.one("SELECT * FROM pass_actions WHERE action = 'cancelled'")
+    assert log["airing_id"] == "tele"
+    assert log["reason"] == "another channel already records this game"
+    assert passes.dedupe_games() == [], "a second run finds nothing"
+
+
+def test_cleanup_leaves_a_manual_booking_alone(plex):
+    kick = int(time.time()) + 3 * 3600
+    _airing_with_teams("nbc", NBC_GUID, "41.1", kick, KC_BUF, "A at B", "NFL")
+    _airing_with_teams("tele", TELE_GUID, "39.1", kick + 300, KC_BUF, "A vs. B", "Fútbol")
+    pid = _pass()
+    _book("nbc", NBC_GUID, "41.1", kick, pid, sub="1")
+    _book("tele", TELE_GUID, "39.1", kick + 300, None, source="manual", sub="2")
+    assert passes.dedupe_games() == []
+    assert db.one("SELECT COUNT(*) n FROM our_grabs")["n"] == 2
+
+
+def test_cleanup_does_not_touch_two_games_of_one_pass(plex):
+    kick = int(time.time()) + 3 * 3600
+    _airing_with_teams("g1", NBC_GUID, "41.1", kick, KC_BUF, "A at B", "NFL")
+    _airing_with_teams("g2", TELE_GUID, "41.1", kick + 7 * 86400, KC_BUF, "A at B", "NFL")
+    pid = _pass()
+    _book("g1", NBC_GUID, "41.1", kick, pid)
+    _book("g2", TELE_GUID, "41.1", kick + 7 * 86400, pid)
+    assert passes.dedupe_games() == []
