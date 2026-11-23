@@ -19,7 +19,7 @@ talks to replaced:
   - the fake Firestore on FIRESTORE_PORT (default 8792), so a report sent
     from the apps or the server lands there and never at the owner's.
     GET /test/reports lists what arrived (with the App Check header each
-    carried) and POST /test/reports/reset empties it;
+    carried, and the sealed bytes) and POST /test/reports/reset empties it;
   - with AWAY=1, Use away from home on: the same port also answers HTTPS
     with its own certificate, and GET /test/pin says the key's fingerprint,
     so the pinning tests can connect with it. Sign-in stays off, and the
@@ -157,6 +157,7 @@ def main():
         return {"reports": [{"id": k, "source": v["source"]["stringValue"],
                              "size": int(v["size"]["integerValue"]),
                              "appVersion": v["appVersion"]["stringValue"],
+                             "sealed": v["sealed"]["bytesValue"],
                              "appCheck": st.appcheck.get(k)}
                             for k, v in st.docs.items()]}
 
