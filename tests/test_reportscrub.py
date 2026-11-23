@@ -20,7 +20,7 @@ CORPUS_SALT = b"\x07" * 16
 
 
 def _scrubber(case, salt=None):
-    known = [case["secret"]] if case.get("known") else []
+    known = ([case["secret"]] if case.get("known") else []) + case.get("extra_secrets", [])
     hosts = [case["host"]] if case.get("host") else []
     return Scrubber(salt=salt, known_secrets=known, known_hosts=hosts)
 
@@ -30,6 +30,7 @@ def test_corpus_no_secret_survives(case):
     # "known" cases have no shape to match; the caller supplies the value.
     out = _scrubber(case).text(case["input"])
     assert case["secret"] not in out
+    assert all(v not in out for v in case.get("extra_secrets", []))
 
 
 @pytest.mark.parametrize("case", CORPUS["secrets"], ids=lambda c: c["name"])
@@ -201,3 +202,23 @@ def test_every_secret_looking_setting_read_in_app_is_classified():
     for k in seen:
         if word.search(k):
             assert k in SECRET_SETTINGS_ALL, f"{k} reads like a secret but is not listed"
+
+
+# The fold of U+212A, U+017F, U+0130 and U+0131 must not act as an ASCII letter.
+@pytest.mark.parametrize("ch", ["K", "ſ", "İ", "ı"])
+def test_odd_case_folds_are_not_guards(ch):
+    s = Scrubber(known_hosts=["couch.example.net"])
+    assert "couch.example.net" not in s.text(ch + "couch.example.net")
+    assert "mediabox.local" not in s.text(ch + "mediabox.local")
+    assert "abcdefgh1" not in s.text("x" + ch + "Bearer abcdefgh1")
+
+
+def test_host_hash_lowercases_ascii_only():
+    s = Scrubber(salt=CORPUS_SALT)
+    assert s.address("http://ABC.example/") == s.address("http://abc.example/")
+    assert s.address("http://ΟΔ.example/") != s.address("http://οδ.example/")
+
+
+def test_pem_hidden_behind_a_fake_begin_is_cut():
+    s = "-----BEGIN A-----\nx\n-----END A-----BEGIN  -----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n"
+    assert Scrubber().text(s) == "[removed]BEGIN  [removed]"

@@ -47,7 +47,7 @@ _PRIVATE_NETS = [ipaddress.ip_network(n) for n in (
 
 
 def _is_private(host: str) -> bool:
-    if host.lower() == "localhost":
+    if _lc(host) == "localhost":
         return True
     try:
         ip = ipaddress.ip_address(host)
@@ -63,15 +63,37 @@ _WS = r" \x09-\x0d\x1c-\x1f\x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u
 _S = "[" + _WS + "]"
 _NS = "[^" + _WS + "]"
 
+
+def _ci(lit: str) -> str:
+    """A literal that ignores ASCII case, spelled out. re.I would also let
+    U+212A, U+017F and friends match, and ICU (Swift) does not agree with it."""
+    return "".join(f"[{c.upper()}{c.lower()}]" if c.isascii() and c.isalpha()
+                   else re.escape(c) for c in lit)
+
+
+def _ci_any(*words: str) -> str:
+    return "(?:" + "|".join(_ci(w) for w in words) + ")"
+
+
+_UP = {c: c + 32 for c in range(65, 91)}
+
+
+def _lc(s: str) -> str:
+    """Lower case for ASCII letters only, the same in every language."""
+    return s.translate(_UP)
+
+
 # The keyword, lower case after a non-letter or camelCase after a lower letter
 # (accessToken, clientSecret, apiKey).
-_KEY = (r"(?:(?<![A-Za-z])(?i:password|passwd|secret|api[_-]?key|token|key|auth)"
-        r"|(?<=[a-z])(?:Password|Passwd|Secret|ApiKey|Token|Key|Auth))")
+_KEY = ("(?:(?<![A-Za-z])(?:" + "|".join(
+    [_ci("password"), _ci("passwd"), _ci("secret"), _ci("api") + "[_-]?" + _ci("key"),
+     _ci("token"), _ci("key"), _ci("auth")])
+    + ")|(?<=[a-z])(?:Password|Passwd|Secret|ApiKey|Token|Key|Auth))")
 _AUTH_HEADER = re.compile(
-    "Authorization" + _S + "*:" + _S + "*(?:(?:Bearer|Basic|Token)" + _S + "+)?"
-    + _NS + "+", re.I)
-_COOKIE = re.compile("(?:Set-)?Cookie" + _S + r"*:[^\n]*", re.I)
-_BEARER = re.compile("(?<![A-Za-z0-9_])Bearer" + _S + "+" + _NS + "+", re.I)
+    _ci("Authorization") + _S + "*:" + _S + "*(?:" + _ci_any("Bearer", "Basic", "Token")
+    + _S + "+)?" + _NS + "+")
+_COOKIE = re.compile("(?:" + _ci("Set-") + ")?" + _ci("Cookie") + _S + r"*:[^\n]*")
+_BEARER = re.compile("(?<![A-Za-z0-9_])" + _ci("Bearer") + _S + "+" + _NS + "+")
 _JWT = re.compile(
     r"(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*")
 # Private halves of an EC/RSA JWK, which may have no digits to trip the
@@ -83,7 +105,8 @@ _KV = re.compile(
     _KEY + """["']?""" + _S + "*[=:]" + _S + """*(?:"[^"\\n]*"|'[^'\\n]*'|[^""" + _WS + "&]+)")
 # "token Zx_cVbNm..." with nothing between the word and the secret.
 _KW_SPACE = re.compile(
-    r"(?<![A-Za-z])(?i:token|key|secret|password)[ \t]+[A-Za-z0-9_-]{16,}")
+    "(?<![A-Za-z])" + _ci_any("token", "key", "secret", "password")
+    + r"[ \t]+[A-Za-z0-9_-]{16,}")
 _HEX32 = re.compile(r"(?<![0-9A-Fa-f])[0-9A-Fa-f]{32,}(?![0-9A-Fa-f])")
 _RUN = re.compile(r"(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{20,}(?![A-Za-z0-9_-])")
 # Bounded so a long dotted string can't make the scan quadratic. The body is
@@ -108,7 +131,8 @@ _V6_SHAPE = re.compile(
     r"|(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}", re.I)
 _LOCAL_NAME = re.compile(
     r"(?<![A-Za-z0-9_.-])(?:[A-Za-z0-9-]{1,63}\.){1,6}"
-    r"(?:lan|local|localdomain|home|internal|arpa)(?::([0-9]{1,5}))?(?![A-Za-z0-9_-])", re.I)
+    + _ci_any("lan", "local", "localdomain", "home", "internal", "arpa")
+    + r"(?::([0-9]{1,5}))?(?![A-Za-z0-9_-])")
 # name:port in free text. A dotted name is a host unless it ends like a source
 # file ("app.py:1234") or a number ("1.5.33:12"). A single word is a host only
 # after a connection word or an @, or when it is a known host: "Quality:1080p",
@@ -120,9 +144,10 @@ _DOTTED_PORT = re.compile(
     r"(?<![A-Za-z0-9_.:/@-])([A-Za-z][A-Za-z0-9-]{0,62}(?:\.[A-Za-z0-9-]{1,63}){1,6})"
     r":([0-9]{2,5})(?![A-Za-z0-9_:.-])")
 _WORD_PORT = re.compile(
-    r"((?<![A-Za-z0-9_-])(?i:host|connect|connecting|connection|to|from|server|address"
-    r"|addr|upstream|proxy|peer)[ \t]{1,3}|@)"
-    r"([A-Za-z][A-Za-z0-9-]{0,62}):([0-9]{2,5})(?![A-Za-z0-9_:.-])")
+    "((?<![A-Za-z0-9_-])" + _ci_any("host", "connect", "connecting", "connection", "to",
+                                    "from", "server", "address", "addr", "upstream",
+                                    "proxy", "peer")
+    + r"[ \t]{1,3}|@)([A-Za-z][A-Za-z0-9-]{0,62}):([0-9]{2,5})(?![A-Za-z0-9_:.-])")
 _ALREADY = re.compile(r"private-lan|host-[0-9a-f]{10}")
 
 
@@ -167,7 +192,7 @@ def _split_hostport(raw: str) -> tuple[str, int | None]:
         if not rest_port.isdigit() or int(rest_port) > 65535:
             raise ValueError("bad port")
         port = int(rest_port)
-    host = host.split("%", 1)[0].strip().lower()
+    host = _lc(host.split("%", 1)[0].strip())
     if not host:
         raise ValueError("no host")
     return host, port
@@ -209,7 +234,7 @@ class Scrubber:
         return got
 
     def _shown(self, name: str) -> str:
-        name = name.lower()
+        name = _lc(name)
         got = self._shown_cache.get(name)
         if got is None:
             got = "private-lan" if _is_private(name) else self.host(name)
@@ -273,18 +298,18 @@ class Scrubber:
     def _mask_local(self, m: re.Match) -> str:
         s = m.group(0)
         name = s.rsplit(":", 1)[0] if m.group(1) else s
-        return self.host(name.lower()) + (f":{m.group(1)}" if m.group(1) else "")
+        return self.host(_lc(name)) + (f":{m.group(1)}" if m.group(1) else "")
 
     def _mask_dotted_port(self, m: re.Match) -> str:
-        last = m.group(1).rsplit(".", 1)[1].lower()
+        last = _lc(m.group(1).rsplit(".", 1)[1])
         if last in _CODE_EXT or last.isdigit():
             return m.group(0)
-        return self.host(m.group(1).lower()) + ":" + m.group(2)
+        return self.host(_lc(m.group(1))) + ":" + m.group(2)
 
     def _mask_word_port(self, m: re.Match) -> str:
         if _ALREADY.fullmatch(m.group(2)):
             return m.group(0)
-        return m.group(1) + self.host(m.group(2).lower()) + ":" + m.group(3)
+        return m.group(1) + self.host(_lc(m.group(2))) + ":" + m.group(3)
 
     def text(self, s: str) -> str:
         if not isinstance(s, str):
@@ -301,8 +326,8 @@ class Scrubber:
         s = _DOTTED_PORT.sub(self._mask_dotted_port, s)
         s = _WORD_PORT.sub(self._mask_word_port, s)
         for h in self._hosts:
-            s = re.sub(r"(?<![A-Za-z0-9_.-])" + re.escape(h) + r"(?![A-Za-z0-9_-])",
-                       self.host(h), s, flags=re.I)
+            s = re.sub(r"(?<![A-Za-z0-9_.-])" + _ci(h) + r"(?![A-Za-z0-9_-])",
+                       self.host(h), s)
         s = _AUTH_HEADER.sub(REMOVED, s)
         s = _COOKIE.sub(REMOVED, s)
         s = _BEARER.sub(REMOVED, s)

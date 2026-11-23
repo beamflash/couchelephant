@@ -66,6 +66,11 @@ def _bad(msg, code=400):
     return JSONResponse({"ok": False, "error": msg}, status_code=code)
 
 
+# How much of a line is read, and how much is kept once it is scrubbed.
+LINE_TAKE = 8000
+LINE_KEEP = 2000
+
+
 def _str(v, cap):
     return v[:cap] if isinstance(v, str) else ""
 
@@ -110,17 +115,23 @@ async def report_send(request: Request):
     trigger = {"kind": trig["kind"]}
     for k in ("error", "screen"):
         if isinstance(trig.get(k), str):
-            trigger[k] = trig[k][:2000]
+            trigger[k] = trig[k][:LINE_TAKE]
     client = body.get("client")
     client = client if isinstance(client, dict) else {}
     app = {"version": VERSION, "platform": "web",
            "ua": _str(client.get("ua"), 500),
            "screen_size": _str(client.get("screen_size"), 50)}
     lines = body.get("app_log")
-    app_log = [_str(x, 2000) for x in lines[-500:] if isinstance(x, str)] \
+    app_log = [_str(x, LINE_TAKE) for x in lines[-500:] if isinstance(x, str)] \
         if isinstance(lines, list) else []
 
     scrub = reportbuild.make_scrubber()
+    # Scrub first, then cap: a cut first would leave half a secret that no
+    # rule can recognise.
+    for k in ("error", "screen"):
+        if k in trigger:
+            trigger[k] = scrub.text(trigger[k])[:LINE_KEEP]
+    app_log = [scrub.text(x)[:LINE_KEEP] for x in app_log]
     server, note = None, None
     try:
         server = await asyncio.wait_for(

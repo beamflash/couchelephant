@@ -299,3 +299,17 @@ def test_docs_name_every_report_route():
     assert paths
     for method, path in paths:
         assert f"`{method} {path}`" in api, f"docs/API.md does not name {method} {path}"
+
+
+def test_secret_straddling_the_line_cap_does_not_survive(client, fs):
+    # A 16 hex device-style value has no shape of its own, so only a known
+    # secret rule can catch it, and only if the cap comes after.
+    token = "0a1b2c3d4e5f6071"
+    db.set_setting("plex_token", token)
+    _agree(client)
+    line = "x " * 995 + token + " tail"
+    body = _body(app_log=[line], trigger={"kind": "error", "error": line, "screen": line})
+    assert client.post("/api/report/send", json=body).json()["ok"]
+    rep = _opened(fs)
+    for text in (rep["appLog"][0], rep["trigger"]["error"], rep["trigger"]["screen"]):
+        assert token[:6] not in text and len(text) <= 2000

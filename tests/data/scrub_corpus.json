@@ -368,6 +368,118 @@
    "input": "https://bob:pa/ss@́plex.example.net/x",
    "secret": "plex.example.net",
    "expected": "https://host-f68cdf8827/x"
+  },
+  {
+   "name": "pem hidden behind a fake begin",
+   "input": "-----BEGIN A-----\nx\n-----END A-----BEGIN  -----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n",
+   "secret": "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC",
+   "expected": "[removed]BEGIN  [removed]"
+  },
+  {
+   "name": "kelvin before a known host",
+   "input": "Kcouch.example.net here",
+   "secret": "couch.example.net",
+   "host": "couch.example.net",
+   "expected": "Khost-0a55c82fdf here"
+  },
+  {
+   "name": "kelvin before a local name",
+   "input": "resolving Kmediabox.local failed",
+   "secret": "mediabox.local",
+   "expected": "resolving Khost-e3cb6ed2cb failed"
+  },
+  {
+   "name": "kelvin before Bearer",
+   "input": "xKBearer abcdefgh1 end",
+   "secret": "abcdefgh1",
+   "expected": "xK[removed] end"
+  },
+  {
+   "name": "long s before a known host",
+   "input": "ſcouch.example.net here",
+   "secret": "couch.example.net",
+   "host": "couch.example.net",
+   "expected": "ſhost-0a55c82fdf here"
+  },
+  {
+   "name": "long s before a local name",
+   "input": "resolving ſmediabox.local failed",
+   "secret": "mediabox.local",
+   "expected": "resolving ſhost-e3cb6ed2cb failed"
+  },
+  {
+   "name": "long s before Bearer",
+   "input": "xſBearer abcdefgh1 end",
+   "secret": "abcdefgh1",
+   "expected": "xſ[removed] end"
+  },
+  {
+   "name": "dotted I before a known host",
+   "input": "İcouch.example.net here",
+   "secret": "couch.example.net",
+   "host": "couch.example.net",
+   "expected": "İhost-0a55c82fdf here"
+  },
+  {
+   "name": "dotted I before a local name",
+   "input": "resolving İmediabox.local failed",
+   "secret": "mediabox.local",
+   "expected": "resolving İhost-e3cb6ed2cb failed"
+  },
+  {
+   "name": "dotted I before Bearer",
+   "input": "xİBearer abcdefgh1 end",
+   "secret": "abcdefgh1",
+   "expected": "xİ[removed] end"
+  },
+  {
+   "name": "dotless i before a known host",
+   "input": "ıcouch.example.net here",
+   "secret": "couch.example.net",
+   "host": "couch.example.net",
+   "expected": "ıhost-0a55c82fdf here"
+  },
+  {
+   "name": "dotless i before a local name",
+   "input": "resolving ımediabox.local failed",
+   "secret": "mediabox.local",
+   "expected": "resolving ıhost-e3cb6ed2cb failed"
+  },
+  {
+   "name": "dotless i before Bearer",
+   "input": "xıBearer abcdefgh1 end",
+   "secret": "abcdefgh1",
+   "expected": "xı[removed] end"
+  },
+  {
+   "name": "known secret in NFC and NFD",
+   "input": "a café b café c",
+   "secret": "café",
+   "extra_secrets": [
+    "café"
+   ],
+   "known": true,
+   "expected": "a [removed] b [removed] c"
+  },
+  {
+   "name": "greek capitals keep their case in the host hash",
+   "input": "http://ΟΔΟΣ.example/ ok",
+   "secret": "ΟΔΟΣ.example",
+   "expected": "http://host-c31de8e893/ ok"
+  },
+  {
+   "name": "known secret then a combining mark",
+   "input": "GET /0a1b2c3d4e5f6071́/hls",
+   "secret": "0a1b2c3d4e5f6071",
+   "known": true,
+   "expected": "GET /[removed]́/hls"
+  },
+  {
+   "name": "combining mark after the scheme slashes",
+   "input": "http://́couch.example.net/x",
+   "secret": "couch.example.net",
+   "host": "couch.example.net",
+   "expected": "http://host-f91e104766/x"
   }
  ],
  "must_survive": [
