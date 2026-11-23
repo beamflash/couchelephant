@@ -812,3 +812,104 @@ def test_dedupe_never_merges_by_language_so_two_real_games_are_both_kept(plex):
     assert len(fake_plex.STATE.subscriptions) == 2
     got = {b["channel_vcn"]: b["channel_language"] for b in passes._pass_bookings(pid)}
     assert got == {"39.1": "es", "41.1": "en"}
+
+
+# ---- a game whose first airing has started ----
+
+def _under_way(nbc_ago, tele_in, tele_premiere=1):
+    """NBC began `nbc_ago` seconds ago and is being recorded by Plex. Telemundo
+    airs the game under its own guid `tele_in` seconds from now."""
+    now = int(time.time())
+    _airing_with_teams("nbc", NBC_GUID, "41.1", now - nbc_ago, KC_BUF, "A at B", "NFL")
+    _airing_with_teams("tele", TELE_GUID, "39.1", now + tele_in, KC_BUF, "A vs. B", "NFL")
+    with db.tx() as c:
+        c.execute("UPDATE airings SET premiere = ? WHERE id = 'tele'", (tele_premiere,))
+        c.execute("INSERT INTO plex_grabs (id, subscription, status, channel_vcn, begins_at) "
+                  "VALUES ('g1', '1', 'inprogress', '41.1', ?)", (now - nbc_ago,))
+    _set_lang("41.1", "en")
+    _set_lang("39.1", "es")
+    db.set_setting("preferred_language", "en")
+    return now
+
+
+def _runs(mode, lo, hi):
+    db.set_setting("dry_run", "1")
+    _mode_pass(mode)
+    return sorted(d["channel"] for d in passes.run_passes()
+                  if d.get("action") == "would schedule"
+                  and d["game"] in ("A at B", "A vs. B") and lo <= d["begins_at"] <= hi)
+
+
+def test_a_run_just_after_nbc_starts_does_not_book_telemundo(plex, synced):
+    now = _under_way(nbc_ago=130, tele_in=170)        # NBC T, Telemundo T+300
+    assert _runs("one", now - 200, now + 400) == []
+
+
+def test_a_run_during_a_delayed_broadcast_does_not_book_the_repeat(plex, synced):
+    now = _under_way(nbc_ago=600, tele_in=2 * 3600 - 600, tele_premiere=0)
+    assert _runs("one", now - 700, now + 3 * 3600) == []
+
+
+def test_a_run_two_hours_in_still_books_nothing_new(plex, synced):
+    now = _under_way(nbc_ago=2 * 3600, tele_in=30, tele_premiere=0)
+    assert _runs("one", now - 3 * 3600, now + 3600) == []
+    assert _runs("preferred", now - 3 * 3600, now + 3600) == []
+
+
+def test_any_still_books_the_other_channel_while_nbc_records(plex, synced):
+    now = _under_way(nbc_ago=130, tele_in=170)
+    assert _runs("any", now - 200, now + 400) == ["39.1"]
+
+
+def test_an_in_progress_recording_of_ours_counts_as_handled(plex):
+    now = int(time.time())
+    _airing_with_teams("nbc", NBC_GUID, "41.1", now - 600, KC_BUF, "A", "NFL")
+    with db.tx() as c:
+        c.execute("INSERT INTO recordings (uid, kind, state, program_guid, channel_vcn, "
+                  "begins_at, starts_at, source) VALUES "
+                  "('u1','recording','recording',?,'41.1',?,?,'pass')",
+                  (NBC_GUID, now - 600, now - 600))
+    assert passes.already_handled([NBC_GUID, TELE_GUID]) == "CouchElephant is recording it"
+
+
+def test_a_plex_grab_in_progress_counts_as_handled(plex, synced):
+    _under_way(nbc_ago=600, tele_in=3600)
+    assert passes.already_handled([NBC_GUID, TELE_GUID]).startswith("Plex already has it")
+
+
+def test_a_pass_made_mid_game_books_the_later_airing_when_nothing_is_recorded(plex, synced):
+    """Documented rule: in one, the later airing is booked only when no airing
+    of the game is being recorded. Nothing is, so Telemundo is the game's only
+    way to be recorded and is booked."""
+    now = _under_way(nbc_ago=600, tele_in=1800, tele_premiere=0)
+    with db.tx() as c:
+        c.execute("DELETE FROM plex_grabs")
+    assert _runs("one", now - 700, now + 3600) == ["39.1"]
+
+
+def test_dedupe_sees_an_in_progress_booking_and_never_keeps_two_or_cancels_it(plex):
+    now = int(time.time())
+    _airing_with_teams("nbc", NBC_GUID, "41.1", now - 600, KC_BUF, "A", "NFL")
+    _airing_with_teams("tele", TELE_GUID, "39.1", now + 1800, KC_BUF, "B", "NFL")
+    pid = _mode_pass("one")
+    _book("nbc", NBC_GUID, "41.1", now - 600, pid, sub="1")
+    _book("tele", TELE_GUID, "39.1", now + 1800, pid, sub="2")
+    fake_plex.STATE.subscriptions.update({"1": {"key": "1"}, "2": {"key": "2"}})
+    # Telemundo is the better-ranked booking, but the one in progress stays.
+    _set_lang("41.1", "es")
+    _set_lang("39.1", "en")
+    out = passes.dedupe_games()
+    assert [d["action"] for d in out] == ["cancelled"]
+    assert list(fake_plex.STATE.subscriptions) == ["1"]
+
+
+def test_dedupe_never_cancels_an_in_progress_booking_even_when_it_is_the_extra(plex):
+    now = int(time.time())
+    _airing_with_teams("nbc", NBC_GUID, "41.1", now - 600, KC_BUF, "A", "NFL")
+    _airing_with_teams("tele", TELE_GUID, "39.1", now - 400, KC_BUF, "B", "NFL")
+    pid = _mode_pass("one")
+    _book("nbc", NBC_GUID, "41.1", now - 600, pid, sub="1")
+    _book("tele", TELE_GUID, "39.1", now - 400, pid, sub="2")
+    fake_plex.STATE.subscriptions.update({"1": {"key": "1"}, "2": {"key": "2"}})
+    assert passes.dedupe_games() == []
+    assert len(fake_plex.STATE.subscriptions) == 2

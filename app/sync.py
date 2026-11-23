@@ -640,8 +640,12 @@ def _would_choose(row, passes_by_id=None, stand_in=False):
             want = item["expected_at"] if item and item["expected_at"] else None
             anchor = (min(mine, key=lambda a: abs(a["begins_at"] - want))
                       if want else min(mine, key=lambda a: a["begins_at"]))["begins_at"]
-            mine = passes.game_containing(passes.rule_airings(p), row["program_guid"],
-                                          anchor, passes.pass_mode(p)) or mine
+            mine = passes.game_containing(
+                passes.rule_airings(p, lookback=passes.LANGUAGE_WINDOW),
+                row["program_guid"], anchor, passes.pass_mode(p)) or mine
+            # Seen whole, but only what can still be booked is chosen.
+            soon = int(time.time()) - passes.LEAD_SECONDS
+            mine = [a for a in mine if a["begins_at"] >= soon]
     except Exception:
         # An unusable filter is the pass's problem, not grounds for touching
         # a recording that already exists.

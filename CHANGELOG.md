@@ -22,6 +22,9 @@
   language" count them as one game, but only when the later one is not a
   premiere and both channels' languages are known, so a doubleheader keeps
   both games.
+  Once a game has started, a pass run no longer books the same game on another
+  channel: what is already recording counts, and a started airing is never the
+  one chosen.
 - **The cost is shown before you save.** Picking either of the last two options
   says how many recordings the pass would make over the next 30 days compared
   with one per game, and how many would run at once. If that is more than your

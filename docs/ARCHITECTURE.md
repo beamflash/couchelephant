@@ -184,6 +184,13 @@ What follows from the mode:
 - **Repair** (`sync._would_choose`, `sync._covered_elsewhere`) keeps each booking
   on its own channel in the modes that book several, so a moved broadcast is
   never repaired onto the other channel's booking.
+- **A game under way.** The pass run also reads airings that began up to 6 hours
+  ago, so a game whose first airing has started is still one game with the
+  later airing, and `already_handled` sees what is being recorded (ours or
+  Plex's `inprogress`). Only airings that have not started are chosen from. In
+  `one`, the later airing is booked only when nothing of the game is being
+  recorded (a pass made mid-game, say). Cleanup lists started bookings too, keeps
+  one that is in progress, and never cancels it.
 - A pass that books more than one channel cannot be a Plex rule, so creating
   one always makes a CouchElephant pass.
 - `POST /api/channels-preview` runs the same choosing over the guide horizon

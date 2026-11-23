@@ -43,13 +43,16 @@ _AIRING_SQL = """SELECT a.*, p.title, p.grandparent_title, p.rating_key, p.teams
            WHERE a.begins_at BETWEEN ? AND ?"""
 
 
-def _future(extra="", args=(), horizon_days=30, limit=None, program_guid=None):
+def _future(extra="", args=(), horizon_days=30, limit=None, program_guid=None,
+            lookback=0):
     """Future airings with a WHERE fragment applied by SQLite, not by Python.
 
     The guide holds around twenty thousand future airings. Pulling them all in
     to keep a dozen is how a pass list of forty took a second to draw.
     """
-    cutoff = _now() - LEAD_SECONDS
+    # `lookback` also returns airings that began that long ago, for grouping: a
+    # game whose first airing has started is still one game with the later one.
+    cutoff = _now() - LEAD_SECONDS - lookback
     until = _now() + horizon_days * 86400
     # Narrowing to one programme is done here rather than by the caller, so
     # `idx_airings_program` serves it instead of the whole window being
@@ -65,7 +68,7 @@ def _future(extra="", args=(), horizon_days=30, limit=None, program_guid=None):
 
 def candidate_airings(team_id: int | None, horizon_days: int = 30,
                       team_name: str | None = None, program_guid: str | None = None,
-                      limit: int | None = None) -> list:
+                      limit: int | None = None, lookback: int = 0) -> list:
     """Future airings of games featuring this team.
 
     Matched on the team's NAME. The id is a fallback and nothing more.
@@ -109,18 +112,19 @@ def candidate_airings(team_id: int | None, horizon_days: int = 30,
     if key:
         return _future("EXISTS (SELECT 1 FROM json_each(p.teams) t "
                        "WHERE tident(json_extract(t.value, '$.name')) = ?)",
-                       (key,), horizon_days, limit=limit, program_guid=program_guid)
+                       (key,), horizon_days, limit=limit, program_guid=program_guid,
+                       lookback=lookback)
     # No name to go on. An old pass made before the name was stored has only
     # the id, and a wrong match is still better than a pass that matches
     # nothing at all and looks like a quiet week.
     return _future("EXISTS (SELECT 1 FROM json_each(p.teams) t "
                    "WHERE json_extract(t.value, '$.id') = ?)",
                    (int(team_id or 0),), horizon_days, limit=limit,
-                   program_guid=program_guid)
+                   program_guid=program_guid, lookback=lookback)
 
 
 def series_airings(series_guid: str, horizon_days: int = 30,
-                   program_guid: str | None = None) -> list:
+                   program_guid: str | None = None, lookback: int = 0) -> list:
     """Future airings of one programme, wherever it turns up.
 
     Matched on the show rather than the episode, so a rule follows the series
@@ -130,11 +134,11 @@ def series_airings(series_guid: str, horizon_days: int = 30,
         return []
     return _future("(a.program_guid = ? OR p.grandparent_title = ?)",
                    (series_guid, series_guid), horizon_days,
-                   program_guid=program_guid)
+                   program_guid=program_guid, lookback=lookback)
 
 
 def smart_airings(tree: dict, horizon_days: int = 30,
-                  program_guid: str | None = None) -> list:
+                  program_guid: str | None = None, lookback: int = 0) -> list:
     """Future airings matching a smart filter.
 
     Compiled to SQL and asked of the database, rather than pulled into Python
@@ -142,7 +146,8 @@ def smart_airings(tree: dict, horizon_days: int = 30,
     of the count in the panel is that it comes back before the user has given up.
     """
     frag, args = smartfilter.build(tree)
-    return _future(f"({frag})", args, horizon_days, program_guid=program_guid)
+    return _future(f"({frag})", args, horizon_days, program_guid=program_guid,
+                   lookback=lookback)
 
 
 def any_airing(horizon_days: int = 30) -> list:
@@ -156,7 +161,8 @@ def any_airing(horizon_days: int = 30) -> list:
     return _future("COALESCE(a.drm, 0) = 0", (), horizon_days, limit=1)
 
 
-def rule_airings(rule, horizon_days: int = 30, program_guid: str | None = None) -> list:
+def rule_airings(rule, horizon_days: int = 30, program_guid: str | None = None,
+                 lookback: int = 0) -> list:
     """Everything a rule could record, before the source limit is applied.
 
     `program_guid` narrows the answer to one programme, in SQL. A caller that
@@ -166,15 +172,17 @@ def rule_airings(rule, horizon_days: int = 30, program_guid: str | None = None) 
     """
     if rule["kind"] == "smart":
         return smart_airings(db.unjs(rule["filter"], {}) or {}, horizon_days,
-                             program_guid=program_guid)
+                             program_guid=program_guid, lookback=lookback)
     if rule["kind"] == "series":
         return series_airings(rule["series_guid"] or rule["series_title"],
-                              horizon_days, program_guid=program_guid)
+                              horizon_days, program_guid=program_guid,
+                              lookback=lookback)
     # The name goes with the id. A pass followed from the catalogue has only a
     # name until the team first plays, and after Plex renumbers, the name is
     # the half that is still true.
     return candidate_airings(rule["team_id"], horizon_days,
-                             team_name=rule["team_name"], program_guid=program_guid)
+                             team_name=rule["team_name"], program_guid=program_guid,
+                             lookback=lookback)
 
 
 def allowed_sources(rule) -> tuple[list[str], list[str]]:
@@ -839,26 +847,33 @@ def _channel_language(vcn):
 
 
 def _pass_bookings(pass_id: int) -> list[dict]:
-    """What this pass booked by itself and has not started, in the shape
-    `group_by_game` reads. Bookings made by hand carry another source and are
-    never listed, so nothing below can touch them."""
+    """What this pass booked by itself, in the shape `group_by_game` reads.
+    Bookings made by hand carry another source and are never listed, so nothing
+    below can touch them.
+
+    Bookings that began up to LANGUAGE_WINDOW ago are listed too, marked
+    `started`, so grouping sees an in-progress recording of a game. The cleanup
+    never cancels one of those."""
     now = _now()
+    since = now - LANGUAGE_WINDOW
     out = []
     for g in db.query(
             "SELECT o.*, p.teams FROM our_grabs o LEFT JOIN programs p ON p.guid = o.program_guid "
             "WHERE o.pass_id = ? AND o.source = 'pass' AND o.begins_at > ?",
-            (pass_id, now + LEAD_SECONDS)):
+            (pass_id, since)):
         out.append({"id": g["airing_id"], "program_guid": g["program_guid"],
                     "teams": g["teams"], "begins_at": g["begins_at"],
                     "channel_vcn": g["channel_vcn"], "grab": g, "rec": None,
+                    "started": g["begins_at"] <= now + LEAD_SECONDS,
                     "channel_language": _channel_language(g["channel_vcn"])})
     for r in db.query(
             "SELECT r.*, p.teams FROM recordings r LEFT JOIN programs p ON p.guid = r.program_guid "
             "WHERE r.pass_id = ? AND r.source = 'pass' AND r.kind = 'recording' "
-            "AND r.state = 'scheduled' AND r.starts_at > ?", (pass_id, now)):
+            "AND r.state IN ('scheduled', 'recording') AND r.begins_at > ?", (pass_id, since)):
         out.append({"id": r["airing_id"], "program_guid": r["program_guid"],
                     "teams": r["teams"], "begins_at": r["begins_at"],
                     "channel_vcn": r["channel_vcn"], "grab": None, "rec": r,
+                    "started": r["state"] == "recording" or r["starts_at"] <= now,
                     "channel_language": _channel_language(r["channel_vcn"])})
     return out
 
@@ -875,7 +890,13 @@ def _keeper(bookings: list[dict], preferred: str | None = None) -> dict:
     from the booked ones (preferred language first, then the live broadcast,
     else the earliest). When the guide no longer holds them, the best-ranked
     and then earliest booked stays, because it is the one a reader of the log
-    saw first. Always the same answer for the same bookings."""
+    saw first. Always the same answer for the same bookings.
+
+    A booking that has started stays, whatever else is true: it cannot be
+    cancelled, and keeping another beside it would be two recordings."""
+    started = [b for b in bookings if b.get("started")]
+    if started:
+        bookings = started
     ids = [b["id"] for b in bookings if b["id"]]
     found = db.query(_AIRING_SQL + f" AND a.id IN ({','.join('?' * len(ids))})",
                      (0, 2**62, *ids)) if ids else []
@@ -948,6 +969,7 @@ def dedupe_games(dry: bool = False) -> list[dict]:
             if len(bookings) < 2:
                 continue
             extra, why = _extras(mode, bookings, preferred)
+            extra = [b for b in extra if not b.get("started")]   # never one in progress
             for b in extra:
                 if b["grab"] is not None and not b["grab"]["subscription"]:
                     continue
@@ -1195,7 +1217,10 @@ def _evaluate(rows, plex, dry, results):
         label = rule_label(p)
         networks, channels = allowed_sources(p)
         try:
-            games = group_by_game(rule_airings(p), pass_mode(p))
+            # Airings that started up to LANGUAGE_WINDOW ago are read too, so a
+            # game whose first airing is under way is still one game with the
+            # later one, and what is being recorded counts as handled.
+            games = group_by_game(rule_airings(p, lookback=LANGUAGE_WINDOW), pass_mode(p))
         except smartfilter.FilterError as e:
             # One unusable filter must not stop every other pass running.
             _log(p["id"], None, "failed", f"the filter cannot be read: {e}", dry)
@@ -1206,7 +1231,13 @@ def _evaluate(rows, plex, dry, results):
             # The source limit is applied before the choice, not after, so the
             # rule picks the best airing among the ones it is allowed to use
             # rather than picking first and then finding it disallowed.
-            allowed = [a for a in airings if in_sources(a, networks, channels)]
+            # Only what can still be booked is chosen from. An airing that has
+            # started is never picked; it only keeps its game together.
+            cutoff = _now() - LEAD_SECONDS
+            bookable = [a for a in airings if a["begins_at"] >= cutoff]
+            if not bookable:
+                continue
+            allowed = [a for a in bookable if in_sources(a, networks, channels)]
             if not allowed:
                 where = " or ".join(networks + channels)
                 reason = f"no airing is on {where}"
