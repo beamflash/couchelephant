@@ -14,6 +14,8 @@ from . import backingstore, dbstore
 
 REMOVED = "[removed]"
 
+# Ported to Swift: when a pattern changes, update the shared scrub_corpus.json and rerun both suites.
+
 # A new setting is invisible to reports until it is added here on purpose.
 SETTINGS_ALLOW = (
     "timezone", "sync_minutes", "dry_run", "epg_provider",
