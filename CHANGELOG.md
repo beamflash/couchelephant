@@ -1,5 +1,35 @@
 # Changelog
 
+## 1.5.35 - 2026-11-23
+
+### Added
+
+- **Channels per game on a sports pass.** A game is often on two channels, such
+  as Chiefs at Bills on NBC in English and on Telemundo in Spanish. A team pass
+  and a smart pass now have a choice, **Channels per game**:
+  - **One airing per game** (the default, and what every existing pass keeps).
+  - **All airings in my preferred language.** Every channel carrying the game
+    in your language. If no channel has it in your language, the pass books one
+    airing as before, so the game is never lost.
+  - **All airings, any language.** Every channel carrying the game.
+  Each channel gets its own booking, and a game booked on NBC no longer stops
+  the Telemundo one when you asked for both. Only channels airing the game
+  together are counted, not a replay the next day. Turn it back to one airing
+  per game and the next run cancels the extras. A pass that books more than one
+  channel is always kept by CouchElephant, because Plex cannot say it.
+- **The cost is shown before you save.** Picking either of the last two options
+  says how many recordings the pass would make over the next 30 days compared
+  with one per game, and how many would run at once. If that is more than your
+  tuners, it says so.
+- **Preferred language.** Setup asks for it, starting from your browser's
+  language (English, Español, Français, Português, Deutsch or Italiano), and
+  Settings, Guide changes it. An install that never answered stays on English.
+- **Channel languages.** Plex's guide does not say what language a channel is
+  in, so CouchElephant reads it from the titles and descriptions after each
+  sync. Settings, Channels, Languages shows what it found for each channel and
+  lets you choose the language yourself. Yours always wins, and it is kept in an
+  export.
+
 ## 1.5.34 - 2026-11-23
 
 ### Fixed

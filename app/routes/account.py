@@ -5,7 +5,7 @@ import urllib.parse
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from .. import auth, db, exposure, ratelimit
+from .. import auth, db, exposure, language, ratelimit
 from ._shared import ZONES, current_user, page
 from .settings import _save_and_sync, _test_plex
 
@@ -22,12 +22,13 @@ def _configured():
 def welcome(request: Request):
     if _configured():
         return RedirectResponse("/", status_code=303)
-    return page(request, "welcome.html", zones=ZONES, nav="")
+    return page(request, "welcome.html", zones=ZONES, nav="",
+                languages=language.LANGUAGES)
 
 
 @router.post("/welcome")
 async def welcome_save(plex_url: str = Form(""), plex_token: str = Form(""),
-                       timezone: str = Form("UTC")):
+                       timezone: str = Form("UTC"), preferred_language: str = Form("en")):
     """Test first, then save. A wrong address saved quietly is what makes the
     first five minutes confusing."""
     if _configured():
@@ -35,6 +36,8 @@ async def welcome_save(plex_url: str = Form(""), plex_token: str = Form(""),
                              "Change Plex under Settings."}, status_code=403)
     if timezone not in ZONES:
         return JSONResponse({"ok": False, "detail": "That timezone is not on the list."})
+    if preferred_language not in language.LANGUAGES:
+        return JSONResponse({"ok": False, "detail": "That language is not on the list."})
     url, token = plex_url.strip().rstrip("/"), plex_token.strip()
     if not url or not token:
         return JSONResponse({"ok": False,
@@ -44,7 +47,7 @@ async def welcome_save(plex_url: str = Form(""), plex_token: str = Form(""),
     ok, detail = _test_plex(url, token)
     if not ok:
         return JSONResponse({"ok": False, "detail": detail})
-    await _save_and_sync(url, token, timezone)
+    await _save_and_sync(url, token, timezone, preferred_language)
     return JSONResponse({"ok": True, "detail": detail})
 
 

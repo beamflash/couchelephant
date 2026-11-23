@@ -18,7 +18,7 @@ Selection order for a game:
 import threading
 import time
 
-from . import db, expectations, recorder, smartfilter, teamcat
+from . import db, expectations, language, recorder, smartfilter, teamcat
 from .plex import Plex, PlexError
 
 # Give a game this much slack before treating it as too late to schedule.
@@ -35,7 +35,8 @@ def _now():
 
 
 _AIRING_SQL = """SELECT a.*, p.title, p.grandparent_title, p.rating_key, p.teams, p.summary,
-                  p.section, c.network AS channel_network
+                  p.section, c.network AS channel_network,
+                  COALESCE(c.language_override, c.language) AS channel_language
            FROM airings a
            JOIN programs p ON p.guid = a.program_guid
            LEFT JOIN channels c ON c.vcn = a.channel_vcn
@@ -269,6 +270,111 @@ def game_guids(airings: list) -> list[str]:
     return sorted({a["program_guid"] for a in airings})
 
 
+# How many airings of one game a pass books.
+MODES = ("one", "preferred", "any")
+
+
+def pass_mode(p) -> str:
+    """The pass's channels-per-game choice. Anything unknown means one."""
+    try:
+        mode = p["channels_per_game"]
+    except (IndexError, KeyError):
+        mode = None
+    return mode if mode in MODES else "one"
+
+
+def preferred_language() -> str:
+    return language.effective(None, None, db.get_setting("preferred_language"))
+
+
+def airing_language(row, preferred: str) -> str:
+    """What language an airing's channel counts as. A channel nobody could
+    place counts as the preferred language, so it is never held against it."""
+    try:
+        lang = row["channel_language"]
+    except (IndexError, KeyError):
+        lang = None
+    return language.effective(None, lang, preferred)
+
+
+def choose_airings(airings: list, mode: str = "one",
+                   preferred: str = "en") -> tuple[list[tuple[dict | None, str]], bool]:
+    """The airings of ONE game to book, each with its reason.
+
+    Returns (picks, per_channel). `per_channel` says whether "already booked"
+    is asked of each channel on its own (modes that want several) or of the
+    whole game (one airing per game, and the fallback below).
+
+    one        exactly `choose_airing`, as before.
+    preferred  one airing per channel whose language is the preferred one. When
+               the game is on no such channel, ONE airing chosen as in `one`,
+               so the game is never lost.
+    any        one airing per channel.
+
+    The extra channels are the ones airing the game WITH the first choice, inside
+    SAME_GAME_WINDOW of it. A replay on another channel the next day is not
+    another broadcast of the game, and would only cost a tuner and disk.
+    """
+    pick, why = choose_airing(airings)
+    if mode not in ("preferred", "any") or not pick:
+        return [(pick, why)], False
+    pool = [a for a in airings if not a["drm"]]
+    if mode == "preferred":
+        pool = [a for a in pool if airing_language(a, preferred) == preferred]
+        if not pool:
+            name = language.name_of(preferred) or preferred
+            return [(pick, f"{why}; no channel carries it in {name}")], False
+    anchor, why = choose_airing(pool)
+    near = [a for a in pool
+            if abs(a["begins_at"] - anchor["begins_at"]) <= SAME_GAME_WINDOW]
+    by_channel = {}
+    for a in near:
+        by_channel.setdefault(a["channel_vcn"], []).append(a)
+    picks = []
+    for vcn, rows in by_channel.items():
+        # The anchor stands for its own channel, so the first choice is the
+        # very airing `choose_airing` would have taken alone.
+        one = anchor if vcn == anchor["channel_vcn"] else choose_airing(rows)[0]
+        picks.append((one, why if one is anchor else
+                      f"also on {vcn}, same game"))
+    picks.sort(key=lambda t: (t[0]["begins_at"], str(t[0]["channel_vcn"])))
+    if len(picks) > 1:
+        picks = [(a, f"{r}; {len(picks)} channels carry this game") for a, r in picks]
+    return picks, True
+
+
+def plan(rows: list, networks: list[str], channels: list[str], mode: str,
+         preferred: str) -> list:
+    """Every airing a pass would book from these rows, without booking.
+
+    The same choosing `_evaluate` does, for the preview. Games with no usable
+    airing are left out.
+    """
+    out = []
+    for airings in group_by_game(rows).values():
+        allowed = [a for a in airings if in_sources(a, networks, channels)]
+        if not allowed:
+            continue
+        picks, _ = choose_airings(allowed, mode, preferred)
+        out.extend(a for a, _r in picks if a)
+    return out
+
+
+def peak_overlap(airings: list) -> int:
+    """The most recordings running at one moment."""
+    edges = []
+    for a in airings:
+        end = a["ends_at"] or (a["begins_at"] + 3600)
+        edges.append((a["begins_at"], 1))
+        edges.append((end, -1))
+    edges.sort(key=lambda e: (e[0], e[1]))     # an end before a start at the same second
+    now = peak = 0
+    for _t, d in edges:
+        now += d
+        peak = max(peak, now)
+    return peak
+
+
 def last_read() -> int:
     """When Plex was last read back into our copy.
 
@@ -279,7 +385,8 @@ def last_read() -> int:
                   "WHERE ok = 1")["t"]
 
 
-def already_handled(program_guid, read_at: int | None = None) -> str | None:
+def already_handled(program_guid, read_at: int | None = None,
+                    channel: str | None = None) -> str | None:
     """Why this game needs no booking, or None.
 
     THE LIVE STATE, NEVER THE LOG. This used to answer yes to any programme
@@ -299,6 +406,9 @@ def already_handled(program_guid, read_at: int | None = None) -> str | None:
 
     `program_guid` may be a list: a game listed under several guids is handled
     when ANY of them is.
+
+    `channel` narrows the question to one channel, for a pass that wants the
+    game on several: a booked NBC airing must not stop the Telemundo one.
     """
     guids = [program_guid] if isinstance(program_guid, str) else list(program_guid)
     if not guids:
@@ -311,22 +421,25 @@ def already_handled(program_guid, read_at: int | None = None) -> str | None:
     # it yet, and without this two runs in a row would book the game twice.
     if read_at is None:
         read_at = last_read()
-    if any(recorder.booked(program_guid=g) for g in guids):
+    if any(recorder.booked(program_guid=g, channel=channel) for g in guids):
         return "CouchElephant is recording it"
+    on = " AND o.channel_vcn = ?" if channel else ""
+    on_grab = " AND g.channel_vcn = ?" if channel else ""
+    extra = (channel,) if channel else ()
     mine = db.one(
         """SELECT 1 FROM our_grabs o
              LEFT JOIN plex_subscriptions s ON s.key = o.subscription
             WHERE o.program_guid IN (""" + marks + """)
-              AND (s.key IS NOT NULL OR o.created_at >= ?) LIMIT 1""",
-        (*guids, read_at))
+              AND (s.key IS NOT NULL OR o.created_at >= ?)""" + on + """ LIMIT 1""",
+        (*guids, read_at, *extra))
     if mine:
         return "already booked by a pass"
     hit = db.one(
         """SELECT g.status FROM plex_grabs g
            JOIN airings a ON a.channel_vcn = g.channel_vcn AND a.begins_at = g.begins_at
            WHERE a.program_guid IN (""" + marks + """)
-             AND g.status IN ('scheduled','inprogress','complete')
-           LIMIT 1""", tuple(guids))
+             AND g.status IN ('scheduled','inprogress','complete')""" + on_grab + """
+           LIMIT 1""", (*guids, *extra))
     if hit:
         return f"Plex already has it ({hit['status']})"
     return None
@@ -636,14 +749,14 @@ def _pass_bookings(pass_id: int) -> list[dict]:
             (pass_id, now + LEAD_SECONDS)):
         out.append({"id": g["airing_id"], "program_guid": g["program_guid"],
                     "teams": g["teams"], "begins_at": g["begins_at"],
-                    "grab": g, "rec": None})
+                    "channel_vcn": g["channel_vcn"], "grab": g, "rec": None})
     for r in db.query(
             "SELECT r.*, p.teams FROM recordings r LEFT JOIN programs p ON p.guid = r.program_guid "
             "WHERE r.pass_id = ? AND r.source = 'pass' AND r.kind = 'recording' "
             "AND r.state = 'scheduled' AND r.starts_at > ?", (pass_id, now)):
         out.append({"id": r["airing_id"], "program_guid": r["program_guid"],
                     "teams": r["teams"], "begins_at": r["begins_at"],
-                    "grab": None, "rec": r})
+                    "channel_vcn": r["channel_vcn"], "grab": None, "rec": r})
     return out
 
 
@@ -664,30 +777,57 @@ def _keeper(bookings: list[dict]) -> dict:
     return min(bookings, key=lambda b: (b["begins_at"], str(b["id"])))
 
 
+def _extras(mode: str, bookings: list[dict], preferred: str) -> tuple[list[dict], str]:
+    """The bookings of one game that the pass's mode says to cancel, and why."""
+    if mode == "any":
+        return [], ""
+    if mode == "one":
+        keep = _keeper(bookings)
+        return ([b for b in bookings if b is not keep],
+                "another channel already records this game")
+    # preferred: the channels that are not in the preferred language go, and
+    # at least one booking always stays.
+    langs = {}
+    for b in bookings:
+        row = db.one("SELECT COALESCE(language_override, language) AS l FROM channels "
+                     "WHERE vcn = ?", (b["channel_vcn"],))
+        langs[id(b)] = language.effective(None, row["l"] if row else None, preferred)
+    wrong = [b for b in bookings if langs[id(b)] != preferred]
+    if len(wrong) == len(bookings):
+        keep = _keeper(bookings)
+        wrong = [b for b in bookings if b is not keep]
+    return wrong, "another channel carries this game in your preferred language"
+
+
 def dedupe_games(dry: bool = False) -> list[dict]:
     """Cancel the extra bookings a pass made of one game on several channels.
 
     Older versions booked every guid of a game. Per pass, upcoming bookings
-    the pass made itself are grouped as `group_by_game` groups them, one is
-    kept (`_keeper`) and the rest are cancelled the way a pass delete cancels,
-    in Plex too. Safe to run every time: with one booking per game it finds
+    the pass made itself are grouped as `group_by_game` groups them, and what
+    goes depends on the pass's channels-per-game choice (`_extras`): one
+    booking stays for "one", the ones outside the preferred language go for
+    "preferred", and nothing goes for "any". Cancelled the way a pass delete
+    cancels, in Plex too. Safe to run every time: with nothing extra it finds
     nothing. A Plex booking with no stored key cannot be cancelled and stays.
     """
     results = []
-    for p in db.query("SELECT id FROM passes"):
+    preferred = preferred_language()
+    for p in db.query("SELECT id, channels_per_game FROM passes"):
+        mode = pass_mode(p)
+        if mode == "any":
+            continue
         games = group_by_game(_pass_bookings(p["id"]))
         for bookings in games.values():
             if len(bookings) < 2:
                 continue
-            keep = _keeper(bookings)
-            for b in bookings:
-                if b is keep or (b["grab"] is not None and not b["grab"]["subscription"]):
+            extra, why = _extras(mode, bookings, preferred)
+            for b in extra:
+                if b["grab"] is not None and not b["grab"]["subscription"]:
                     continue
                 row = (db.one("SELECT a.*, pr.title FROM airings a JOIN programs pr "
                               "ON pr.guid = a.program_guid WHERE a.id = ?", (b["id"],))
                        or {"id": b["id"], "program_guid": b["program_guid"], "title": None,
                            "channel_vcn": None, "begins_at": b["begins_at"]})
-                why = "another channel already records this game"
                 if dry:
                     _log(p["id"], row, "would cancel", why, True)
                     results.append({"action": "would cancel", "reason": why})
@@ -884,10 +1024,46 @@ def run_passes(force_dry_run: bool | None = None) -> list[dict]:
     return results
 
 
+def _handle_pick(p, plex, dry, results, read_at, label, airings, pick, reason, channel):
+    """Book one chosen airing of a game, or say why not. `channel` is set when
+    "already booked" is asked of that channel alone."""
+    blocked = already_handled(game_guids(airings), read_at, channel)
+    if blocked:
+        results.append({"pass": label, "game": pick["title"],
+                        "action": "skipped", "reason": blocked,
+                        "channel": pick["channel_vcn"], "begins_at": pick["begins_at"]})
+        return
+    if dry:
+        _log(p["id"], pick, "would schedule", reason, True)
+        results.append({"pass": label, "game": pick["title"],
+                        "action": "would schedule", "reason": reason,
+                        "channel": pick["channel_vcn"], "begins_at": pick["begins_at"]})
+        return
+    try:
+        with PASS_LOCK:
+            # Deleted or paused since this run began: book nothing.
+            live = db.one("SELECT 1 FROM passes WHERE id = ? AND enabled = 1",
+                          (p["id"],))
+            if not live:
+                return
+            _book(plex, p, pick)
+        _log(p["id"], pick, "scheduled", reason, False)
+        results.append({"pass": label, "game": pick["title"],
+                        "action": "scheduled", "reason": reason,
+                        "channel": pick["channel_vcn"], "begins_at": pick["begins_at"]})
+    except Exception as e:
+        msg = f"{type(e).__name__}: {e}"
+        _log(p["id"], pick, "failed", msg, False)
+        results.append({"pass": label, "game": pick["title"],
+                        "action": "failed", "reason": msg,
+                        "channel": pick["channel_vcn"], "begins_at": pick["begins_at"]})
+
+
 def _evaluate(rows, plex, dry, results):
     # Read once for the whole run. It cannot change while this is running, and
     # it was being asked once per game per pass.
     read_at = last_read()
+    preferred = preferred_language()
     for p in rows:
         label = rule_label(p)
         networks, channels = allowed_sources(p)
@@ -911,44 +1087,20 @@ def _evaluate(rows, plex, dry, results):
                 results.append({"pass": label, "game": airings[0]["title"],
                                 "action": "skipped", "reason": reason})
                 continue
-            pick, reason = choose_airing(allowed)
-            if networks or channels:
-                reason += f", limited to {' or '.join(networks + channels)}"
-            if not pick:
+            picks, per_channel = choose_airings(allowed, pass_mode(p), preferred)
+            if not picks[0][0]:
+                reason = picks[0][1]
+                if networks or channels:
+                    reason += f", limited to {' or '.join(networks + channels)}"
                 _log(p["id"], allowed[0], "skipped", reason, dry)
                 results.append({"pass": label, "game": allowed[0]["title"],
                                 "action": "skipped", "reason": reason})
                 continue
-            blocked = already_handled(game_guids(airings), read_at)
-            if blocked:
-                results.append({"pass": label, "game": pick["title"],
-                                "action": "skipped", "reason": blocked,
-                                "channel": pick["channel_vcn"], "begins_at": pick["begins_at"]})
-                continue
-            if dry:
-                _log(p["id"], pick, "would schedule", reason, True)
-                results.append({"pass": label, "game": pick["title"],
-                                "action": "would schedule", "reason": reason,
-                                "channel": pick["channel_vcn"], "begins_at": pick["begins_at"]})
-                continue
-            try:
-                with PASS_LOCK:
-                    # Deleted or paused since this run began: book nothing.
-                    live = db.one("SELECT 1 FROM passes WHERE id = ? AND enabled = 1",
-                                  (p["id"],))
-                    if not live:
-                        continue
-                    _book(plex, p, pick)
-                _log(p["id"], pick, "scheduled", reason, False)
-                results.append({"pass": label, "game": pick["title"],
-                                "action": "scheduled", "reason": reason,
-                                "channel": pick["channel_vcn"], "begins_at": pick["begins_at"]})
-            except Exception as e:
-                msg = f"{type(e).__name__}: {e}"
-                _log(p["id"], pick, "failed", msg, False)
-                results.append({"pass": label, "game": pick["title"],
-                                "action": "failed", "reason": msg,
-                                "channel": pick["channel_vcn"], "begins_at": pick["begins_at"]})
+            for pick, reason in picks:
+                if networks or channels:
+                    reason += f", limited to {' or '.join(networks + channels)}"
+                _handle_pick(p, plex, dry, results, read_at, label, airings, pick,
+                             reason, pick["channel_vcn"] if per_channel else None)
         if p["kind"] == "team":
             _stand_ins(p, plex, dry, results, read_at, label, networks, channels)
 

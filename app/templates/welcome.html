@@ -20,7 +20,19 @@
       shown in it. Pick where the server is, not where you are, if they differ.</span>
   </div>
 
-  <div id="wsignin" data-plex-signin data-after="guide" data-zone="#wz">
+  <div class="field">
+    <label for="wl">Preferred language for TV</label>
+    <select id="wl" name="preferred_language">
+      {% for code, names in languages.items() %}
+        <option value="{{ code }}" {{ 'selected' if code == (settings.preferred_language or 'en') }}>{{ names[0] }}</option>
+      {% endfor %}
+    </select>
+    <span class="help">A game is often on two channels, one in English and one in Spanish, for
+      example. A pass can record every channel in this language. You can change it later in
+      <b>Settings</b>, and say which language each channel is.</span>
+  </div>
+
+  <div id="wsignin" data-plex-signin data-after="guide" data-zone="#wz" data-language="#wl">
     <button class="primary psi-go" type="button">Sign in with Plex</button>
     <div class="psi-out" hidden></div>
     <p class="psi-or"><a href="#" id="wmanual">Enter it yourself</a></p>
@@ -105,6 +117,13 @@
     }
   } catch (e) {}
 
+  // The same for the language: the browser's own, when the list has it.
+  try {
+    var lsel = document.getElementById('wl');
+    var tag = (navigator.language || '').slice(0, 2).toLowerCase();
+    if (tag && lsel.querySelector('option[value="' + tag + '"]')) lsel.value = tag;
+  } catch (e) {}
+
   // Plex is set: show the QR to connect the app, then let them go on.
   window.ceShowConnect = function () {
     f.hidden = true;
@@ -125,7 +144,7 @@
     btn.disabled = true; btn.textContent = 'Testing...';
     say('busy', 'Asking your Plex server...');
     fetch('/welcome', {method: 'POST', headers: {Accept: 'application/json'},
-                       body: new URLSearchParams(Object.assign(Object.fromEntries(new FormData(f)), {timezone: document.getElementById('wz').value}))})
+                       body: new URLSearchParams(Object.assign(Object.fromEntries(new FormData(f)), {timezone: document.getElementById('wz').value, preferred_language: document.getElementById('wl').value}))})
       .then(function (r) { return r.json(); })
       .then(function (j) {
         if (j.ok) {

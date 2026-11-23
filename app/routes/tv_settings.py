@@ -11,7 +11,7 @@ import os
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from .. import auth, db, handover, notify, passes, recorder, sync
+from .. import auth, db, handover, language, notify, passes, recorder, sync
 from . import settings as web
 from ._shared import ZONES, current_user
 from .tv import device_for
@@ -76,6 +76,8 @@ def read(request: Request):
         "plex_token_set": bool(s.get("plex_token")),
         "tmdb_key_set": bool(s.get("tmdb_key")),
         "zones": ZONES,
+        "languages": [{"code": k, "name": v[0], "english": v[1]}
+                      for k, v in language.LANGUAGES.items()],
         "numbers": {k: list(v) for k, v in web.NUMBERS.items()},
         "recorder": {"available": recorder.available(),
                      "why": recorder.why_unavailable(),
@@ -102,6 +104,23 @@ async def save(request: Request):
         return JSONResponse({"ok": False, "error": "Not saved: " + ", ".join(refused)},
                             status_code=400)
     return {"ok": True, "message": "Saved."}
+
+
+@router.get("/api/tv/settings/channels")
+def channels(request: Request):
+    """Every channel with its language: `language` (what it counts as),
+    `language_detected` and `language_override` (the person's own choice)."""
+    return web.api_channel_languages()
+
+
+@router.post("/api/tv/settings/channels/{vcn}/language")
+async def channel_language(request: Request, vcn: str):
+    """`language_override`: a code from `languages`, or empty to go back to the
+    detected one."""
+    if not may_change(request):
+        return _refused()
+    form = await request.form()
+    return web.channel_language_set(vcn, form.get("language_override", ""))
 
 
 @router.post("/api/tv/settings/test")

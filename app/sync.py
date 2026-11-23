@@ -3,7 +3,7 @@ import os
 import time
 import traceback
 
-from . import db, expectations, health, notify, passes, paths, teamcat, verify
+from . import db, expectations, health, language, notify, passes, paths, teamcat, verify
 from .plex import Plex, PlexError, discover, is_starting
 
 LOGO_DIR = paths.logos_dir()
@@ -198,6 +198,40 @@ def sync_guide(plex: Plex, provider: str, shows, sports, movies=None) -> dict[st
         _prune(c, "airings", "id", seen)
         c.execute("DELETE FROM programs WHERE guid NOT IN (SELECT program_guid FROM airings)")
     return counts
+
+
+MAX_PROGRAMS_PER_CHANNEL = 300
+
+
+def detect_languages() -> int:
+    """Work out what language each channel broadcasts in, from the titles and
+    descriptions it carries. Plex's guide has no language field.
+
+    A channel the text cannot place keeps what it had: a thin guide one day
+    is not a reason to forget what a full one said yesterday. The person's own
+    choice lives in another column and is never touched here. Returns how many
+    channels changed.
+    """
+    texts = {}
+    seen = {}
+    for r in db.query("SELECT a.channel_vcn, a.program_guid, p.title, "
+                      "p.grandparent_title, p.summary FROM airings a "
+                      "JOIN programs p ON p.guid = a.program_guid"):
+        guids = seen.setdefault(r["channel_vcn"], set())
+        if r["program_guid"] in guids or len(guids) >= MAX_PROGRAMS_PER_CHANNEL:
+            continue
+        guids.add(r["program_guid"])
+        texts.setdefault(r["channel_vcn"], []).extend(
+            (r["title"], r["grandparent_title"], r["summary"]))
+    changed = 0
+    with db.tx() as c:
+        for vcn, now_lang in ((v, language.detect(t)) for v, t in texts.items()):
+            if now_lang is None:
+                continue
+            cur = c.execute("UPDATE channels SET language = ? WHERE vcn = ? "
+                            "AND COALESCE(language, '') != ?", (now_lang, vcn, now_lang))
+            changed += cur.rowcount
+    return changed
 
 
 LOGO_MAX_AGE = 30 * 86400   # re-check a logo roughly monthly
@@ -547,18 +581,22 @@ def _has_grab(key, vcn, begins_at) -> bool:
             LIMIT 1""", (key or "", key or "", vcn, begins_at)))
 
 
-def _covered_elsewhere(row):
+def _covered_elsewhere(row, same_channel=False):
     """Whether another booking of ours already records this programme.
 
     Asked of Plex's own grab list rather than of our intentions, because a
-    second booking that Plex is not acting on covers nothing.
+    second booking that Plex is not acting on covers nothing. A pass that books
+    a game on several channels asks it of this booking's channel alone, since
+    the same programme on another channel is the point of that pass.
     """
+    vcn = (row["channel_vcn"] or row["booked_vcn"]) if same_channel else None
     return bool(db.one(
         """SELECT 1 FROM our_grabs o
              JOIN plex_grabs g ON g.subscription = o.subscription
             WHERE o.program_guid = ? AND o.airing_id != ?
-              AND g.status IN ('scheduled','inprogress','complete') LIMIT 1""",
-        (row["program_guid"], row["airing_id"])))
+              AND g.status IN ('scheduled','inprogress','complete')"""
+        + (" AND o.channel_vcn = ?" if vcn else "") + " LIMIT 1",
+        (row["program_guid"], row["airing_id"]) + ((vcn,) if vcn else ())))
 
 
 def _label(row) -> str:
@@ -593,6 +631,13 @@ def _would_choose(row, passes_by_id=None):
     allowed = [a for a in mine if passes.in_sources(a, networks, channels)]
     if not allowed:
         return None
+    if passes.pass_mode(p) != "one":
+        # A pass that books each channel keeps each booking on its own
+        # channel. Moving one onto the other's would book that channel twice.
+        vcn = row["booked_vcn"] or row["channel_vcn"]
+        allowed = [a for a in allowed if a["channel_vcn"] == vcn]
+        if not allowed:
+            return None
     pick, _why = passes.choose_airing(allowed)
     return pick
 
@@ -701,7 +746,9 @@ def _airing_left_the_guide(plex, row, key, now, lead, passes_by_id=None):
 
     # 2. Another booking of ours already covers this game. This one is a
     #    duplicate rather than a gap, so it goes and nothing replaces it.
-    if _covered_elsewhere(row):
+    owner = (passes_by_id or {}).get(row["pass_id"]) or db.one(
+        "SELECT * FROM passes WHERE id = ?", (row["pass_id"],))
+    if _covered_elsewhere(row, bool(owner) and passes.pass_mode(owner) != "one"):
         _cancel(plex, row, "a second booking for a game already recorded", now)
         return "cancelled", None
 
@@ -1292,6 +1339,7 @@ def _sync_everything(plex):
     # the moment the guide first carries it.
     woke = resolve_team_passes()
     guide = sync_guide(plex, provider, shows, sports, movies)
+    detect_languages()
     asked, enriched = enrich_sports(plex, provider)
     got, bad, tried = cache_logos()
     subs = sync_recordings(plex)

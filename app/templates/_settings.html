@@ -263,6 +263,17 @@
             <span class="help">Every time here is shown in this zone. The guide itself is
               stored as UTC, so changing this never moves a recording.</span>
           </div>
+          <div class="field" data-find="preferred language tv spanish english">
+            <label>Preferred language for TV</label>
+            <select name="preferred_language" id="preflang">
+              {% for code, names in languages.items() %}
+                <option value="{{ code }}" {{ 'selected' if code == (settings.preferred_language or 'en') }}>{{ names[0] }}</option>
+              {% endfor %}
+            </select>
+            <span class="help">Used by a pass that records every channel carrying a game in your
+              language. Under <b>Channels, Languages</b> you can say which language each
+              channel is.</span>
+          </div>
           <div class="field" data-find="sync interval minutes refresh">
             <label>Sync interval (minutes)</label>
             <input name="sync_minutes" value="{{ settings.sync_minutes }}" style="max-width:120px">
@@ -689,6 +700,34 @@
         </table>
         <form method="post" action="/settings/logos" class="setform" style="margin-top:12px">
           <button>Re-fetch all logos</button><span class="saved"></span></form>
+      </section>
+
+      <section data-sec="channels" data-tab="language" data-tab-label="Languages" hidden>
+        <h2>Channel languages</h2>
+        <p class="dim">Plex's guide does not say what language a channel is in, so
+          CouchElephant reads it from the titles and descriptions. Where it is wrong or
+          cannot tell, choose the language yourself. Yours wins until you go back to
+          the detected one.</p>
+        <input class="settings-search chq" id="lgq" placeholder="Search channels..."
+               autocomplete="off" style="margin-bottom:12px">
+        <div class="chlist" id="lglist" data-find="channel language spanish english detected">
+          {% for c in channels %}
+          <div class="chrow lgrow" data-vcn="{{ c.vcn }}"
+               data-find="{{ c.vcn }} {{ c.call_sign }} {{ c.network }}">
+            <div class="chmeta">
+              <b>{{ c.vcn }} {{ c.call_sign }}</b>
+              <span class="dim tiny lgdet">{% if c.language_detected %}Detected: {{ languages[c.language_detected][1] }}{% else %}Not detected{% endif %}</span>
+            </div>
+            <select class="lgsel" aria-label="Language of {{ c.vcn }} {{ c.call_sign }}">
+              <option value="" {{ 'selected' if not c.language_override }}>{% if c.language_detected %}Use detected ({{ languages[c.language_detected][1] }}){% else %}Use preferred language{% endif %}</option>
+              {% for code, names in languages.items() %}
+                <option value="{{ code }}" {{ 'selected' if code == c.language_override }}>{{ names[0] }}</option>
+              {% endfor %}
+            </select>
+            <span class="chsay"></span>
+          </div>
+          {% endfor %}
+        </div>
       </section>
 
       <section data-sec="channels" data-tab="art" data-tab-label="Artwork" hidden>

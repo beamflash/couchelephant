@@ -15,6 +15,7 @@ readable by whoever inherits it.
 | `app/plex.py` | The Plex client. Every request to Plex goes through here |
 | `app/sync.py` | Pulling the guide and Plex's recordings into SQLite, and caching logos |
 | `app/passes.py` | **Choosing which airing to record.** The heart of the app |
+| `app/language.py` | **What language a channel is in**, from its titles and descriptions: a stopword count for six languages, and nothing else |
 | `app/smartfilter.py` | The smart filter: a nested condition tree, compiled to SQL |
 | `app/health.py` | **Watching Plex do its own job**, and the notices that come of it |
 | `app/notify.py` | **Sending those notices somewhere you will see them.** Discord, Telegram and Notifiarr, behind one call |
@@ -88,11 +89,11 @@ take the other with it.
 | Table | What it is |
 | --- | --- |
 | `settings` | Key and value. Everything configurable |
-| `channels` | One row per channel, with its logo and network |
+| `channels` | One row per channel, with its logo and network, the language read from its programmes (`language`) and the one you chose (`language_override`) |
 | `programs` | One row per programme, with genres and team tags |
 | `airings` | **One row per broadcast.** The same game appears several times |
 | `teams` | Every team seen in the guide, kept after it stops playing. `in_guide` says which are on this week. **The id is not stable, see below** |
-| `passes` | Our rules: a team, a programme or a smart filter, with an optional source limit. `uid` names one on any machine; `id` does not |
+| `passes` | Our rules: a team, a programme or a smart filter, with an optional source limit and a `channels_per_game` choice. `uid` names one on any machine; `id` does not |
 | `pass_actions` | Every decision a pass made, including the ones it declined. Trimmed to 60 days |
 | `our_grabs` | Broadcasts we booked, and what booked them. Trimmed to 60 days |
 | `plex_subscriptions` | Mirror of Plex's own rules |
@@ -146,8 +147,60 @@ A background task started at boot:
    and put right the ones that do not. See [Bookings drift](#bookings-drift).
 9. Run every enabled pass.
 
+Between 2 and 3 (right after the guide is pulled) the language of each channel
+is read from its programmes. See [Channels per game](#channels-per-game).
+
 Then sleep for the configured interval. The sync icon in the header runs one
 immediately.
+
+## Channels per game
+
+`passes.group_by_game` is the one definition of a game: one programme guid, or
+two guids with the same two teams kicking off within 90 minutes (`SAME_GAME_WINDOW`),
+because two networks list one game under two guids. A pass's `channels_per_game`
+decides how many airings of each such group it books (`passes.choose_airings`):
+
+| Value | Books |
+| --- | --- |
+| `one` (default) | One airing, chosen as `choose_airing` always did: the live broadcast, else the earliest. |
+| `preferred` | One airing per channel whose language is the `preferred_language` setting. If the game is on no such channel, one airing as in `one`, so the game is never lost. |
+| `any` | One airing per channel. |
+
+DRM airings and the pass's network and channel limits are applied first, in every
+mode. The extra channels are the ones airing within `SAME_GAME_WINDOW` of the
+first choice, so a replay on another channel the next day is not booked.
+
+What follows from the mode:
+
+- **Already booked** (`passes.already_handled`) is asked per game in `one`, and
+  per channel in the other two, so a booked NBC airing does not stop the
+  Telemundo one. The fallback in `preferred` is asked per game.
+- **Cleanup** (`passes.dedupe_games`) runs first on every pass run, and what it
+  cancels depends on the mode: `one` keeps one booking per game, `preferred`
+  cancels bookings on channels outside the preferred language (and always keeps
+  one), `any` cancels nothing. Switching a pass back to `one` is how its extra
+  bookings go. The cancel path and the log line are the same ones `one` always used.
+- **Repair** (`sync._would_choose`, `sync._covered_elsewhere`) keeps each booking
+  on its own channel in the modes that book several, so a moved broadcast is
+  never repaired onto the other channel's booking.
+- A pass that books more than one channel cannot be a Plex rule, so creating
+  one always makes a CouchElephant pass.
+- `POST /api/channels-preview` runs the same choosing over the guide horizon
+  (`passes.plan`, `passes.peak_overlap`) and reports recordings and the most
+  at once, against the tuner count when the tuner can be asked.
+
+### Channel language
+
+Plex's guide has no language field (not on the list items, not on the full
+metadata). `app/language.py` counts common function words of en, es, fr, pt, de
+and it in the titles and descriptions a channel carries, folding accents. It
+answers `None` unless there are at least 40 words, the winner has at least 10
+hits and 8% of all words, and it beats the runner-up by 2 to 1. `sync.detect_languages`
+runs it after each guide pull and writes `channels.language`, and a channel it
+cannot call keeps what it had. `channels.language_override` is the person's
+choice and is never written by a sync. A channel counts as
+`override`, else `language`, else the `preferred_language` setting, so a
+channel nobody could place is never held against the person.
 
 ## Nothing here is regional
 

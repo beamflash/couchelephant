@@ -5,7 +5,7 @@ import time
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from .. import db, expectations, passes, smartfilter, sync, teamcat
+from .. import db, expectations, passes, smartfilter, sync, teamcat, tuner
 from ..plex import PlexError
 from ..sources import tmdb, tvmaze
 from ._shared import _int, _logo_map, _plex, page
@@ -773,6 +773,7 @@ def api_rules():
             "networks": nets, "channels": chans,
             "prefs": db.unjs(p["prefs"], {}) or {},
             "recorder": passes.pass_recorder(p),
+            "channels_per_game": passes.pass_mode(p),
             "enabled": bool(p["enabled"]),
             "booked": booked + db.one(
                 "SELECT COUNT(*) c FROM recordings WHERE pass_id = ? "
@@ -780,7 +781,11 @@ def api_rules():
             "upcoming": passes.count_upcoming(p["id"]),
             "waiting": p["kind"] == "team" and not p["team_id"],
             "detail": {
-                "team": ("Every game, from the live broadcast" if p["team_id"] else
+                "team": (("Every game, from the live broadcast"
+                          + {"preferred": ", on every channel in your language",
+                             "any": ", on every channel carrying it"
+                             }.get(passes.pass_mode(p), ""))
+                         if p["team_id"] else
                          "Waiting for this team to appear in the guide"),
                 "series": "Every episode the guide carries",
                 "smart": ("Anything matching " + smartfilter.describe(tree or {})),
@@ -848,6 +853,7 @@ def api_rule_upcoming(rule_id: int):
         return JSONResponse({"ok": False, "error": "no such pass"}, status_code=404)
     nets, chans = passes.allowed_sources(r)
     logos = _logo_map()
+    mode, preferred = passes.pass_mode(r), passes.preferred_language()
     out = []
     for airings in passes.group_by_game(passes.rule_airings(r)).values():
         allowed = [a for a in airings if passes.in_sources(a, nets, chans)]
@@ -861,37 +867,129 @@ def api_rule_upcoming(rule_id: int):
                 "rejected": len(airings), "status": "skipped",
             })
             continue
-        pick, reason = passes.choose_airing(allowed)
-        if not pick:
-            continue
-        if nets or chans:
-            reason += ", limited to " + " or ".join(nets + chans)
-        out.append({
-            "title": pick["title"], "parent": pick["grandparent_title"] or "",
-            "b": pick["begins_at"], "vcn": pick["channel_vcn"],
-            "call_sign": pick["channel_call_sign"] or "",
-            "logo": bool(logos.get(pick["channel_vcn"])),
-            "airing_id": pick["id"], "reason": reason,
-            "rejected": len(airings) - 1,
-            "status": passes.already_handled(passes.game_guids(airings)) or "will schedule",
-        })
+        picks, per_channel = passes.choose_airings(allowed, mode, preferred)
+        for pick, reason in picks:
+            if not pick:
+                continue
+            if nets or chans:
+                reason += ", limited to " + " or ".join(nets + chans)
+            out.append({
+                "title": pick["title"], "parent": pick["grandparent_title"] or "",
+                "b": pick["begins_at"], "vcn": pick["channel_vcn"],
+                "call_sign": pick["channel_call_sign"] or "",
+                "logo": bool(logos.get(pick["channel_vcn"])),
+                "airing_id": pick["id"], "reason": reason,
+                "rejected": len(airings) - len(picks),
+                "status": passes.already_handled(
+                    passes.game_guids(airings),
+                    channel=pick["channel_vcn"] if per_channel else None) or "will schedule",
+            })
     out.sort(key=lambda x: x["b"] or 0)
     return JSONResponse({"ok": True, "title": passes.rule_label(r), "upcoming": out})
+
+
+def _per_game(value: str, kind: str) -> tuple[str | None, str]:
+    """The channels-per-game choice sent with a pass: (mode, error). Empty is
+    "not sent". Only team and smart passes book games, so only they take more
+    than one airing."""
+    value = (value or "").strip()
+    if not value:
+        return None, ""
+    if value not in passes.MODES:
+        return None, "channels_per_game must be one, preferred or any"
+    if value != "one" and kind not in ("team", "smart"):
+        return None, "only a team pass or a smart pass can book more than one channel"
+    return value, ""
+
+
+def _tuner_total() -> int | None:
+    """How many tuners the HDHomeRun has, or None when it cannot be asked."""
+    try:
+        return tuner.total() if tuner.base() else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+@router.post("/api/channels-preview")
+async def api_channels_preview(kind: str = Form("team"), team_id: str = Form(""),
+                               team: str = Form(""), filter: str = Form(""),
+                               networks: str = Form(""), channels: str = Form(""),
+                               channels_per_game: str = Form("preferred"),
+                               rule_id: str = Form("")):
+    """What a channels-per-game choice would cost in recordings and tuners,
+    over the guide horizon, before it is saved.
+
+    The same choosing the pass makes, run on the guide as it is now. Give
+    `rule_id` for a pass that exists, or `kind` with `team_id`/`team` or
+    `filter` for one being made.
+    """
+    mode, bad = _per_game(channels_per_game, kind)
+    if bad or not mode:
+        return JSONResponse({"ok": False, "error": bad or "pick a channels_per_game"},
+                            status_code=400)
+    nets = db.unjs(networks, []) or []
+    chans = db.unjs(channels, []) or []
+    try:
+        if rule_id:
+            r = db.one("SELECT * FROM passes WHERE id = ?", (rule_id,))
+            if not r:
+                return JSONResponse({"ok": False, "error": "no such pass"}, status_code=404)
+            if not (networks or channels):
+                nets, chans = passes.allowed_sources(r)
+            rows = await asyncio.to_thread(passes.rule_airings, r)
+        elif kind == "smart":
+            tree = db.unjs(filter, None)
+            if not tree:
+                return JSONResponse({"ok": False, "error": "add a condition first"},
+                                    status_code=400)
+            rows = await asyncio.to_thread(passes.smart_airings, tree)
+        else:
+            t = db.one("SELECT * FROM teams WHERE id = ?", (team_id or 0,))
+            name = t["name"] if t else (team or "").strip()
+            rows = await asyncio.to_thread(
+                passes.candidate_airings, t["id"] if t else None, team_name=name or None)
+    except smartfilter.FilterError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
+    preferred = passes.preferred_language()
+    base = passes.plan(rows, nets, chans, "one", preferred)
+    more = passes.plan(rows, nets, chans, mode, preferred)
+    peak = passes.peak_overlap(more)
+    tuners = await asyncio.to_thread(_tuner_total)
+    over = bool(tuners and peak > tuners)
+    msg = ""
+    if len(more) == len(base):
+        msg = (f"Over the next 30 days this books {len(more)} recording"
+               f"{'' if len(more) == 1 else 's'}, the same as one airing per game.")
+    else:
+        msg = (f"Over the next 30 days this books {len(more)} recordings instead of "
+               f"{len(base)}. Up to {peak} at the same time.")
+    if over:
+        msg += (f" You have {tuners} tuner{'' if tuners == 1 else 's'}, so some of "
+                "them will not all record at once.")
+    return JSONResponse({"ok": True, "mode": mode, "days": 30,
+                         "recordings": len(more), "recordings_one": len(base),
+                         "peak": peak, "peak_one": passes.peak_overlap(base),
+                         "tuners": tuners, "over_tuners": over, "message": msg})
 
 
 @router.post("/api/rules/{rule_id}")
 async def api_rule_edit(rule_id: int, networks: str = Form(""),
                         channels: str = Form(""), enabled: str = Form(""),
                         settings: str = Form(""), filter: str = Form(""),
-                        name: str = Form(""), recorder: str = Form("")):
+                        name: str = Form(""), recorder: str = Form(""),
+                        channels_per_game: str = Form("")):
     """Change a pass: where it may record from, its Plex settings, who records
-    it, or pause it. Changing the recorder moves what the pass has already
+    it, how many channels of a game it books, or pause it. Changing the recorder moves what the pass has already
     booked too, except a recording that has started."""
     r = db.one("SELECT * FROM passes WHERE id = ?", (rule_id,))
     if not r:
         return JSONResponse({"ok": False, "error": "no such pass"}, status_code=404)
     nets = db.unjs(networks, []) or []
     chans = db.unjs(channels, []) or []
+    per_game, bad = _per_game(channels_per_game, r["kind"])
+    if bad:
+        return JSONResponse({"ok": False, "error": bad}, status_code=400)
     # An empty settings field means "not sent", not "clear them".
     prefs = db.unjs(settings, None) if settings else None
     keep = db.js(_pass_prefs(prefs)) if prefs is not None else r["prefs"]
@@ -917,8 +1015,9 @@ async def api_rule_edit(rule_id: int, networks: str = Form(""),
         # Not sent means unchanged, like everything else here.
         who = recorder if recorder in ("plex", "couchelephant") else r["recorder"]
         c.execute("UPDATE passes SET networks=?, channels=?, prefs=?, filter=?, "
-                  "label=?, enabled=?, recorder=? WHERE id=?",
-                  (db.js(nets), db.js(chans), keep, filt, label, on, who, rule_id))
+                  "label=?, enabled=?, recorder=?, channels_per_game=? WHERE id=?",
+                  (db.js(nets), db.js(chans), keep, filt, label, on, who,
+                   per_game or passes.pass_mode(r), rule_id))
     moved = 0
     if passes.pass_recorder(r) != ("couchelephant" if who == "couchelephant" else "plex"):
         # Who records changed, so what the pass already booked goes with it.
@@ -1082,24 +1181,30 @@ async def api_rule_create(kind: str = Form("team"), team_id: str = Form(""),
                           channels: str = Form(""), template: int = Form(0),
                           settings: str = Form(""), filter: str = Form(""),
                           name: str = Form(""), confirm: str = Form(""),
-                          team: str = Form(""), recorder: str = Form("")):
+                          team: str = Form(""), recorder: str = Form(""),
+                          channels_per_game: str = Form("")):
     """Create a schedule that keeps matching new airings.
 
     With no source limit this is something Plex can express on its own, so it
     becomes a plain Plex rule and Plex takes it from there. Name more than one
     network or channel and Plex cannot say it, so CouchElephant keeps the rule
-    and books each airing itself.
+    and books each airing itself. Choosing more than one channel per game is the
+    same: Plex cannot say it, so the rule is ours.
     """
     nets = db.unjs(networks, []) or []
     chans = db.unjs(channels, []) or []
     prefs = dict(db.unjs(settings, {}) or {})
+    per_game, bad = _per_game(channels_per_game, kind)
+    if bad:
+        return JSONResponse({"ok": False, "error": bad}, status_code=400)
     who = _who_records(recorder)
     ours = who == "couchelephant"
     if ours and recorder_off():
         return recorder_off()
 
     if kind == "smart":
-        return await _make_smart_rule(filter, name, nets, chans, prefs, confirm, who)
+        return await _make_smart_rule(filter, name, nets, chans, prefs, confirm, who,
+                                      per_game)
 
     if kind == "team":
         t = db.one("SELECT * FROM teams WHERE id = ?", (team_id or 0,))
@@ -1116,7 +1221,7 @@ async def api_rule_create(kind: str = Form("team"), team_id: str = Form(""),
                                     status_code=400)
             _, label, created = await asyncio.to_thread(
                 _make_pass, "team", {"id": None, "name": wanted}, None,
-                nets, chans, prefs, False, None, "", who)
+                nets, chans, prefs, False, None, "", who, per_game)
             if not created:
                 return JSONResponse({"ok": False,
                                      "error": f"You already follow {label}."},
@@ -1132,14 +1237,14 @@ async def api_rule_create(kind: str = Form("team"), team_id: str = Form(""),
             return JSONResponse({"ok": False, "error": "pick a programme"}, status_code=400)
         rows = passes.series_airings(label)
 
-    if not (nets or chans or ours):
+    if not (nets or chans or ours or per_game not in (None, "one")):
         return await asyncio.to_thread(_make_plex_rule, label, rows, template, prefs)
 
     _, label, created = await asyncio.to_thread(
         _make_pass, kind,
         dict(t) if kind == "team" else None,
         None if kind == "team" else label,
-        nets, chans, prefs, False, None, "", who)
+        nets, chans, prefs, False, None, "", who, per_game)
     if not created:
         return JSONResponse({"ok": False, "error": f"You already follow {label}."},
                             status_code=409)
@@ -1154,7 +1259,8 @@ async def api_rule_create(kind: str = Form("team"), team_id: str = Form(""),
                          + f". {made} upcoming airing(s) scheduled."})
 
 
-async def _make_smart_rule(filter_json, name, nets, chans, prefs, confirm, who=None):
+async def _make_smart_rule(filter_json, name, nets, chans, prefs, confirm, who=None,
+                           per_game=None):
     """A smart filter is always CouchElephant's to run.
 
     Plex rules follow one programme or one team. A condition tree is not
@@ -1185,7 +1291,8 @@ async def _make_smart_rule(filter_json, name, nets, chans, prefs, confirm, who=N
         }, status_code=409)
 
     pass_id, label, created = await asyncio.to_thread(
-        _make_pass, "smart", None, None, nets, chans, prefs, False, tree, name, who)
+        _make_pass, "smart", None, None, nets, chans, prefs, False, tree, name, who,
+        per_game)
     if not created:
         return JSONResponse({"ok": False, "error":
                              f"You already have a smart pass for {label}."},

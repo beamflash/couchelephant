@@ -62,6 +62,11 @@
       return sel ? sel.value : '';
     }
 
+    function lang() {
+      var sel = box.getAttribute('data-language') && document.querySelector(box.getAttribute('data-language'));
+      return sel ? sel.value : '';
+    }
+
     function reset() {
       go.disabled = false;
       go.textContent = 'Sign in with Plex';
@@ -83,7 +88,7 @@
       say('busy', 'Checking the server...');
       var btns = list.querySelectorAll('button');
       btns.forEach(function (b) { b.disabled = true; });
-      var body = new URLSearchParams({server: id, timezone: zone()});
+      var body = new URLSearchParams({server: id, timezone: zone(), preferred_language: lang()});
       api('/settings/plex/signin/' + pin + '/use', {method: 'POST', body: body}, 30000)
         .then(function (j) {
           if (gone()) return;

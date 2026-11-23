@@ -37,6 +37,22 @@ recorder can run here, and which recorder a new booking starts with.
 `POST /api/rules` and `POST /api/rules/{id}` take the same `recorder` field,
 and each pass in `GET /api/rules` carries it.
 
+### Channels per game
+
+A pass (`team` or `smart`, never `series`) says how many airings of one game it
+books with `channels_per_game`: `one` (the default, and what every pass made
+before 1.5.35 has), `preferred` (every channel carrying the game in the
+`preferred_language` setting, or one airing when none does) or `any` (every
+channel carrying it). Sent on `POST /api/rules`, `POST /api/rules/{id}` and
+`POST /api/tv/passes/create`, and on `POST /api/tv/passes/{id}`; left out on an
+edit it means unchanged. Every pass in `GET /api/rules` and in
+`GET /api/tv/recordings` (`passes`) carries it. Any other value, or a value
+other than `one` on a series pass, answers `400`.
+
+| | |
+| --- | --- |
+| `POST /api/channels-preview` | What the choice would cost, before it is saved. `channels_per_game` (`preferred` or `any`), then either `rule_id` (a pass that exists) or `kind` with `team_id` or `team`, or `kind` `smart` with `filter`; optional `networks` and `channels` (JSON lists). Answers `recordings` and `recordings_one` over the next `days` (30), `peak` and `peak_one` (the most at once), `tuners` (the tuner count, or null when it cannot be asked), `over_tuners`, and `message`, a sentence to show |
+
 ## Television clients and live viewing
 
 What the Apple TV and iPhone apps read, and the web app's **Home** tab and
@@ -65,7 +81,7 @@ Recorded list.
 | `GET /api/tv/record/options` | What "Record every episode" or "Record every <team> game" can be set to before the pass is made. `airing_id`, `scope` (`series` or `team`), `team_id`. The web's `/api/record/options` answer with only Plex's recurring choices left, `pick` (the index of the one asked for), and the recorder default `couchelephant` wherever it can run |
 | `POST /api/tv/record/all` | Make that pass with the chosen options, through the web's own `/api/record`. `airing_id`, `template` (an index from the options), `settings` (JSON), `networks` and `channels` (JSON lists), `recorder` |
 | `GET /api/tv/passes/options` | The same options for a new pass from the + button, before it is made. `kind` (`series`, `announced` or `team`), `id`, `title`. The answer has the shape of `/api/tv/record/options` |
-| `POST /api/tv/passes/create` | Make that pass. `kind`, `id`, `title`, `template`, `settings`, `networks`, `channels`, `recorder`. A series or a team goes through the web's own `POST /api/rules` |
+| `POST /api/tv/passes/create` | Make that pass. `kind`, `id`, `title`, `template`, `settings`, `networks`, `channels`, `recorder`, `channels_per_game`. A series or a team goes through the web's own `POST /api/rules` |
 | `POST /api/tv/record/cancel` | Cancel one booking, with either recorder. `airing_id` |
 | `GET /api/tv/recordings` | `upcoming`: what is set to record, each with `booked_by` and `recorder`. `recorded`: everything recorded, each with `group` and `category` (`sports`, `tv`, `movies`). `passes`: every pass and Plex rule, each with `tab` (`sports` or `season`) and `upcoming`, how many of its bookings have not started. A pass that was deleted with recordings left booked is one more row with `who` `orphan`, titled "Title (pass deleted)", `lost_id`, `upcoming` and `can_follow` |
 | `POST /api/tv/passes/{id}` | Change a pass from a television. Any of `recorder`, `enabled`, `networks` (JSON), `start_minutes`, `end_minutes`. Only what is sent is changed |
@@ -96,8 +112,8 @@ not a number.
 | --- | --- |
 | `GET /api/rules` | Every rule, ours and Plex's own, with what it follows and where it may record from, and `upcoming` for each of ours. Lost passes come last as `who` `orphan` |
 | `GET /api/rules/options` | Plex's own choices for a rule. `kind` (`team`/`series`), `team_id` or `series` |
-| `POST /api/rules` | Create one. `kind` is `team`, `series` or `smart`. With no source limit a team or series rule becomes a plain Plex rule instead; a smart one is always ours |
-| `POST /api/rules/{id}` | Change a pass: `networks`, `channels`, `enabled`, `settings`, and for a smart pass `filter` and `name` |
+| `POST /api/rules` | Create one. `kind` is `team`, `series` or `smart`. With no source limit a team or series rule becomes a plain Plex rule instead; a smart one is always ours. `channels_per_game` (below) makes a team pass ours too |
+| `POST /api/rules/{id}` | Change a pass: `networks`, `channels`, `enabled`, `settings`, `channels_per_game`, and for a smart pass `filter` and `name` |
 | `GET /api/filter/fields` | What a smart filter can ask about: fields, the comparisons each kind accepts, the values in your guide, and how much of it carries a content rating |
 | `POST /api/filter/preview` | Count what a filter would record before creating it. `filter` (JSON tree), `networks`, `channels`. Returns the count, a sample, and a warning when it is loose |
 | `GET /api/rules/{id}/upcoming` | What that pass will record next, and why it chose each broadcast |
@@ -177,7 +193,7 @@ and `tls=0` otherwise. `GET /api/tv/hello` has no new fields.
 
 | | |
 | --- | --- |
-| `POST /settings` | Server address, token, timezone, sync interval, preview mode |
+| `POST /settings` | Server address, token, timezone, sync interval, preview mode, `preferred_language` (`en`, `es`, `fr`, `pt`, `de` or `it`; empty leaves it). `POST /welcome` and `POST /settings/plex/signin/{pin}/use` take it too, at setup |
 | `POST /settings/plex/signin` | Start Sign in with Plex. `{ok, pin, code, link}`: show `code` and send the person to `link` |
 | `GET /settings/plex/signin/{pin}` | Poll it. `{ok, state}` where `state` is `waiting`, `servers` (with `servers: [{name, id}]`, owned servers only, and a `detail` when the list is empty), `expired` (also for a pin this install did not start) or `error` (with `detail`: plex.tv did not answer or refused; the pin is still good, so keep polling) |
 | `POST /settings/plex/signin/{pin}/use` | Form `server` (an id from the poll), optional `timezone`. Tests each address (for a local server, the `plex.direct` name then the plain `http://host:port`) and saves the first direct one that works; a relay is never saved: `{ok, detail, address}`, or `{ok: false, detail, tried}` |
@@ -192,6 +208,11 @@ and `tls=0` otherwise. `GET /api/tv/hello` has no new fields.
 | `POST /settings/logos` | Re-fetch every channel logo |
 | `POST /settings/channels/{vcn}/logo` | Upload your own logo for a channel. Multipart, field `logo` |
 | `POST /settings/channels/{vcn}/logo/reset` | Go back to the guide's logo |
+| `GET /api/channels/languages` | Every channel with its language: `language` (what it counts as: your choice, else the detected one, else the preferred language), `language_detected` and `language_override` (empty when none). Also `preferred_language` and `languages`, the list to choose from (`code`, `name` in its own language, `english`) |
+| `POST /settings/channels/{vcn}/language` | Set a channel's language by hand. `language_override` is a code from `languages`, or empty to go back to the detected one. `400` for a code not on the list or a channel that does not exist |
+| `GET /api/tv/settings` and `POST /api/tv/settings` | The settings the apps read and change. `values` carries `preferred_language`, and `languages` lists the choices |
+| `GET /api/tv/settings/channels` | The same channel list, for the apps |
+| `POST /api/tv/settings/channels/{vcn}/language` | The same override, for the apps. Needs the right to change settings, like `POST /api/tv/settings` |
 | `POST /settings/users/{id}/delete` | Remove an account |
 | `POST /settings/notify/save` | Create or update an alert destination. `events` repeats, once per ticked event. A masked secret posted back is dropped rather than saved over the real one |
 | `POST /settings/notify/{id}/test` | Send a real test message. Redirects with the verdict in `?notified=` |

@@ -459,6 +459,9 @@ DEFAULTS = {
     "plex_url": "",
     "plex_token": "",
     "timezone": "UTC",
+    # The language the person wants TV in. Setup asks; an install that never
+    # answered keeps English.
+    "preferred_language": "en",
     "sync_minutes": "60",
     # Start in preview. Nothing is written to Plex until this is turned off,
     # so the first run can be inspected before it is trusted.
@@ -652,6 +655,14 @@ MIGRATIONS = [
     ("recordings", "ot_base", "INTEGER"),
     ("recordings", "ot_checked_at", "INTEGER"),
     ("recordings", "ot_note", "TEXT"),
+    # What language a channel broadcasts in. Plex's guide carries no such field,
+    # so `language` is read from the programme text after each sync, and
+    # `language_override` is the person's own word, which always wins.
+    ("channels", "language", "TEXT"),
+    ("channels", "language_override", "TEXT"),
+    # How many airings of one game a pass books: 'one' (the default), 'preferred'
+    # (every channel in the preferred language) or 'any' (every channel).
+    ("passes", "channels_per_game", "TEXT NOT NULL DEFAULT 'one'"),
 ]
 
 

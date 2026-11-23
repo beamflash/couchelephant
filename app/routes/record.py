@@ -256,7 +256,7 @@ def _pass_prefs(prefs):
 
 
 def _make_pass(kind, team=None, series=None, nets=None, chans=None, prefs=None,
-               update=True, smart=None, name="", who=None):
+               update=True, smart=None, name="", who=None, per_game=None):
     """Create or update one CouchElephant pass.
 
     The only place a pass is written. There were three, and they had already
@@ -264,7 +264,8 @@ def _make_pass(kind, team=None, series=None, nets=None, chans=None, prefs=None,
     not check at all.
 
     `who` is who records what the pass books. Not given means the default
-    for a new pass, and no change for an existing one.
+    for a new pass, and no change for an existing one. `per_game` is the
+    channels-per-game choice, handled the same way.
 
     Returns (pass_id, label, created).
     """
@@ -299,23 +300,26 @@ def _make_pass(kind, team=None, series=None, nets=None, chans=None, prefs=None,
     with db.tx() as c:
         if existing:
             c.execute("UPDATE passes SET networks=?, channels=?, prefs=?, enabled=1, "
-                      "recorder=COALESCE(?, recorder) WHERE id=?",
-                      (db.js(nets), db.js(chans), db.js(prefs), who, existing["id"]))
+                      "recorder=COALESCE(?, recorder), "
+                      "channels_per_game=COALESCE(?, channels_per_game) WHERE id=?",
+                      (db.js(nets), db.js(chans), db.js(prefs), who, per_game,
+                       existing["id"]))
             return existing["id"], label, False
         uid = uuid.uuid4().hex
         who = who or _who_records()
+        per_game = per_game if per_game in passes.MODES else "one"
         if kind == "smart":
             c.execute("INSERT INTO passes (kind, filter, label, networks, channels, "
-                      "prefs, uid, recorder, enabled, created_at) "
-                      "VALUES ('smart',?,?,?,?,?,?,?,1,?)",
+                      "prefs, uid, recorder, channels_per_game, enabled, created_at) "
+                      "VALUES ('smart',?,?,?,?,?,?,?,?,1,?)",
                       (db.js(smart), label, db.js(nets), db.js(chans),
-                       db.js(prefs), uid, who, int(time.time())))
+                       db.js(prefs), uid, who, per_game, int(time.time())))
         elif kind == "team":
             c.execute("INSERT INTO passes (kind, team_id, team_name, networks, channels, "
-                      "prefs, uid, recorder, enabled, created_at) "
-                      "VALUES ('team',?,?,?,?,?,?,?,1,?)",
+                      "prefs, uid, recorder, channels_per_game, enabled, created_at) "
+                      "VALUES ('team',?,?,?,?,?,?,?,?,1,?)",
                       (team.get("id"), team["name"], db.js(nets), db.js(chans),
-                       db.js(prefs), uid, who, int(time.time())))
+                       db.js(prefs), uid, who, per_game, int(time.time())))
         else:
             c.execute("INSERT INTO passes (kind, series_title, series_guid, networks, "
                       "channels, prefs, uid, recorder, enabled, created_at) "

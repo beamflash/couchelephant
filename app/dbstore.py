@@ -56,7 +56,7 @@ STORES = {
         "table": "passes", "key": ("uid",), "pk": ("uid",), "db": "main",
         "cols": ("uid", "kind", "team_id", "team_name", "series_guid",
                  "series_title", "networks", "channels", "prefs", "filter",
-                 "label", "enabled", "recorder", "created_at"),
+                 "label", "enabled", "recorder", "channels_per_game", "created_at"),
         "label": "Passes",
     },
     "our_grabs": {
@@ -71,6 +71,13 @@ STORES = {
         "cols": ("vcn", "custom_logo", "custom_logo_at"),
         "where": "custom_logo IS NOT NULL AND custom_logo != ''",
         "label": "Channel artwork",
+    },
+    "channel_language": {
+        # Only the language you set by hand. What was detected is guide data.
+        "table": "channels", "key": ("vcn",), "pk": ("vcn",), "db": "main",
+        "cols": ("vcn", "language_override"),
+        "where": "language_override IS NOT NULL",
+        "label": "Channel languages",
     },
     "destinations": {
         # `uid`, not `id` and not `name`. See rule 2. A person may well have two

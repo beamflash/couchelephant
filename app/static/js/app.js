@@ -1382,6 +1382,32 @@ window.wireSettings = function (root) {
     });
   }
 
+  // Channel languages: a pick is saved at once, and "use detected" clears it.
+  var lglist = root.querySelector('#lglist');
+  if (lglist) {
+    var lgq = root.querySelector('#lgq');
+    if (lgq) lgq.addEventListener('input', function () {
+      var t = lgq.value.trim().toLowerCase();
+      lglist.querySelectorAll('.lgrow').forEach(function (r) {
+        r.hidden = !!t && (r.dataset.find || '').toLowerCase().indexOf(t) === -1;
+      });
+    });
+    lglist.querySelectorAll('.lgrow').forEach(function (rowEl) {
+      var sel = rowEl.querySelector('.lgsel'), say = rowEl.querySelector('.chsay');
+      sel.addEventListener('change', function () {
+        say.className = 'chsay'; say.textContent = 'Saving...';
+        fetch('/settings/channels/' + encodeURIComponent(rowEl.dataset.vcn) + '/language',
+              {method: 'POST', body: new URLSearchParams({language_override: sel.value})})
+          .then(function (r) { return r.json(); })
+          .then(function (j) {
+            say.className = 'chsay ' + (j.ok ? 'ok' : 'bad');
+            say.textContent = j.ok ? 'Saved' : (j.error || 'That did not work.');
+          })
+          .catch(function (err) { say.className = 'chsay bad'; say.textContent = String(err); });
+      });
+    });
+  }
+
   if (window.wirePlexSignin) window.wirePlexSignin(root);
   show('plex');
 };

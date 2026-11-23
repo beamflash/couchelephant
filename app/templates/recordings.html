@@ -591,7 +591,7 @@ window.passTab = 'sports';
             team: null, series: null, nets: [], chans: [],
             tpl: null, pick: 0, editing: null, q: '',
             tree: null, name: '', preview: null, confirmed: false,
-            league: '', leagues: []};
+            league: '', leagues: [], cpg: 'one', cpgNote: null, langs: null};
   // One picker, kept across panel rebuilds so its fetched list is not
   // re-requested every time the panel redraws.
   st.picker = new CE.SourcePicker(st, paint);
@@ -619,6 +619,7 @@ window.passTab = 'sports';
   // a condition tree is not something they can be told.
   function verdict() {
     if (st.kind === 'smart' || st.who === 'couchelephant') return 'ce';
+    if (st.cpg !== 'one') return 'ce';
     return (st.nets.length || st.chans.length) ? 'ce' : 'plex';
   }
 
@@ -652,6 +653,9 @@ window.passTab = 'sports';
         ? '<b>CouchElephant schedule.</b> A Plex rule follows one programme or ' +
           'one team. It cannot be given conditions, so CouchElephant keeps this ' +
           'rule and books each airing itself.'
+        : st.cpg !== 'one'
+        ? '<b>CouchElephant schedule.</b> A Plex rule records one channel, so ' +
+          'CouchElephant books each channel of a game itself.'
         : v === 'ce'
         ? '<b>CouchElephant schedule.</b> It watches the guide and books each ' +
           'airing itself, because a Plex rule takes one channel and you have ' +
@@ -675,6 +679,7 @@ window.passTab = 'sports';
            'CouchElephant applies it to every airing this pass books.</div>';
     }
     h += '<div class="optgrid">' + CE.recorderField(st.who) + '</div>';
+    h += cpgField();
     // Plex settings, Filter networks, Filter channels: shared, see sources.js.
     h += st.picker.sections(st.tpl && st.tpl[st.pick] ? st.tpl[st.pick].settings : []);
     if (st.team && !st.team.id) {
@@ -691,10 +696,96 @@ window.passTab = 'sports';
     return h;
   }
 
+  // Channels per game. A game is often on two channels (English and Spanish,
+  // say). The default books one airing; the other two books every channel, and
+  // the cost in recordings and tuners is said before the pass is saved.
+  function cpgField() {
+    if (st.kind !== 'team' && st.kind !== 'smart') return '';
+    var pl = st.langs ? st.langs.languages.filter(function (l) {
+      return l.code === st.langs.preferred_language; })[0] : null;
+    var opts = [['one', 'One airing per game'],
+                ['preferred', 'All airings in my preferred language' +
+                              (pl ? ' (' + pl.english + ')' : '')],
+                ['any', 'All airings, any language']];
+    var h = '<div class="field" style="margin-top:12px"><label for="cpg">Channels per game</label>' +
+            '<select id="cpg">';
+    opts.forEach(function (o) {
+      h += '<option value="' + o[0] + '"' + (st.cpg === o[0] ? ' selected' : '') +
+           '>' + esc(o[1]) + '</option>';
+    });
+    h += '</select><span class="help">The same game is often on two channels, one in ' +
+         'English and one in Spanish, for example. One airing per game books the ' +
+         'live broadcast only. Your preferred language is set under Settings, Guide.' +
+         '</span><div class="note' + (st.cpgNote && st.cpgNote.kind ? ' said ' + st.cpgNote.kind : '') +
+         '" id="cpgnote"' + (st.cpgNote ? '' : ' hidden') + '>' +
+         (st.cpgNote ? esc(st.cpgNote.text) : '') + '</div></div>';
+    return h;
+  }
+
+  function wireCpg() {
+    var el = document.getElementById('cpg');
+    if (!el) return;
+    el.addEventListener('change', function () {
+      st.cpg = el.value;
+      st.cpgNote = null;
+      paint();
+      previewCpg();
+    });
+  }
+
+  function previewCpg() {
+    var note = document.getElementById('cpgnote');
+    if (!note) return;
+    if (st.cpg === 'one') { st.cpgNote = null; note.hidden = true; return; }
+    var body = {channels_per_game: st.cpg, kind: st.kind,
+                networks: JSON.stringify(st.nets), channels: JSON.stringify(st.chans)};
+    if (st.editing) body.rule_id = st.editing.id;
+    else if (st.kind === 'smart') {
+      if (!st.filter.usable()) { st.cpgNote = null; note.hidden = true; return; }
+      body.filter = JSON.stringify(st.tree);
+    } else if (st.team) {
+      body.team_id = st.team.id || ''; body.team = st.team.name;
+    } else {
+      st.cpgNote = {text: 'Pick a team to see how many recordings this adds.', kind: ''};
+      note.hidden = false; note.className = 'note'; note.textContent = st.cpgNote.text;
+      return;
+    }
+    var asked = st.cpgAsked = (st.cpgAsked || 0) + 1;
+    note.hidden = false; note.className = 'note'; note.textContent = 'Counting what this would record...';
+    fetch('/api/channels-preview', {method: 'POST', body: new URLSearchParams(body)})
+      .then(CE.readJson).then(function (d) {
+        if (asked !== st.cpgAsked) return;
+        st.cpgNote = d.ok ? {text: d.message, kind: d.over_tuners ? 'bad' : ''}
+                          : {text: d.error || 'That could not be counted.', kind: 'bad'};
+        var n = document.getElementById('cpgnote');
+        if (!n) return;
+        n.hidden = false;
+        n.className = 'note' + (st.cpgNote.kind ? ' said ' + st.cpgNote.kind : '');
+        n.textContent = st.cpgNote.text;
+      }).catch(function () {
+        if (asked !== st.cpgAsked) return;
+        st.cpgNote = {text: 'Could not reach CouchElephant.', kind: 'bad'};
+        var n = document.getElementById('cpgnote');
+        if (n) { n.className = 'note said bad'; n.textContent = st.cpgNote.text; }
+      });
+  }
+
+  function loadLangs() {
+    if (st.langs) return;
+    fetch('/api/channels/languages').then(function (r) { return r.json(); }).then(function (d) {
+      if (!d.ok) return;
+      st.langs = d;
+      var el = document.getElementById('cpg');
+      if (el) paintOptions();
+    });
+  }
+
   function paintOptions() {
     var zone = document.getElementById('optzone');
     if (!zone) return;
     zone.innerHTML = optionsHtml();
+    wireCpg();
+    previewCpg();
     // Once a person has changed one of Plex's settings, a new filter no longer
     // replaces them with what Plex suggests for it.
     zone.oninput = zone.onchange = function (e) {
@@ -875,6 +966,7 @@ window.passTab = 'sports';
       st.previewError = d.ok ? '' : (d.error || 'That filter cannot be read.');
       paintPreview();
       paint();
+      if (st.cpg !== 'one') previewCpg();
       // Plex's settings were first asked for with an empty filter, when any
       // programme stood in; whether that one was sport decided the padding.
       // Asked again for what the filter now matches, unless the person has
@@ -995,6 +1087,9 @@ window.passTab = 'sports';
       search(st.q);
     }
     st.picker.wire();
+    wireCpg();
+    loadLangs();
+    previewCpg();
     if (st.kind === 'smart') {
       st.filter.wire();
       // What is already known, drawn at once; then ask again in the background.
@@ -1012,6 +1107,7 @@ window.passTab = 'sports';
     st.team = null; st.series = null; st.tpl = null; st.tplTouched = false; st.pick = 0; st.q = '';
     st.preview = null; st.confirmed = false;
     st.tplPending = false; st.sporty = false;
+    st.cpg = 'one'; st.cpgNote = null;
     st.msg = null; st.busy = false;
   }
 
@@ -1172,6 +1268,7 @@ window.passTab = 'sports';
          template: (st.tpl && st.tpl[st.pick]) ? st.tpl[st.pick].index : 0,
          recorder: CE.recorderChoice(),
          settings: JSON.stringify(vals)};
+    if (st.kind === 'team' || st.kind === 'smart') fields.channels_per_game = st.cpg;
     if (st.kind === 'smart') {
       fields.filter = JSON.stringify(st.tree);
       fields.name = st.name || '';
@@ -1216,6 +1313,7 @@ window.passTab = 'sports';
     st.tpl = null; st.tplTouched = false; st.pick = 0; st.q = '';
     st.tree = null; st.name = ''; st.preview = null; st.confirmed = false;
     st.tplPending = false; st.sporty = false; st.msg = null; st.busy = false;
+    st.cpg = 'one'; st.cpgNote = null;
     st.nets.length = 0; st.chans.length = 0;
     ovl.classList.add('show');
     // The field list has to be in hand before the builder can draw itself, and
@@ -1238,6 +1336,7 @@ window.passTab = 'sports';
       st.name = r.kind === 'smart' ? (r.title || '') : '';
       st.tpl = null; st.tplTouched = false; st.pick = 0; st.editing = r; st.q = '';
       st.who = r.recorder || 'plex';
+      st.cpg = r.channels_per_game || 'one'; st.cpgNote = null;
       st.preview = null; st.confirmed = false;
       st.nets.length = 0; st.chans.length = 0;
       r.networks.forEach(function (n) { st.nets.push(n); });

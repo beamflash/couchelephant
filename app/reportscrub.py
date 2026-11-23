@@ -18,7 +18,7 @@ REMOVED = "[removed]"
 
 # A new setting is invisible to reports until it is added here on purpose.
 SETTINGS_ALLOW = (
-    "timezone", "sync_minutes", "dry_run", "epg_provider",
+    "timezone", "preferred_language", "sync_minutes", "dry_run", "epg_provider",
     "sports_section", "shows_section", "movies_section",
     "recorder_default", "recorder_encoder", "recorder_lead_minutes",
     "live_pause_minutes", "adskip_live", "adskip_final", "sports_overtime",

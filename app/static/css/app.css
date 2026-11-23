@@ -869,6 +869,8 @@ body.signin .pt-nav{display:none}
 .chsay.ok{color:var(--ok-fg)}
 .chsay:empty{display:none}
 .chrow{flex-wrap:wrap}
+.lgrow .lgsel{margin-left:auto;max-width:60%}
+.lgrow .chsay{padding-left:0}
 @media (max-width:700px){
   .chsrc{order:5}
   .chsay{padding-left:0}

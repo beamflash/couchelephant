@@ -478,11 +478,12 @@ def pad_seconds(which: str) -> int:
         return int(default) * 60
 
 
-def booked(airing=None, program_guid: str | None = None):
+def booked(airing=None, program_guid: str | None = None, channel: str | None = None):
     """The recording of ours that covers this broadcast, or None.
 
     Asked by slot (channel and start) for an airing, or by programme. A failed
-    row does not count: it covers nothing.
+    row does not count: it covers nothing. `channel` narrows a programme to one
+    channel.
     """
     if airing is not None:
         return db.one(
@@ -491,7 +492,8 @@ def booked(airing=None, program_guid: str | None = None):
             (airing["id"], airing["channel_vcn"], airing["begins_at"]))
     return db.one(
         "SELECT * FROM recordings WHERE kind = 'recording' AND state != 'failed' "
-        "AND program_guid = ? LIMIT 1", (program_guid,))
+        "AND program_guid = ?" + (" AND channel_vcn = ?" if channel else "") + " LIMIT 1",
+        (program_guid, channel) if channel else (program_guid,))
 
 
 def book(airing, source: str = "manual", pass_id: int | None = None,

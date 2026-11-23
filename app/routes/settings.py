@@ -19,6 +19,7 @@ from .. import (
     exposure,
     handover,
     health,
+    language,
     notify,
     passes,
     plextv,
@@ -42,6 +43,10 @@ def _channel_rows():
         out.append({
             "vcn": c["vcn"], "call_sign": c["call_sign"] or "",
             "network": c["network"] or "",
+            "language": language.effective(c["language_override"], c["language"],
+                                           passes.preferred_language()),
+            "language_detected": c["language"] or "",
+            "language_override": c["language_override"] or "",
             "custom": custom, "has_logo": custom or theirs,
             "source": "yours" if custom else ("guide" if theirs else "none"),
             "v": c["custom_logo_at"] or c["logo_fetched_at"] or 0,
@@ -52,7 +57,8 @@ def _channel_rows():
 @router.get("/settings", response_class=HTMLResponse)
 def settings_page(request: Request, tested: str = "", autherror: str = "",
                   notified: str = ""):
-    return page(request, "settings.html", zones=ZONES, tested=tested,
+    return page(request, "settings.html", zones=ZONES, languages=language.LANGUAGES,
+                tested=tested,
                 autherror=autherror, notified=notified,
                 logos=sync.logo_coverage(),
                 channels=_channel_rows(), users=auth.list_users(),
@@ -65,7 +71,8 @@ def settings_page(request: Request, tested: str = "", autherror: str = "",
 def settings_partial(request: Request, tested: str = "", autherror: str = "",
                      notified: str = ""):
     """The settings window on its own, for the overlay the gear opens."""
-    return page(request, "_settings.html", zones=ZONES, tested=tested,
+    return page(request, "_settings.html", zones=ZONES, languages=language.LANGUAGES,
+                tested=tested,
                 autherror=autherror, notified=notified,
                 logos=sync.logo_coverage(),
                 channels=_channel_rows(), users=auth.list_users(),
@@ -91,7 +98,7 @@ NUMBERS = {
 }
 # What `apply` takes. Sign-in, accounts and secrets are not here on purpose,
 # except the Plex token, which only the web form sends.
-KEYS = ("plex_url", "plex_token", "timezone", "dry_run", "tuner_url",
+KEYS = ("plex_url", "plex_token", "timezone", "preferred_language", "dry_run", "tuner_url",
         "recorder_shows_folder", "recorder_movies_folder",
         "recorder_shows_section", "recorder_movies_section",
         "sportsdb_key", "adskip_live", "adskip_final", "sports_overtime", "recorder_paused", "announce", *CHOICES, *NUMBERS)
@@ -117,6 +124,10 @@ def apply(values: dict) -> list[str]:
                 continue
         elif key == "timezone":
             if value not in ZONES:
+                refused.append(key)
+                continue
+        elif key == "preferred_language":
+            if value not in language.LANGUAGES:
                 refused.append(key)
                 continue
         elif key in ("dry_run", "adskip_live", "adskip_final", "sports_overtime",
@@ -149,9 +160,11 @@ def apply(values: dict) -> list[str]:
 @router.post("/settings")
 def settings_save(plex_url: str = Form(""), plex_token: str = Form(""),
                   timezone: str = Form("UTC"), sync_minutes: str = Form("60"),
-                  dry_run: str = Form("0")):
+                  dry_run: str = Form("0"), preferred_language: str = Form("")):
+    # An empty language is "not sent": the Plex tab's form does not carry it.
     apply({"plex_url": plex_url, "plex_token": plex_token, "timezone": timezone,
-           "sync_minutes": sync_minutes, "dry_run": dry_run})
+           "sync_minutes": sync_minutes, "dry_run": dry_run,
+           "preferred_language": preferred_language or None})
     return RedirectResponse("/settings", status_code=303)
 
 
@@ -636,7 +649,7 @@ def _held_token(pin):
         return e["token"] if e else None
 
 
-async def _save_and_sync(url, token, timezone=None):
+async def _save_and_sync(url, token, timezone=None, preferred_language=None):
     """Save a tested server and start the first guide pull. First run and
     Sign in with Plex both end here."""
     first_run = not db.get_setting("plex_url")
@@ -644,6 +657,8 @@ async def _save_and_sync(url, token, timezone=None):
     db.set_setting("plex_token", token)
     if timezone is not None:
         db.set_setting("timezone", timezone)
+    if preferred_language in language.LANGUAGES:
+        db.set_setting("preferred_language", preferred_language)
     # Preview mode starts on for a new install. A configured one keeps its choice.
     if first_run:
         db.set_setting("dry_run", "1")
@@ -751,7 +766,8 @@ def _try_all(urls, token):
 
 
 @router.post("/settings/plex/signin/{pin}/use")
-async def plex_signin_use(pin: int, server: str = Form(""), timezone: str = Form("")):
+async def plex_signin_use(pin: int, server: str = Form(""), timezone: str = Form(""),
+                          preferred_language: str = Form("")):
     token = _held_token(pin)
     if token is None:
         return JSONResponse({"ok": False, "tried": [],
@@ -772,7 +788,8 @@ async def plex_signin_use(pin: int, server: str = Form(""), timezone: str = Form
             answered_relay = True      # reachable, but never saved
         elif ok:
             await _save_and_sync(url, chosen.access_token,
-                                 timezone if timezone in ZONES else None)
+                                 timezone if timezone in ZONES else None,
+                                 preferred_language)
             _mark_used(pin)
             return JSONResponse({"ok": True, "detail": detail, "address": url})
     if answered_relay:
@@ -908,6 +925,47 @@ def channel_logo_reset(vcn: str):
     return JSONResponse({"ok": True, "v": int(time.time()),
                          "message": (f"{vcn} is back to the guide's logo." if back
                                      else f"{vcn} has no logo again. The guide offers none.")})
+
+
+def set_channel_language(vcn: str, code: str) -> tuple[bool, str]:
+    """Save a channel's language by hand. An empty code goes back to what was
+    detected. Returns (ok, error)."""
+    code = (code or "").strip().lower()
+    if code and code not in language.LANGUAGES:
+        return False, "That language is not on the list."
+    if not db.one("SELECT 1 FROM channels WHERE vcn = ?", (vcn,)):
+        return False, "No such channel."
+    with db.tx() as c:
+        c.execute("UPDATE channels SET language_override = ? WHERE vcn = ?",
+                  (code or None, vcn))
+    return True, ""
+
+
+def channel_languages() -> list[dict]:
+    """Every channel with the language it counts as, what was detected, and
+    the person's own choice (empty when there is none)."""
+    return [{"vcn": c["vcn"], "call_sign": c["call_sign"], "network": c["network"],
+             "language": c["language"], "language_detected": c["language_detected"],
+             "language_override": c["language_override"]} for c in _channel_rows()]
+
+
+@router.get("/api/channels/languages")
+def api_channel_languages():
+    return {"ok": True, "preferred_language": passes.preferred_language(),
+            "languages": [{"code": k, "name": v[0], "english": v[1]}
+                          for k, v in language.LANGUAGES.items()],
+            "channels": channel_languages()}
+
+
+@router.post("/settings/channels/{vcn}/language")
+def channel_language_set(vcn: str, language_override: str = Form("")):
+    ok, why = set_channel_language(vcn, language_override)
+    if not ok:
+        return JSONResponse({"ok": False, "error": why}, status_code=400)
+    row = next(c for c in _channel_rows() if c["vcn"] == vcn)
+    return {"ok": True, "language": row["language"],
+            "language_detected": row["language_detected"],
+            "language_override": row["language_override"]}
 
 
 @router.post("/settings/logos")

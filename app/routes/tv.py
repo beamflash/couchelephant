@@ -1021,6 +1021,7 @@ def _passes() -> list[dict]:
             "recorder": r.get("recorder") or "plex",
             "enabled": bool(r.get("enabled", True)),
             "networks": r.get("networks") or [], "channels": r.get("channels") or [],
+            "channels_per_game": r.get("channels_per_game") or "one",
             "start_minutes": _whole(prefs.get("startOffsetMinutes")),
             "end_minutes": _whole(prefs.get("endOffsetMinutes")),
             "booked": r.get("booked") or 0,
@@ -1163,7 +1164,8 @@ def tv_pass_options(kind: str, id: str = "", title: str = ""):
 async def tv_pass_create(kind: str = Form(...), id: str = Form(""), title: str = Form(""),
                          template: int = Form(0), settings: str = Form("{}"),
                          networks: str = Form("[]"), channels: str = Form("[]"),
-                         recorder_choice: str = Form("couchelephant", alias="recorder")):
+                         recorder_choice: str = Form("couchelephant", alias="recorder"),
+                         channels_per_game: str = Form("")):
     """Make the pass with the options chosen in the app. A series or a team
     goes through the web's own Add route, so the two cannot drift."""
     title = (title or "").strip()
@@ -1173,7 +1175,7 @@ async def tv_pass_create(kind: str = Form(...), id: str = Form(""), title: str =
             series=title if kind == "series" else "", networks=networks,
             channels=channels, template=template, settings=settings, filter="",
             name="", confirm="", team=title if kind == "team" else "",
-            recorder=recorder_choice)
+            recorder=recorder_choice, channels_per_game=channels_per_game)
     if kind != "announced":
         return JSONResponse({"ok": False, "error": "Unknown kind of pass."},
                             status_code=400)
@@ -1202,7 +1204,8 @@ async def tv_pass_create(kind: str = Form(...), id: str = Form(""), title: str =
 @router.post("/api/tv/passes/{pass_id}")
 async def tv_pass_edit(pass_id: int, recorder_choice: str = Form("", alias="recorder"),
                        enabled: str = Form(""), networks: str = Form(""),
-                       start_minutes: str = Form(""), end_minutes: str = Form("")):
+                       start_minutes: str = Form(""), end_minutes: str = Form(""),
+                       channels_per_game: str = Form("")):
     """Change a pass from a television. Only what is sent is changed.
 
     The web app's own edit clears whatever it is not sent, which is right for
@@ -1217,6 +1220,9 @@ async def tv_pass_edit(pass_id: int, recorder_choice: str = Form("", alias="reco
     who = recorder_choice if recorder_choice in ("plex", "couchelephant") else p["recorder"]
     on = p["enabled"] if enabled == "" else (0 if enabled in ("0", "false") else 1)
     nets = db.unjs(networks, None) if networks else None
+    per_game, bad = pass_routes._per_game(channels_per_game, p["kind"])
+    if bad:
+        return JSONResponse({"ok": False, "error": bad}, status_code=400)
     prefs = dict(db.unjs(p["prefs"], {}) or {})
     for key, sent, allowed in (("startOffsetMinutes", start_minutes, PAD_START),
                                ("endOffsetMinutes", end_minutes, PAD_END)):
@@ -1229,9 +1235,10 @@ async def tv_pass_edit(pass_id: int, recorder_choice: str = Form("", alias="reco
                 prefs[key] = str(value)
     with db.tx() as c:
         c.execute("UPDATE passes SET recorder = ?, enabled = ?, prefs = ?, "
-                  "networks = COALESCE(?, networks) WHERE id = ?",
+                  "networks = COALESCE(?, networks), "
+                  "channels_per_game = COALESCE(?, channels_per_game) WHERE id = ?",
                   (who, on, db.js(prefs), db.js(nets) if nets is not None else None,
-                   pass_id))
+                   per_game, pass_id))
     moved = 0
     if passes.pass_recorder(p) != ("couchelephant" if who == "couchelephant" else "plex"):
         # Who records changed, so what the pass already booked goes with it.

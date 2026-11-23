@@ -506,3 +506,246 @@ def test_cleanup_does_not_touch_two_games_of_one_pass(plex):
     _book("g1", NBC_GUID, "41.1", kick, pid)
     _book("g2", TELE_GUID, "41.1", kick + 7 * 86400, pid)
     assert passes.dedupe_games() == []
+
+
+# ---- channels per game: one, preferred language, any ----
+
+_THE_GAME = {}
+
+
+def _set_lang(vcn, detected=None, override=None):
+    with db.tx() as c:
+        c.execute("UPDATE channels SET language = ?, language_override = ? WHERE vcn = ?",
+                  (detected, override, vcn))
+
+
+def _bills_game(kick=None):
+    """The real case: NBC 41.1 in English, Telemundo 39.1 in Spanish."""
+    kick = kick or int(time.time()) + 3 * 3600
+    _THE_GAME["kick"] = kick
+    _airing_with_teams("nbc", NBC_GUID, "41.1", kick, KC_BUF,
+                       "Kansas City Chiefs at Buffalo Bills", "NFL Football")
+    _airing_with_teams("tele", TELE_GUID, "39.1", kick + 300, KC_BUF,
+                       "Kansas City Chiefs vs. Buffalo Bills", "Fútbol Americano NFL")
+    _set_lang("41.1", "en")
+    _set_lang("39.1", "es")
+    return kick
+
+
+def _mode_pass(mode):
+    with db.tx() as c:
+        c.execute("INSERT INTO passes (kind, team_id, team_name, enabled, created_at, "
+                  "channels_per_game) VALUES ('team', 159, 'Kansas City Chiefs', 1, 0, ?)",
+                  (mode,))
+    return db.one("SELECT id FROM passes ORDER BY id DESC")["id"]
+
+
+def _dry_channels():
+    db.set_setting("dry_run", "1")
+    kick = _THE_GAME["kick"]     # the fake guide has games of its own
+    out = [d for d in passes.run_passes()
+           if d.get("action") == "would schedule" and kick <= d["begins_at"] <= kick + 600]
+    return sorted(d["channel"] for d in out)
+
+
+def test_a_new_pass_is_one_airing_per_game_by_default():
+    with db.tx() as c:
+        c.execute("INSERT INTO passes (kind, team_id, team_name, enabled, created_at) "
+                  "VALUES ('team', 159, 'Chiefs', 1, 0)")
+    assert db.one("SELECT channels_per_game c FROM passes")["c"] == "one"
+
+
+def test_the_migration_gives_an_existing_pass_one():
+    with db.tx() as c:
+        c.execute("INSERT INTO passes (kind, team_id, team_name, enabled, created_at) "
+                  "VALUES ('team', 159, 'Chiefs', 1, 0)")
+    conn = db.connect()
+    conn.execute("ALTER TABLE passes DROP COLUMN channels_per_game")
+    conn.commit()
+    db._migrate(conn)
+    conn.commit()
+    assert db.one("SELECT channels_per_game c FROM passes")["c"] == "one"
+
+
+def test_one_books_a_single_channel(plex, synced):
+    _bills_game()
+    _mode_pass("one")
+    assert _dry_channels() == ["41.1"]
+
+
+def test_any_books_both_channels(plex, synced):
+    _bills_game()
+    _mode_pass("any")
+    assert _dry_channels() == ["39.1", "41.1"]
+
+
+def test_preferred_english_books_only_the_english_channel(plex, synced):
+    _bills_game()
+    db.set_setting("preferred_language", "en")
+    _mode_pass("preferred")
+    assert _dry_channels() == ["41.1"]
+
+
+def test_preferred_spanish_books_only_the_spanish_channel(plex, synced):
+    _bills_game()
+    db.set_setting("preferred_language", "es")
+    _mode_pass("preferred")
+    assert _dry_channels() == ["39.1"]
+
+
+def test_preferred_books_every_channel_in_that_language(plex, synced):
+    kick = _bills_game()
+    _airing_with_teams("nbc2", "plex://episode/peacock", "42.1", kick + 120, KC_BUF,
+                       "Chiefs at Bills (second feed)", "NFL Football")
+    _set_lang("42.1", "en")
+    db.set_setting("preferred_language", "en")
+    _mode_pass("preferred")
+    assert _dry_channels() == ["41.1", "42.1"]
+
+
+def test_preferred_falls_back_to_one_airing_when_none_is_in_the_language(plex, synced):
+    _bills_game()
+    db.set_setting("preferred_language", "fr")
+    _mode_pass("preferred")
+    got = _dry_channels()
+    assert got == ["41.1"], "the game is never lost, and it is one airing"
+    log = db.one("SELECT reason FROM pass_actions WHERE action = 'would schedule' "
+                 "AND begins_at = ?", (_THE_GAME["kick"],))
+    assert "no channel carries it in French" in log["reason"]
+
+
+def test_a_channel_nobody_could_place_counts_as_the_preferred_language(plex, synced):
+    _bills_game()
+    _set_lang("39.1", None)
+    db.set_setting("preferred_language", "en")
+    _mode_pass("preferred")
+    assert _dry_channels() == ["39.1", "41.1"]
+
+
+def test_the_users_override_beats_the_detected_language(plex, synced):
+    _bills_game()
+    _set_lang("39.1", "es", override="en")
+    db.set_setting("preferred_language", "en")
+    _mode_pass("preferred")
+    assert _dry_channels() == ["39.1", "41.1"]
+
+
+def test_the_extra_modes_still_obey_the_pass_source_limit(plex, synced):
+    _bills_game()
+    pid = _mode_pass("any")
+    with db.tx() as c:
+        c.execute("UPDATE passes SET networks = ? WHERE id = ?", (json.dumps(["NBC"]), pid))
+    # Both test channels are listed on NBC; limit to one channel instead.
+    with db.tx() as c:
+        c.execute("UPDATE passes SET networks = '[]', channels = ? WHERE id = ?",
+                  (json.dumps(["39.1"]), pid))
+    assert _dry_channels() == ["39.1"]
+
+
+def test_any_skips_a_drm_channel(plex, synced):
+    _bills_game()
+    with db.tx() as c:
+        c.execute("UPDATE airings SET drm = 1 WHERE id = 'tele'")
+    _mode_pass("any")
+    assert _dry_channels() == ["41.1"]
+
+
+def test_a_replay_on_another_channel_the_next_day_is_not_booked(plex, synced):
+    kick = _bills_game()
+    _airing_with_teams("replay", NBC_GUID, "42.1", kick + 86400, KC_BUF,
+                       "Kansas City Chiefs at Buffalo Bills", "NFL Football")
+    _set_lang("42.1", "en")
+    _mode_pass("any")
+    assert _dry_channels() == ["39.1", "41.1"]
+
+
+def test_a_booked_nbc_airing_does_not_block_telemundo_when_the_mode_wants_both():
+    _bills_game()
+    _book("nbc", NBC_GUID, "41.1", KICK, None, sub="1")
+    guids = [NBC_GUID, TELE_GUID]
+    assert passes.already_handled(guids) == "already booked by a pass", "per game, as before"
+    assert passes.already_handled(guids, channel="39.1") is None
+    assert passes.already_handled(guids, channel="41.1") == "already booked by a pass"
+
+
+def test_per_channel_handling_sees_our_own_recorder_and_plex(plex):
+    kick = _bills_game()
+    with db.tx() as c:
+        c.execute("INSERT INTO plex_grabs (id, channel_vcn, begins_at, status) "
+                  "VALUES ('g1', '41.1', ?, 'scheduled')", (kick,))
+    guids = [NBC_GUID, TELE_GUID]
+    assert passes.already_handled(guids, channel="41.1").startswith("Plex already has it")
+    assert passes.already_handled(guids, channel="39.1") is None
+
+
+def test_the_second_run_books_only_the_missing_channel(plex, synced):
+    kick = _bills_game()
+    pid = _mode_pass("any")
+    _book("nbc", NBC_GUID, "41.1", kick, pid, sub="1")
+    with db.tx() as c:      # Plex lists the booking, so it is real
+        c.execute("INSERT INTO plex_subscriptions (key) VALUES ('1')")
+    assert _dry_channels() == ["39.1"]
+
+
+def _booked_both(pid):
+    kick = _bills_game()
+    _book("nbc", NBC_GUID, "41.1", kick, pid, sub="1")
+    _book("tele", TELE_GUID, "39.1", kick + 300, pid, sub="2")
+    fake_plex.STATE.subscriptions.update({"1": {"key": "1"}, "2": {"key": "2"}})
+
+
+def test_dedupe_in_one_cancels_the_extra_channel(plex):
+    pid = _mode_pass("one")
+    _booked_both(pid)
+    passes.dedupe_games()
+    assert list(fake_plex.STATE.subscriptions) == ["1"]
+
+
+def test_dedupe_in_any_cancels_nothing(plex):
+    pid = _mode_pass("any")
+    _booked_both(pid)
+    assert passes.dedupe_games() == []
+    assert len(fake_plex.STATE.subscriptions) == 2
+
+
+def test_dedupe_in_preferred_cancels_only_the_other_language(plex):
+    pid = _mode_pass("preferred")
+    _booked_both(pid)
+    db.set_setting("preferred_language", "en")
+    out = passes.dedupe_games()
+    assert [d["action"] for d in out] == ["cancelled"]
+    assert list(fake_plex.STATE.subscriptions) == ["1"]
+    log = db.one("SELECT * FROM pass_actions WHERE action = 'cancelled'")
+    assert log["airing_id"] == "tele"
+    assert "preferred language" in log["reason"]
+
+
+def test_dedupe_in_preferred_keeps_at_least_one_booking(plex):
+    pid = _mode_pass("preferred")
+    _booked_both(pid)
+    db.set_setting("preferred_language", "fr")
+    passes.dedupe_games()
+    assert len(fake_plex.STATE.subscriptions) == 1
+
+
+def test_changing_back_to_one_lets_the_next_run_cancel_the_extra(plex):
+    pid = _mode_pass("any")
+    _booked_both(pid)
+    assert passes.dedupe_games() == []
+    with db.tx() as c:
+        c.execute("UPDATE passes SET channels_per_game = 'one' WHERE id = ?", (pid,))
+    out = passes.dedupe_games()
+    assert [d["action"] for d in out] == ["cancelled"]
+    assert db.one("SELECT reason FROM pass_actions WHERE action = 'cancelled'")["reason"] \
+        == "another channel already records this game"
+
+
+def test_the_preview_counts_and_peak_overlap(plex, synced):
+    _bills_game()
+    kick = _THE_GAME["kick"]
+    rows = [r for r in passes.candidate_airings(159, team_name="Kansas City Chiefs")
+            if kick <= r["begins_at"] <= kick + 600]
+    one = passes.plan(rows, [], [], "one", "en")
+    both = passes.plan(rows, [], [], "any", "en")
+    assert len(one) == 1 and len(both) == 2
+    assert passes.peak_overlap(one) == 1 and passes.peak_overlap(both) == 2
