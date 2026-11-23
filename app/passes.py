@@ -225,7 +225,7 @@ def choose_airing(airings: list, preferred: str | None = None) -> tuple[dict | N
         # replay the next day in the preferred language is not the game.
         base = min(usable, key=lambda a: (not a["premiere"], a["begins_at"]))
         usable = [a for a in usable
-                  if abs(a["begins_at"] - base["begins_at"]) <= SAME_GAME_WINDOW]
+                  if abs(a["begins_at"] - base["begins_at"]) <= LANGUAGE_WINDOW]
         best = min(_language_rank(a, preferred) for a in usable)
         usable = [a for a in usable if _language_rank(a, preferred) == best]
     premieres = [a for a in usable if a["premiere"]]
@@ -243,6 +243,14 @@ def choose_airing(airings: list, preferred: str | None = None) -> tuple[dict | N
 # 5 minutes). 90 minutes covers that with room, and stays short of a baseball
 # doubleheader, where game 2 starts about three hours after game 1.
 SAME_GAME_WINDOW = 90 * 60
+
+# How far from the usual choice a channel's language may win it. Wider than
+# SAME_GAME_WINDOW on purpose: that one decides whether two different listings
+# are one game, and has to stay tight. This one decides whether an English
+# airing a few hours after a live Spanish one (the same listing, shown again
+# in the evening) is preferred over it. Six hours reaches that and still never
+# reaches a replay the next day.
+LANGUAGE_WINDOW = 6 * 3600
 
 
 def _team_set(row) -> frozenset:
@@ -341,10 +349,11 @@ def choose_airings(airings: list, mode: str = "one",
     pick, why = choose_airing(airings, preferred)
     if mode not in ("preferred", "any") or not pick:
         return [(pick, why)], False
+    live, _ = choose_airing(airings)
     # Only broadcasts of the game itself: a replay on another channel the next
     # day must not stand in for the live one.
     pool = [a for a in airings if not a["drm"]
-            and abs(a["begins_at"] - pick["begins_at"]) <= SAME_GAME_WINDOW]
+            and abs(a["begins_at"] - live["begins_at"]) <= SAME_GAME_WINDOW]
     if mode == "preferred":
         pool = [a for a in pool if airing_language(a) == preferred]
         if not pool:

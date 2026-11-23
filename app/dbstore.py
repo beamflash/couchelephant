@@ -214,7 +214,8 @@ def _drop_logo_file(path: str) -> None:
     sits inside the logo folder."""
     root = os.path.realpath(_logo_dir())
     real = os.path.realpath(path)
-    if os.path.dirname(real) == root and os.path.isfile(real):
+    if (os.path.dirname(real) == root and os.path.isfile(real)
+            and not os.path.islink(path)):
         try:
             os.remove(real)
         except OSError:

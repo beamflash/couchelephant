@@ -630,6 +630,17 @@ def _would_choose(row, passes_by_id=None, stand_in=False):
         # A pass's window holds every airing it could record for thirty days,
         # and all but one programme's worth is thrown away here.
         mine = passes.rule_airings(p, program_guid=row["program_guid"])
+        if stand_in and mine:
+            # The guide named the game under ONE guid (the earliest match), but
+            # another network lists it under its own. Read the whole game as
+            # the pass run does, so the choice is the same one.
+            t0 = min(a["begins_at"] for a in mine)
+            near = [a for a in passes.rule_airings(p)
+                    if abs(a["begins_at"] - t0) <= passes.SAME_GAME_WINDOW]
+            for game in passes.group_by_game(near).values():
+                if any(a["program_guid"] == row["program_guid"] for a in game):
+                    mine = game
+                    break
     except Exception:
         # An unusable filter is the pass's problem, not grounds for touching
         # a recording that already exists.
@@ -645,9 +656,11 @@ def _would_choose(row, passes_by_id=None, stand_in=False):
             # the game is on none. Then the channels this pass is not already
             # booking (by us or by our own recorder). Nothing left means the
             # game is already recorded everywhere it should be: False.
+            fallback = False
             if passes.pass_mode(p) == "preferred":
                 want = passes.preferred_language()
                 ours = [a for a in allowed if passes.airing_language(a) == want]
+                fallback = not ours
                 allowed = ours or allowed
             have = list(db.query(
                 "SELECT channel_vcn, begins_at FROM our_grabs WHERE pass_id = ? "
@@ -658,6 +671,10 @@ def _would_choose(row, passes_by_id=None, stand_in=False):
             taken = {g["channel_vcn"] for g in have
                      if any(abs(g["begins_at"] - a["begins_at"]) <= passes.SAME_GAME_WINDOW
                             for a in allowed)}
+            if fallback and taken:
+                # No channel is in the language, and the one-airing fallback is
+                # already booked: a second channel would be a second booking.
+                return False
             allowed = [a for a in allowed if a["channel_vcn"] not in taken]
             if not allowed:
                 return False

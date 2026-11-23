@@ -540,12 +540,12 @@ def _mode_pass(mode):
     return db.one("SELECT id FROM passes ORDER BY id DESC")["id"]
 
 
-def _dry_channels():
+def _dry_channels(span=600):
     db.set_setting("dry_run", "1")
     kick = _THE_GAME["kick"]     # the fake guide has games of its own
     out = [d for d in passes.run_passes()
            if d.get("action") == "would schedule"
-           and kick - 600 <= d["begins_at"] <= kick + 600]
+           and kick - 600 <= d["begins_at"] <= kick + span]
     return sorted(d["channel"] for d in out)
 
 

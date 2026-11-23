@@ -11,6 +11,7 @@ from tests.test_passes import (
     _bills_game,
     _book,
     _mode_pass,
+    _set_lang,
 )
 
 SPANISH_SUMMARY = ("Semana 12 de la temporada regular 2026. En el último enfrentamiento, "
@@ -454,7 +455,8 @@ def test_a_stand_in_in_preferred_falls_back_when_no_channel_is_in_the_language(c
     db.set_setting("preferred_language", "fr")
     _book("stand", "plex://episode/generic", "38.1", kick, pid, sub="2")
     row = dict(db.one("SELECT * FROM our_grabs"), booked_vcn="38.1", program_guid=TELE_GUID)
-    assert sync._would_choose(row, stand_in=True)["channel_vcn"] == "39.1"
+    # The whole game is seen now, so the fallback is the pass's own first choice.
+    assert sync._would_choose(row, stand_in=True)["channel_vcn"] == "41.1"
 
 
 def test_a_stand_in_counts_our_own_recorders_bookings_as_taken(client, synced):
@@ -504,3 +506,98 @@ def test_removing_channel_artwork_deletes_the_file_but_never_one_outside(client,
     dbstore.remove_row(dbstore._con("main"), spec, spec["pk"], ["41.1"])
     assert outside.exists(), "only files inside the logo folder are removed"
     assert paths.logos_dir()
+
+
+# ---- a stand-in sees the whole game, not one listing of it ----
+
+def _tele_earlier_with_stand_in(mode):
+    kick = _bills_game()
+    with db.tx() as c:      # Telemundo kicks off first, so its guid is the matched one
+        c.execute("UPDATE airings SET begins_at = ? WHERE id = 'tele'", (kick - 300,))
+    db.set_setting("preferred_language", "en")
+    pid = _mode_pass(mode)
+    return kick, pid
+
+
+def test_a_one_mode_stand_in_named_on_the_telemundo_guid_lands_on_nbc(client, synced):
+    kick, pid = _tele_earlier_with_stand_in("one")
+    _book("stand", "plex://episode/generic", "38.1", kick, pid, sub="2")
+    row = dict(db.one("SELECT * FROM our_grabs WHERE airing_id = 'stand'"),
+               booked_vcn="38.1", program_guid=TELE_GUID)
+    assert sync._would_choose(row, stand_in=True)["channel_vcn"] == "41.1"
+
+
+def test_a_preferred_stand_in_named_on_the_telemundo_guid_is_redundant_when_nbc_is_booked(
+        client, synced):
+    kick, pid = _tele_earlier_with_stand_in("preferred")
+    _book("nbc", NBC_GUID, "41.1", kick, pid, sub="1")
+    _book("stand", "plex://episode/generic", "38.1", kick, pid, sub="2")
+    row = dict(db.one("SELECT * FROM our_grabs WHERE airing_id = 'stand'"),
+               booked_vcn="38.1", program_guid=TELE_GUID)
+    assert sync._would_choose(row, stand_in=True) is False
+
+
+def test_the_fallback_does_not_book_a_second_channel_when_one_is_taken(client, synced):
+    kick = _bills_game()
+    _airing_with_teams("tele2", "plex://episode/tele2", "40.1", kick + 120, KC_BUF, "B", "NFL")
+    _set_lang("40.1", "es")
+    db.set_setting("preferred_language", "fr")        # no channel is in French
+    pid = _mode_pass("preferred")
+    _book("tele", TELE_GUID, "39.1", kick + 300, pid, sub="1")
+    _book("stand", "plex://episode/generic", "38.1", kick, pid, sub="2")
+    row = dict(db.one("SELECT * FROM our_grabs WHERE airing_id = 'stand'"),
+               booked_vcn="38.1", program_guid=TELE_GUID)
+    assert sync._would_choose(row, stand_in=True) is False
+
+
+# ---- the language window ----
+
+def _same_listing(english_at):
+    """Telemundo live at kick, and the same listing in English `english_at` later."""
+    kick = _bills_game()
+    with db.tx() as c:
+        c.execute("UPDATE airings SET program_guid = ?, premiere = 1, begins_at = ?, "
+                  "ends_at = ? WHERE id = 'tele'", (NBC_GUID, kick, kick + 3600))
+        c.execute("UPDATE airings SET premiere = 0, begins_at = ?, ends_at = ? "
+                  "WHERE id = 'nbc'", (kick + english_at, kick + english_at + 3600))
+    db.set_setting("preferred_language", "en")
+    return kick
+
+
+def test_english_two_hours_later_beats_spanish_live_in_one_mode(plex, synced):
+    from tests.test_passes import _dry_channels
+    _same_listing(2 * 3600)
+    _mode_pass("one")
+    assert _dry_channels(3 * 3600) == ["41.1"]
+
+
+def test_english_the_next_day_does_not_beat_spanish_live(plex, synced):
+    from tests.test_passes import _dry_channels
+    _same_listing(24 * 3600)
+    _mode_pass("one")
+    assert _dry_channels(2 * 86400) == ["39.1"]
+
+
+def test_any_still_books_only_the_airings_of_the_live_game(plex, synced):
+    from tests.test_passes import _dry_channels
+    _same_listing(2 * 3600)
+    _mode_pass("any")
+    assert _dry_channels() == ["39.1"], "the evening repeat is not another channel of the game"
+
+
+def test_a_symlinked_logo_is_never_deleted(client, synced, tmp_path):
+    import os
+
+    from app import dbstore, paths
+    target = tmp_path / "precious.png"
+    target.write_bytes(b"x")
+    link = os.path.join(paths.logos_dir(), "link.png")
+    os.symlink(target, link)
+    try:
+        with db.tx() as c:
+            c.execute("UPDATE channels SET custom_logo = ? WHERE vcn = '41.1'", (link,))
+        spec = dbstore.STORES["channel_art"]
+        dbstore.remove_row(dbstore._con("main"), spec, spec["pk"], ["41.1"])
+        assert target.exists() and os.path.islink(link)
+    finally:
+        os.remove(link)
