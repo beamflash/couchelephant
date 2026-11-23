@@ -338,8 +338,7 @@ def _delete_local(name, key):
         if who is None:
             return
         parts = [who] + parts[1:]
-    where = " AND ".join(f"{c} = ?" for c in spec["pk"])
-    con.execute(f"DELETE FROM {spec['table']} WHERE {where}", parts[:len(spec['pk'])])
+    dbstore.remove_row(con, spec, spec["pk"], parts[:len(spec["pk"])])
     con.commit()
 
 

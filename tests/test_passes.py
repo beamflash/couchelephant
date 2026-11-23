@@ -614,12 +614,33 @@ def test_preferred_falls_back_to_one_airing_when_none_is_in_the_language(plex, s
     assert "no channel carries it in French" in log["reason"]
 
 
-def test_a_channel_nobody_could_place_counts_as_the_preferred_language(plex, synced):
+def test_an_unplaced_channel_is_not_an_extra_channel_in_preferred(plex, synced):
     _bills_game()
     _set_lang("39.1", None)
     db.set_setting("preferred_language", "en")
     _mode_pass("preferred")
-    assert _dry_channels() == ["39.1", "41.1"]
+    assert _dry_channels() == ["41.1"], "an unknown channel is never booked as an extra"
+
+
+def test_when_no_channel_is_placed_the_single_airing_fallback_still_books_one(plex, synced):
+    _bills_game()
+    _set_lang("41.1", None)
+    _set_lang("39.1", None)
+    _mode_pass("preferred")
+    assert _dry_channels() == ["41.1"]
+
+
+def test_preferred_does_not_swap_the_live_game_for_a_next_day_replay(plex, synced):
+    kick = _bills_game()
+    _set_lang("41.1", "es")           # the live broadcast is not in English
+    _airing_with_teams("replay", NBC_GUID, "42.1", kick + 86400, KC_BUF,
+                       "Kansas City Chiefs at Buffalo Bills", "NFL Football")
+    _set_lang("42.1", "en")
+    db.set_setting("preferred_language", "en")
+    _mode_pass("preferred")
+    got = _dry_channels()
+    assert got == ["39.1"] or got == ["41.1"], "one live airing, not the replay"
+    assert "42.1" not in got
 
 
 def test_the_users_override_beats_the_detected_language(plex, synced):
@@ -630,16 +651,22 @@ def test_the_users_override_beats_the_detected_language(plex, synced):
     assert _dry_channels() == ["39.1", "41.1"]
 
 
-def test_the_extra_modes_still_obey_the_pass_source_limit(plex, synced):
+def test_the_extra_modes_still_obey_a_channel_limit(plex, synced):
     _bills_game()
     pid = _mode_pass("any")
     with db.tx() as c:
-        c.execute("UPDATE passes SET networks = ? WHERE id = ?", (json.dumps(["NBC"]), pid))
-    # Both test channels are listed on NBC; limit to one channel instead.
-    with db.tx() as c:
-        c.execute("UPDATE passes SET networks = '[]', channels = ? WHERE id = ?",
-                  (json.dumps(["39.1"]), pid))
+        c.execute("UPDATE passes SET channels = ? WHERE id = ?", (json.dumps(["39.1"]), pid))
     assert _dry_channels() == ["39.1"]
+
+
+def test_the_extra_modes_still_obey_a_network_limit(plex, synced):
+    _bills_game()
+    with db.tx() as c:
+        c.execute("UPDATE channels SET network = 'Telemundo' WHERE vcn = '39.1'")
+    pid = _mode_pass("any")
+    with db.tx() as c:
+        c.execute("UPDATE passes SET networks = ? WHERE id = ?", (json.dumps(["NBC"]), pid))
+    assert _dry_channels() == ["41.1"]
 
 
 def test_any_skips_a_drm_channel(plex, synced):
@@ -725,7 +752,9 @@ def test_dedupe_in_preferred_keeps_at_least_one_booking(plex):
     _booked_both(pid)
     db.set_setting("preferred_language", "fr")
     passes.dedupe_games()
-    assert len(fake_plex.STATE.subscriptions) == 1
+    assert list(fake_plex.STATE.subscriptions) == ["1"], "the pass's own first choice stays"
+    assert db.one("SELECT airing_id FROM pass_actions WHERE action = 'cancelled'")["airing_id"] \
+        == "tele"
 
 
 def test_changing_back_to_one_lets_the_next_run_cancel_the_extra(plex):
@@ -749,3 +778,62 @@ def test_the_preview_counts_and_peak_overlap(plex, synced):
     both = passes.plan(rows, [], [], "any", "en")
     assert len(one) == 1 and len(both) == 2
     assert passes.peak_overlap(one) == 1 and passes.peak_overlap(both) == 2
+
+
+def test_any_collapses_two_bookings_on_one_channel(plex):
+    pid = _mode_pass("any")
+    kick = _bills_game()
+    _airing_with_teams("nbc_b", NBC_GUID, "41.1", kick + 600, KC_BUF, "A at B", "NFL")
+    _book("nbc", NBC_GUID, "41.1", kick, pid, sub="1")
+    _book("nbc_b", NBC_GUID, "41.1", kick + 600, pid, sub="2")
+    _book("tele", TELE_GUID, "39.1", kick + 300, pid, sub="3")
+    fake_plex.STATE.subscriptions.update({k: {"key": k} for k in "123"})
+    out = passes.dedupe_games()
+    assert [d["action"] for d in out] == ["cancelled"]
+    assert sorted(fake_plex.STATE.subscriptions) == ["1", "3"]
+
+
+def test_per_channel_handling_sees_our_own_recorder(plex):
+    kick = _bills_game()
+    with db.tx() as c:
+        c.execute("INSERT INTO recordings (uid, kind, state, program_guid, channel_vcn, "
+                  "begins_at, starts_at, source) VALUES "
+                  "('u-rec','recording','scheduled',?,'41.1',?,?,'pass')", (NBC_GUID, kick, kick))
+    guids = [NBC_GUID, TELE_GUID]
+    assert passes.already_handled(guids, channel="41.1") == "CouchElephant is recording it"
+    assert passes.already_handled(guids, channel="39.1") is None
+    assert passes.already_handled(guids) == "CouchElephant is recording it"
+
+
+def _run_and_count():
+    out = passes.run_passes()
+    return ([d for d in out if d["action"] == "scheduled"],
+            [d for d in out if d["action"] == "cancelled"])
+
+
+def test_a_second_real_run_books_and_cancels_nothing(plex, synced):
+    for mode in ("preferred", "any"):
+        with db.tx() as c:
+            c.execute("DELETE FROM passes")
+            c.execute("DELETE FROM our_grabs")
+        fake_plex.STATE.subscriptions.clear()
+        with db.tx() as c:
+            c.execute("INSERT INTO passes (kind, team_id, team_name, enabled, created_at, "
+                      "channels_per_game) VALUES ('team', 236, 'Kansas City Chiefs', 1, 0, ?)",
+                      (mode,))
+        first, _ = _run_and_count()
+        assert len(first) >= 1, mode
+        second, gone = _run_and_count()
+        assert second == [] and gone == [], mode
+
+
+def test_changing_a_booked_pass_from_preferred_to_one_cancels_nothing_it_needs(plex, synced):
+    with db.tx() as c:
+        c.execute("INSERT INTO passes (kind, team_id, team_name, enabled, created_at, "
+                  "channels_per_game) VALUES ('team', 236, 'Kansas City Chiefs', 1, 0, 'preferred')")
+    first, _ = _run_and_count()
+    with db.tx() as c:
+        c.execute("UPDATE passes SET channels_per_game = 'one'")
+    again, gone = _run_and_count()
+    assert again == [] and gone == []
+    assert len(db.query("SELECT 1 FROM our_grabs")) == len(first)

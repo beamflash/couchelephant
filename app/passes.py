@@ -287,14 +287,16 @@ def preferred_language() -> str:
     return language.effective(None, None, db.get_setting("preferred_language"))
 
 
-def airing_language(row, preferred: str) -> str:
-    """What language an airing's channel counts as. A channel nobody could
-    place counts as the preferred language, so it is never held against it."""
+def airing_language(row) -> str | None:
+    """The language of an airing's channel: the person's choice, else the
+    detected one, else None. An unknown channel is NOT the preferred language
+    when picking extra channels, since that would book every channel nobody
+    could place. It is only fine for the single-airing fallback."""
     try:
         lang = row["channel_language"]
     except (IndexError, KeyError):
         lang = None
-    return language.effective(None, lang, preferred)
+    return lang if lang in language.LANGUAGES else None
 
 
 def choose_airings(airings: list, mode: str = "one",
@@ -318,9 +320,12 @@ def choose_airings(airings: list, mode: str = "one",
     pick, why = choose_airing(airings)
     if mode not in ("preferred", "any") or not pick:
         return [(pick, why)], False
-    pool = [a for a in airings if not a["drm"]]
+    # Only broadcasts of the game itself: a replay on another channel the next
+    # day must not stand in for the live one.
+    pool = [a for a in airings if not a["drm"]
+            and abs(a["begins_at"] - pick["begins_at"]) <= SAME_GAME_WINDOW]
     if mode == "preferred":
-        pool = [a for a in pool if airing_language(a, preferred) == preferred]
+        pool = [a for a in pool if airing_language(a) == preferred]
         if not pool:
             name = language.name_of(preferred) or preferred
             return [(pick, f"{why}; no channel carries it in {name}")], False
@@ -780,7 +785,7 @@ def _keeper(bookings: list[dict]) -> dict:
 def _extras(mode: str, bookings: list[dict], preferred: str) -> tuple[list[dict], str]:
     """The bookings of one game that the pass's mode says to cancel, and why."""
     if mode == "any":
-        return [], ""
+        return _doubles(bookings, []), "this channel already records this game"
     if mode == "one":
         keep = _keeper(bookings)
         return ([b for b in bookings if b is not keep],
@@ -791,12 +796,28 @@ def _extras(mode: str, bookings: list[dict], preferred: str) -> tuple[list[dict]
     for b in bookings:
         row = db.one("SELECT COALESCE(language_override, language) AS l FROM channels "
                      "WHERE vcn = ?", (b["channel_vcn"],))
-        langs[id(b)] = language.effective(None, row["l"] if row else None, preferred)
+        langs[id(b)] = row["l"] if row else None
     wrong = [b for b in bookings if langs[id(b)] != preferred]
     if len(wrong) == len(bookings):
         keep = _keeper(bookings)
         wrong = [b for b in bookings if b is not keep]
-    return wrong, "another channel carries this game in your preferred language"
+        return wrong, "another channel carries this game in your preferred language"
+    return (wrong + _doubles(bookings, wrong),
+            "another channel carries this game in your preferred language")
+
+
+def _doubles(bookings: list[dict], skip: list[dict]) -> list[dict]:
+    """More than one booking of one game on one channel: all but the keeper."""
+    by_channel = {}
+    for b in bookings:
+        if not any(b is x for x in skip):
+            by_channel.setdefault(b["channel_vcn"], []).append(b)
+    out = []
+    for rows in by_channel.values():
+        if len(rows) > 1:
+            keep = _keeper(rows)
+            out.extend(b for b in rows if b is not keep)
+    return out
 
 
 def dedupe_games(dry: bool = False) -> list[dict]:
@@ -814,8 +835,6 @@ def dedupe_games(dry: bool = False) -> list[dict]:
     preferred = preferred_language()
     for p in db.query("SELECT id, channels_per_game FROM passes"):
         mode = pass_mode(p)
-        if mode == "any":
-            continue
         games = group_by_game(_pass_bookings(p["id"]))
         for bookings in games.values():
             if len(bookings) < 2:

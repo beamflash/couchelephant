@@ -115,3 +115,39 @@ def test_the_browser_language_is_matched_on_its_first_two_letters():
     assert language.from_browser("PT-br") == "pt"
     assert language.from_browser("ja-JP") == "en"
     assert language.from_browser("") == "en"
+
+
+# ---- English listings full of Spanish, French and Italian looking names ----
+
+def _en_listing(titles):
+    summaries = [
+        "The game is live from the stadium, and the home team is looking to win "
+        "its fourth straight with a lot of the fans in the building.",
+        "Coverage of the matchup between two teams that have met before, with the "
+        "analysis of what went wrong in the last one.",
+    ] * 8
+    return titles * 10 + summaries
+
+
+def test_english_sports_with_spanish_looking_names_is_not_spanish():
+    titles = ["Los Angeles Dodgers at San Diego Padres",
+              "Los Angeles Kings at Las Vegas Golden Knights",
+              "Las Vegas Raiders at Los Angeles Chargers", "Dodgers Live"]
+    assert language.detect(_en_listing(titles)) == "en"
+
+
+def test_titles_alone_never_make_a_language():
+    titles = ["Los Angeles Dodgers at San Diego Padres",
+              "Los Angeles Kings at Las Vegas Golden Knights", "Dodgers Live"] * 30
+    assert language.detect(titles) != "es"
+
+
+def test_high_school_college_and_race_names_do_not_confuse_it():
+    titles = ["De La Salle at Mater Dei", "Del Mar Classic", "Notre Dame at USC",
+              "24 Hours of Le Mans", "Santa Clara at San Jose State", "Da Nang Open"]
+    assert language.detect(_en_listing(titles)) == "en"
+
+
+def test_a_decisive_verdict_needs_a_wider_margin():
+    mixed = SPANISH + ENGLISH[:2] + ENGLISH[:2]
+    assert language.detect(mixed, decisive=True) is None

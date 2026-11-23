@@ -5,6 +5,7 @@ import time
 from app import db, passes, sync
 from tests.test_passes import (
     KC_BUF,
+    NBC_GUID,
     TELE_GUID,
     _airing_with_teams,
     _bills_game,
@@ -303,3 +304,130 @@ def test_two_bookings_of_one_programme_on_two_channels_are_not_duplicates_in_any
 
 def test_the_modes_are_the_ones_the_docs_name():
     assert passes.MODES == ("one", "preferred", "any")
+
+
+# ---- stable detection ----
+
+def _listing(vcn, summaries):
+    kick = int(time.time()) + 3600
+    for i, text in enumerate(summaries):
+        _airing_with_teams(f"{vcn}{i}", f"plex://episode/{vcn}{i}", vcn, kick + i * 60,
+                           KC_BUF, f"Game {i}", "NFL")
+        with db.tx() as c:
+            c.execute("UPDATE programs SET summary = ? WHERE guid = ?",
+                      (text, f"plex://episode/{vcn}{i}"))
+
+
+def test_a_borderline_channel_does_not_flip_between_syncs(client, synced):
+    es = [SPANISH_SUMMARY] * 7
+    en = [ENGLISH_SUMMARY] * 4
+    _listing("39.1", es + en[:2])
+    sync.detect_languages()
+    first = db.one("SELECT language FROM channels WHERE vcn = '39.1'")["language"]
+    assert first == "es"
+    # The sample shifts so English has a little more of it. Not a clear verdict.
+    with db.tx() as c:
+        c.execute("DELETE FROM airings WHERE channel_vcn = '39.1'")
+    _listing("39.1", es[:3] + en)
+    sync.detect_languages()
+    assert db.one("SELECT language FROM channels WHERE vcn = '39.1'")["language"] == "es"
+
+
+def test_a_clear_change_does_overturn_the_old_language(client, synced):
+    _listing("39.1", [SPANISH_SUMMARY] * 6)
+    sync.detect_languages()
+    with db.tx() as c:
+        c.execute("DELETE FROM airings WHERE channel_vcn = '39.1'")
+    _listing("39.1", [ENGLISH_SUMMARY] * 8)
+    sync.detect_languages()
+    assert db.one("SELECT language FROM channels WHERE vcn = '39.1'")["language"] == "en"
+
+
+def test_the_sample_is_taken_in_a_fixed_order(client, synced):
+    _listing("39.1", [SPANISH_SUMMARY] * 4)
+    sync.detect_languages()
+    again = db.one("SELECT language FROM channels WHERE vcn = '39.1'")["language"]
+    sync.detect_languages()
+    assert db.one("SELECT language FROM channels WHERE vcn = '39.1'")["language"] == again
+
+
+# ---- deleting a record from a store that is only some columns of a row ----
+
+def test_a_replace_import_clears_a_channel_language_and_keeps_the_channel(client, synced):
+    from app import portable
+    client.post("/settings/channels/41.1/language", data={"language_override": "es"})
+    blob = portable.export_bytes()
+    client.post("/settings/channels/38.1/language", data={"language_override": "fr"})
+    portable.import_bytes(blob, replace=True)
+    rows = {r["vcn"]: r for r in db.query("SELECT * FROM channels")}
+    assert "38.1" in rows, "the channel itself is the guide's and stays"
+    assert rows["38.1"]["language_override"] is None
+    assert rows["41.1"]["language_override"] == "es"
+
+
+def test_a_replace_import_clears_channel_artwork_and_keeps_the_channel(client, synced):
+    from app import portable
+    png = b"\\x89PNG\\r\\n\\x1a\\n" + b"\\x00" * 64
+    blob = portable.export_bytes()
+    client.post("/settings/channels/41.1/logo", files={"logo": ("x.png", png, "image/png")})
+    portable.import_bytes(blob, replace=True)
+    row = db.one("SELECT * FROM channels WHERE vcn = '41.1'")
+    assert row is not None and not row["custom_logo"]
+
+
+def test_a_backing_store_delete_clears_the_columns_and_keeps_the_channel(
+        client, synced, tmp_path):
+    from app import backingstore
+    db.set_setting("backingstore_backend", "sqlite")
+    db.set_setting("sqlite_path", str(tmp_path / "backing.db"))
+    client.post("/settings/channels/41.1/language", data={"language_override": "es"})
+    backingstore.sync_all()
+    # Removed here, so the merge sends the delete on and must not drop the row.
+    with db.tx() as c:
+        c.execute("UPDATE channels SET language_override = NULL WHERE vcn = '41.1'")
+    backingstore.sync_all()
+    assert db.one("SELECT 1 FROM channels WHERE vcn = '41.1'")
+    # Removed in the store, so the merge deletes it here.
+    client.post("/settings/channels/38.1/language", data={"language_override": "fr"})
+    backingstore.sync_all()
+    backingstore.chosen().write("channel_language", {}, ["38.1"])
+    backingstore.sync_all()
+    row = db.one("SELECT * FROM channels WHERE vcn = '38.1'")
+    assert row is not None and row["language_override"] is None
+
+
+# ---- repair with the real check ----
+
+def test_a_moved_game_is_repaired_in_any_mode_and_not_booked_twice(plex, synced):
+    from tests.test_guide_moved import _guide_says, _kickoff, _live_subs
+    was = _kickoff(plex)
+    with db.tx() as c:
+        team = db.one("SELECT * FROM teams WHERE name LIKE '%Chiefs%'")
+        c.execute("INSERT INTO passes (kind, team_id, team_name, networks, channels, prefs, "
+                  "uid, enabled, created_at, channels_per_game) "
+                  "VALUES ('team',?,?,'[]','[]','{}','u1',1,0,'any')",
+                  (team["id"], team["name"]))
+    passes.run_passes()
+    assert len(_live_subs()) >= 1
+    n = len(_live_subs())
+    _guide_says(plex, was + 15 * 60)
+    out = sync.check_bookings(plex)
+    assert out["repaired"] >= 1 and out["cancelled"] == 0
+    passes.run_passes()
+    assert len(_live_subs()) == n
+
+
+# ---- stand-ins in the modes that book several channels ----
+
+def test_a_stand_in_is_rebooked_onto_a_channel_the_pass_is_not_booking(client, synced):
+    kick = _bills_game()
+    pid = _mode_pass("any")
+    # The pass already books the NBC airing; its stand-in sat on another slot.
+    _book("nbc", NBC_GUID, "41.1", kick, pid, sub="1")
+    _book("stand", "plex://episode/generic", "38.1", kick, pid, sub="2")
+    row = dict(db.one("SELECT * FROM our_grabs WHERE airing_id = 'stand'"),
+               booked_vcn="38.1", program_guid=TELE_GUID)
+    named = sync._would_choose(row, stand_in=True)
+    assert named["channel_vcn"] == "39.1", "the channel not already booked"
+    assert sync._would_choose(row) is None or \
+        sync._would_choose(row)["channel_vcn"] == "38.1"

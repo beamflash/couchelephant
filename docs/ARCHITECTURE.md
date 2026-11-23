@@ -163,7 +163,7 @@ decides how many airings of each such group it books (`passes.choose_airings`):
 | Value | Books |
 | --- | --- |
 | `one` (default) | One airing, chosen as `choose_airing` always did: the live broadcast, else the earliest. |
-| `preferred` | One airing per channel whose language is the `preferred_language` setting. If the game is on no such channel, one airing as in `one`, so the game is never lost. |
+| `preferred` | One airing per channel whose language is the `preferred_language` setting (a channel with no known language is not one). If the game is on no such channel, one airing as in `one`, so the game is never lost. |
 | `any` | One airing per channel. |
 
 DRM airings and the pass's network and channel limits are applied first, in every
@@ -178,7 +178,8 @@ What follows from the mode:
 - **Cleanup** (`passes.dedupe_games`) runs first on every pass run, and what it
   cancels depends on the mode: `one` keeps one booking per game, `preferred`
   cancels bookings on channels outside the preferred language (and always keeps
-  one), `any` cancels nothing. Switching a pass back to `one` is how its extra
+  one), `any` cancels nothing across channels. In every mode two bookings of one
+  game on one channel collapse to one. Switching a pass back to `one` is how its extra
   bookings go. The cancel path and the log line are the same ones `one` always used.
 - **Repair** (`sync._would_choose`, `sync._covered_elsewhere`) keeps each booking
   on its own channel in the modes that book several, so a moved broadcast is
@@ -193,14 +194,19 @@ What follows from the mode:
 
 Plex's guide has no language field (not on the list items, not on the full
 metadata). `app/language.py` counts common function words of en, es, fr, pt, de
-and it in the titles and descriptions a channel carries, folding accents. It
-answers `None` unless there are at least 40 words, the winner has at least 10
-hits and 8% of all words, and it beats the runner-up by 2 to 1. `sync.detect_languages`
-runs it after each guide pull and writes `channels.language`, and a channel it
-cannot call keeps what it had. `channels.language_override` is the person's
-choice and is never written by a sync. A channel counts as
-`override`, else `language`, else the `preferred_language` setting, so a
-channel nobody could place is never held against the person.
+and it in the programme DESCRIPTIONS a channel carries, folding accents. Titles
+are left out because they are mostly names ("Los Angeles Kings at Las Vegas
+Golden Knights"), and words that turn up in names (los, la, de, del, le, di, da,
+do) are not in the lists. It answers `None` unless there are at least 40 words,
+the winner has at least 10 hits and 8% of all words, and it beats the runner-up
+by 2 to 1. `sync.detect_languages` runs it after each guide pull on a sample in a
+fixed order (air time, then guide id) and writes `channels.language`. A channel
+it cannot call keeps what it had, and a language already found is only replaced
+by a verdict that beats the runner-up 4 to 1, so a borderline channel cannot flip
+between syncs and have its bookings made and cancelled with it.
+`channels.language_override` is the person's choice and is never written by a
+sync. In `preferred` mode a channel with neither (unknown) is not an extra
+channel; it only counts for the one-airing fallback and for `one`.
 
 ## Nothing here is regional
 

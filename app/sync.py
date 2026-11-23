@@ -214,23 +214,30 @@ def detect_languages() -> int:
     """
     texts = {}
     seen = {}
-    for r in db.query("SELECT a.channel_vcn, a.program_guid, p.title, "
-                      "p.grandparent_title, p.summary FROM airings a "
-                      "JOIN programs p ON p.guid = a.program_guid"):
+    # A fixed order, so the same guide always gives the same sample. Titles are
+    # left out: they are mostly names, and names say nothing about language.
+    for r in db.query("SELECT a.channel_vcn, a.program_guid, p.summary FROM airings a "
+                      "JOIN programs p ON p.guid = a.program_guid "
+                      "ORDER BY a.begins_at, a.program_guid, a.id"):
         guids = seen.setdefault(r["channel_vcn"], set())
         if r["program_guid"] in guids or len(guids) >= MAX_PROGRAMS_PER_CHANNEL:
             continue
         guids.add(r["program_guid"])
-        texts.setdefault(r["channel_vcn"], []).extend(
-            (r["title"], r["grandparent_title"], r["summary"]))
+        texts.setdefault(r["channel_vcn"], []).append(r["summary"])
+    have = {r["vcn"]: r["language"] for r in db.query("SELECT vcn, language FROM channels")}
     changed = 0
     with db.tx() as c:
-        for vcn, now_lang in ((v, language.detect(t)) for v, t in texts.items()):
-            if now_lang is None:
+        for vcn, t in texts.items():
+            now_lang = language.detect(t)
+            if now_lang is None or now_lang == have.get(vcn):
                 continue
-            cur = c.execute("UPDATE channels SET language = ? WHERE vcn = ? "
-                            "AND COALESCE(language, '') != ?", (now_lang, vcn, now_lang))
-            changed += cur.rowcount
+            # A language already found is only overturned by a clear verdict, so
+            # a borderline channel cannot flip between syncs and have its
+            # bookings made and cancelled with it.
+            if have.get(vcn) and language.detect(t, decisive=True) != now_lang:
+                continue
+            c.execute("UPDATE channels SET language = ? WHERE vcn = ?", (now_lang, vcn))
+            changed += 1
     return changed
 
 
@@ -603,7 +610,7 @@ def _label(row) -> str:
     return row["title"] or "a recording"
 
 
-def _would_choose(row, passes_by_id=None):
+def _would_choose(row, passes_by_id=None, stand_in=False):
     """The broadcast the pass that made this booking would choose today.
 
     Its own choice, not merely the first airing left in the guide. A pass
@@ -632,10 +639,20 @@ def _would_choose(row, passes_by_id=None):
     if not allowed:
         return None
     if passes.pass_mode(p) != "one":
-        # A pass that books each channel keeps each booking on its own
-        # channel. Moving one onto the other's would book that channel twice.
-        vcn = row["booked_vcn"] or row["channel_vcn"]
-        allowed = [a for a in allowed if a["channel_vcn"] == vcn]
+        if stand_in:
+            # The guide named the game, perhaps on another channel. Take the
+            # first choice among channels this pass is not already booking.
+            taken = {g["channel_vcn"] for g in db.query(
+                "SELECT channel_vcn, begins_at FROM our_grabs WHERE pass_id = ? "
+                "AND airing_id != ?", (row["pass_id"], row["airing_id"]))
+                if any(abs(g["begins_at"] - a["begins_at"]) <= passes.SAME_GAME_WINDOW
+                       for a in allowed)}
+            allowed = [a for a in allowed if a["channel_vcn"] not in taken]
+        else:
+            # A pass that books each channel keeps each booking on its own
+            # channel. Moving one onto the other's would book that channel twice.
+            vcn = row["booked_vcn"] or row["channel_vcn"]
+            allowed = [a for a in allowed if a["channel_vcn"] == vcn]
         if not allowed:
             return None
     pick, _why = passes.choose_airing(allowed)
@@ -798,7 +815,8 @@ def _settle_stand_in(plex, row, key, now, lead, passes_by_id=None):
     booked_at = row["booked_at"]
 
     if item["matched_guid"]:
-        named = _would_choose(dict(row, program_guid=item["matched_guid"]), passes_by_id)
+        named = _would_choose(dict(row, program_guid=item["matched_guid"]), passes_by_id,
+                              stand_in=True)
         if not named:
             _cancel(plex, row, "the guide named this game on a channel the pass "
                                "does not take", now)

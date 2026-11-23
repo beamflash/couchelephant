@@ -31,6 +31,7 @@ MIN_WORDS = 40        # words seen in all
 MIN_HITS = 10         # stopwords of the winning language
 MIN_SHARE = 0.08      # of all words, so a name-heavy listing is not enough
 MARGIN = 2.0          # the winner needs this many times the runner-up
+DECISIVE = 4.0        # and this many to overturn a language already found
 
 
 # Accents are folded away before counting, so "está" and "esta" are one word.
@@ -39,22 +40,22 @@ _STOP = {
     "en": "the of and to in is that it for on with as was at by this from or be are "
           "his her they their have has had but not which will been who were can its "
           "you one more after before into over against when while than them there what where".split(),
-    "es": "el la los las un una unos unas de del que y en es por con para como pero "
+    "es": "un una unos unas que y en es por con para como pero "
           "mas muy su sus se lo al este esta estos estas son fue ser entre sobre "
-          "tambien cuando donde hasta desde sin hay ya si le les mi tu nos otro otra "
+          "tambien cuando donde hasta desde sin hay ya si les mi tu nos otro otra "
           "todo todos han era ha ante tras durante".split(),
-    "fr": "le la les un une des du de que et en est dans pour par avec sur pas plus "
+    "fr": "les un une des que et en est dans pour par avec sur pas plus "
           "mais comme son sa ses au aux ce cette ces sont ont il elle nous vous ils "
           "elles qui ete etre tout tous fait aussi apres avant entre sans sous "
           "contre dont ou".split(),
-    "pt": "os as um uma uns umas do da dos das em no na nos nas que com para por "
+    "pt": "os as um uma uns umas dos das em no na nos nas que com para por "
           "mas muito seu sua seus suas tambem quando onde sobre como nao sao foi ser "
           "esta entre ate desde sem ha ja ou ao aos mais pelo pela pelos pelas "
           "isso essa esse ela ele".split(),
     "de": "der die das den dem des ein eine einen einem einer und ist nicht mit von "
           "zu auf fur im sich auch als an aus bei nach uber wie oder wird sind war "
           "hat haben dass noch nur zum zur vom beim sie er es wir ihr".split(),
-    "it": "il lo la gli le un uno una di del della dei delle che in con per da su "
+    "it": "gli un uno una della dei delle che in con per su "
           "sono non piu ma come anche nel nella nei nelle al alla allo ai alle questo "
           "questa si ha hanno stato essere quando dove tra fra molto suo sua suoi "
           "loro".split(),
@@ -71,10 +72,13 @@ _SETS = {code: frozenset(_fold(w.lower()) for w in words)
 _TOKEN = re.compile(r"[^\W\d_]+", re.UNICODE)
 
 
-def detect(texts) -> str | None:
+def detect(texts, decisive: bool = False) -> str | None:
     """The language of this text, or None when it cannot be called.
 
-    `texts` is any iterable of strings: titles, summaries.
+    `texts` is any iterable of strings. Give descriptions, not titles: a title
+    is mostly names ("Los Angeles Kings at Las Vegas Golden Knights"), and
+    names say nothing about the language. Words that turn up in names (los, la,
+    de, del, le, di, da, do) are not counted for that reason either.
     """
     counts = {code: 0 for code in _SETS}
     total = 0
@@ -92,7 +96,7 @@ def detect(texts) -> str | None:
     (best, hits), (_, second) = ranked[0], ranked[1]
     if hits < MIN_HITS or hits / total < MIN_SHARE:
         return None
-    if hits < MARGIN * second:
+    if hits < (DECISIVE if decisive else MARGIN) * second:
         return None
     return best
 

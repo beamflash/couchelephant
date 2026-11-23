@@ -209,6 +209,20 @@ def fingerprint(rec: dict) -> str:
 
 # ---------------------------------------------------------------- writing
 
+def remove_row(con, spec, key_cols, parts) -> None:
+    """Drop one record from a store. A store that is only some columns of a
+    row of a larger table (`where` set, like channel artwork and channel
+    languages) clears those columns instead: deleting the row would delete the
+    whole channel, which the guide owns."""
+    where = " AND ".join(f"{c} = ?" for c in key_cols)
+    if spec.get("where"):
+        clear = [c for c in spec["cols"] if c not in spec["pk"]]
+        con.execute(f"UPDATE {spec['table']} SET "
+                    + ", ".join(f"{c} = NULL" for c in clear) + f" WHERE {where}", parts)
+    else:
+        con.execute(f"DELETE FROM {spec['table']} WHERE {where}", parts)
+
+
 def apply(name: str, rows: list[dict], delete_missing: bool = False) -> tuple[int, int]:
     """Write records into a store. Returns (written, deleted).
 
@@ -255,9 +269,7 @@ def apply(name: str, rows: list[dict], delete_missing: bool = False) -> tuple[in
         keep = {_key(spec, dict(r)) for r in rows}
         for k in list(read(name, include_secrets=True)):
             if k not in keep:
-                parts = k.split("\x1f")
-                where = " AND ".join(f"{c} = ?" for c in spec["key"])
-                con.execute(f"DELETE FROM {spec['table']} WHERE {where}", parts)
+                remove_row(con, spec, spec["key"], k.split("\x1f"))
                 deleted += 1
     con.commit()
     return written, deleted
