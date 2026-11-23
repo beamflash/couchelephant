@@ -1,5 +1,6 @@
 // Run through the emulator: firebase emulators:exec --only firestore "npm test"
 const { test, before, after, beforeEach } = require("node:test");
+const assert = require("node:assert");
 const fs = require("node:fs");
 const path = require("node:path");
 const {
@@ -118,4 +119,24 @@ test("a create under another collection is denied", async () => {
 });
 test("a create in a subcollection of reports is denied", async () => {
   await assertFails(setDoc(doc(db, "reports", ID, "notes", "n1"), report()));
+});
+// What the sender really sees when a report id is created twice: a retry
+// after a send whose answer was lost. The REST create is what the apps use.
+test("creating the same document twice", async () => {
+  const host = process.env.FIRESTORE_EMULATOR_HOST || "127.0.0.1:8080";
+  const url = `http://${host}/v1/projects/ce-rules-test/databases/(default)/documents/reports?documentId=${ID}`;
+  const body = JSON.stringify({ fields: {
+    reportId: { stringValue: ID }, sealed: { bytesValue: "AAAA" }, size: { integerValue: "3" },
+    created: { timestampValue: new Date().toISOString().replace(/\.\d+Z$/, "Z") },
+    source: { stringValue: "ios" }, appVersion: { stringValue: "1" },
+    keyId: { stringValue: "k1" }, installId: { stringValue: "i1" } } });
+  const post = () => fetch(url, { method: "POST", body, headers: { "Content-Type": "application/json" } });
+  const first = await post();
+  const second = await post();
+  assert.equal(first.status, 200);
+  // The emulator answers ALREADY_EXISTS (409), not a rules denial, so the
+  // sender can count a 409 as sent.
+  assert.equal(second.status, 409);
+  // The SDK's setDoc is an update to the rules, and is denied.
+  await assertFails(setDoc(ref(), report()));
 });
