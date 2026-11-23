@@ -76,10 +76,26 @@ def _ci_any(*words: str) -> str:
 
 
 _UP = {c: c + 32 for c in range(65, 91)}
+_SPACE = re.compile(_S)
+
+
+def cut_take(s: str, n: int) -> str:
+    """The first n characters of a line to be scrubbed later. A line that is
+    cut also loses the word the cut fell in (back to the last whitespace, or
+    all of it when there is none), so no half of a secret is left for the
+    scrub to miss. Same in Swift."""
+    if len(s) <= n:
+        return s
+    i = n
+    while i > 0 and not _SPACE.match(s[i - 1]):
+        i -= 1
+    return s[:i]
 
 
 def _lc(s: str) -> str:
-    """Lower case for ASCII letters only, the same in every language."""
+    """Lower case for ASCII letters only, the same in every language. A
+    non-ASCII host name therefore matches only in the case it was given: an
+    accepted trade-off, because ICU and Python fold such letters differently."""
     return s.translate(_UP)
 
 

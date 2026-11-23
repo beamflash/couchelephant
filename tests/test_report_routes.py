@@ -313,3 +313,20 @@ def test_secret_straddling_the_line_cap_does_not_survive(client, fs):
     rep = _opened(fs)
     for text in (rep["appLog"][0], rep["trigger"]["error"], rep["trigger"]["screen"]):
         assert token[:6] not in text and len(text) <= 2000
+
+
+def test_line_cut_at_the_take_limit_loses_its_cut_word(client, fs):
+    # Scrubbing shrinks the long prefix, which would pull a half-cut secret
+    # into the kept 2000 if the cut word stayed.
+    key = "Zk3q9XvB2mN7pL4rT8wY1cD6fH0jS5aE"
+    db.set_setting("plex_token", key)
+    _agree(client)
+    shrinkable = "token=" + "Q" * 7978 + " " + key
+    nowhite = "a" * 9000
+    body = _body(app_log=[shrinkable, nowhite],
+                 trigger={"kind": "error", "error": shrinkable, "screen": nowhite})
+    assert client.post("/api/report/send", json=body).json()["ok"]
+    rep = _opened(fs)
+    for text in (rep["appLog"][0], rep["trigger"]["error"]):
+        assert key[:6] not in text
+    assert rep["appLog"][1] == "" and rep["trigger"]["screen"] == ""

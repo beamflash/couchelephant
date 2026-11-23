@@ -10,6 +10,7 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import JSONResponse
 
 from .. import db, plextv, reportbuild, reportsend
+from ..reportscrub import cut_take
 from ..version import VERSION
 
 router = APIRouter()
@@ -115,14 +116,14 @@ async def report_send(request: Request):
     trigger = {"kind": trig["kind"]}
     for k in ("error", "screen"):
         if isinstance(trig.get(k), str):
-            trigger[k] = trig[k][:LINE_TAKE]
+            trigger[k] = cut_take(trig[k], LINE_TAKE)
     client = body.get("client")
     client = client if isinstance(client, dict) else {}
     app = {"version": VERSION, "platform": "web",
            "ua": _str(client.get("ua"), 500),
            "screen_size": _str(client.get("screen_size"), 50)}
     lines = body.get("app_log")
-    app_log = [_str(x, LINE_TAKE) for x in lines[-500:] if isinstance(x, str)] \
+    app_log = [cut_take(x, LINE_TAKE) for x in lines[-500:] if isinstance(x, str)] \
         if isinstance(lines, list) else []
 
     scrub = reportbuild.make_scrubber()

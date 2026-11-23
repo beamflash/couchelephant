@@ -222,3 +222,11 @@ def test_host_hash_lowercases_ascii_only():
 def test_pem_hidden_behind_a_fake_begin_is_cut():
     s = "-----BEGIN A-----\nx\n-----END A-----BEGIN  -----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n"
     assert Scrubber().text(s) == "[removed]BEGIN  [removed]"
+
+
+def test_cut_take():
+    from app.reportscrub import cut_take
+    assert cut_take("abc def", 20) == "abc def"
+    assert cut_take("abc def ghi", 9) == "abc def "
+    assert cut_take("abcdefghij", 5) == ""
+    assert cut_take("a bcdef", 4) == "a "
