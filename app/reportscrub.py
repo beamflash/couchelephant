@@ -188,16 +188,17 @@ class Scrubber:
         self._shown_cache: dict[str, str] = {}
         self._host_cache: dict[str, str] = {}
         # Longest first, so a secret that holds another is removed whole.
+        # Ties by value, so the order never depends on a set's.
         self._secrets = sorted({v for v in known_secrets
                                 if isinstance(v, str) and len(v) >= 4},
-                               key=len, reverse=True)
+                               key=lambda v: (-len(v), v))
         names = set()
         for h in known_hosts:
             try:
                 names.add(_split_hostport(h)[0])
             except (ValueError, AttributeError):
                 continue
-        self._hosts = sorted(names, key=len, reverse=True)
+        self._hosts = sorted(names, key=lambda n: (-len(n), n))
 
     def host(self, name: str) -> str:
         got = self._host_cache.get(name)
