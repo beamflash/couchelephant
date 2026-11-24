@@ -20,6 +20,8 @@ talks to replaced:
     from the apps or the server lands there and never at the owner's.
     POST /test/tuners?n=1 says the tuner has one tuner (n=0 undoes it), for the
     over-tuners warning of a channels-per-game preview.
+    POST /test/plexemail?v=a@b.c sets the email plex.tv gives for the account
+    (empty undoes it), for the report screen's prefill.
     GET /test/reports lists what arrived (with the App Check header each
     carried, and the sealed bytes) and POST /test/reports/reset empties it;
   - with AWAY=1, Use away from home on: the same port also answers HTTPS
@@ -210,6 +212,18 @@ def main():
         channels at once is over them. 0 puts the real count back."""
         _pass_routes._tuner_total = (lambda: n) if n else _real_tuner_total
         return {"ok": True, "tuners": n or _real_tuner_total()}
+
+    from app import plextv as _plextv
+    plex_email = {"v": ""}
+
+    @web.app.post("/test/plexemail")
+    def _plexemail(v: str = ""):
+        """Test only: the email plex.tv would give for the account, for the
+        report screen's prefill. Empty means plex.tv gives none."""
+        plex_email["v"] = v
+        return {"ok": True}
+
+    _plextv.account_email = lambda token: plex_email["v"] or None
 
     @web.app.get("/test/pass-state")
     def _pass_state(title: str):
