@@ -18,6 +18,8 @@ talks to replaced:
     for the Skip ad test;
   - the fake Firestore on FIRESTORE_PORT (default 8792), so a report sent
     from the apps or the server lands there and never at the owner's.
+    POST /test/tuners?n=1 says the tuner has one tuner (n=0 undoes it), for the
+    over-tuners warning of a channels-per-game preview.
     GET /test/reports lists what arrived (with the App Check header each
     carried, and the sealed bytes) and POST /test/reports/reset empties it;
   - with AWAY=1, Use away from home on: the same port also answers HTTPS
@@ -198,6 +200,16 @@ def main():
             with db.tx() as c:
                 c.execute("DELETE FROM passes WHERE id = ?", (pid,))
         return {"pass_id": pid, "booked": len(made)}
+
+    from app.routes import passes as _pass_routes
+    _real_tuner_total = _pass_routes._tuner_total
+
+    @web.app.post("/test/tuners")
+    def _tuners(n: int = 0):
+        """Test only: say the tuner has n tuners, so a pass that books two
+        channels at once is over them. 0 puts the real count back."""
+        _pass_routes._tuner_total = (lambda: n) if n else _real_tuner_total
+        return {"ok": True, "tuners": n or _real_tuner_total()}
 
     @web.app.get("/test/pass-state")
     def _pass_state(title: str):
