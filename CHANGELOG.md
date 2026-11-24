@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.5.37 - 2026-11-23
+
+### Changed
+
+- **The Apple apps learn whether a notification test worked.** The test answer
+  now says passed or not, so the apps can offer "Report this problem" when a
+  test message fails.
+
 ## 1.5.36 - 2026-11-23
 
 ### Fixed
