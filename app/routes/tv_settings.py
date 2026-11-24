@@ -177,4 +177,6 @@ async def notify_test(request: Request, dest_id: int):
     if not may_change(request):
         return _refused()
     said = await asyncio.to_thread(notify.test, dest_id)
-    return {"ok": True, "message": said}
+    # Like Test connection: the apps offer a report only when it did not work.
+    # notify.test answers in words, and only a sent test starts with "OK".
+    return {"ok": True, "passed": said.startswith("OK"), "message": said}

@@ -1010,3 +1010,23 @@ def test_a_paired_tv_cannot_turn_the_announcement_off(client, tuner):
     db.set_setting("announce", "1")
     client.post("/api/tv/settings", headers=tv, data={"announce": "0"})
     assert db.get_setting("announce") == "1"
+
+
+# ---------- the notification test says whether it passed ----------
+
+def test_the_notification_test_says_passed_only_when_it_was_sent(client, tuner, monkeypatch):
+    from app import notify
+    tv = _pair(client)
+    for said, passed in [("OK, sent to Phone.", True),
+                         ("Failed: connection refused", False),
+                         ("That destination no longer exists.", False),
+                         ("Needs a webhook address.", False)]:
+        monkeypatch.setattr(notify, "test", lambda dest_id, said=said: said)
+        r = client.post("/api/tv/settings/notify/1/test", headers=tv).json()
+        assert r == {"ok": True, "passed": passed, "message": said}, said
+
+
+def test_a_destination_that_is_gone_fails_the_notification_test(client, tuner):
+    tv = _pair(client)
+    r = client.post("/api/tv/settings/notify/999/test", headers=tv).json()
+    assert r["passed"] is False and "no longer exists" in r["message"]
