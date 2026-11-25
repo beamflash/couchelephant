@@ -90,6 +90,7 @@ Recorded list.
 | `POST /api/tv/passes/lost/{lost_id}/cancel` | Cancel every upcoming booking of a lost pass |
 | `POST /api/tv/passes/lost/{lost_id}/follow` | Follow the series again with default settings and give it those bookings. `409` for a lost team pass, which cannot be rebuilt from its games |
 | `POST /api/tv/record/move` | Hand one booked broadcast to the other recorder. `airing_id`, `recorder` |
+| `POST /api/tv/recordings/{id}/retry` | Give a finished recording to Plex again now, instead of waiting for the automatic try. `409` unless it is finished and waiting. `GET /api/tv/recordings` gives such a row `handover_error` (the reason, in words) and `retry_in` (seconds to the automatic try) |
 | `POST /api/tv/recordings/{id}/delete` | Delete for good, from Plex too. `403` unless this television's Allow delete is on |
 | `POST /api/tv/devices/{id}/settings` | Administrators. `allow_delete` for one television |
 | `GET /hls/{uid}/index.m3u8` | The viewing copy, as an HLS playlist. `?start=0` marks it to open at its first second, which is how a player starts a recording that is still growing from the beginning |

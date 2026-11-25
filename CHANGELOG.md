@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **A Plex folder CouchElephant cannot write is found before it costs a
+  recording.** Plex makes a show's folder as its own user, often mode 755, and
+  a recording could not be copied into it. Setup, and then once a day, checks
+  every show and season folder under the library roots with a real write test.
+  A booking checks the folder it goes into days ahead and warns on the booking.
+  When the recording starts the notice turns red and the apps get a push. Each
+  notice names the folder and the command to copy, and points to Tools, New
+  Permissions on Unraid. CouchElephant never changes a permission itself.
+- **PUID and PGID for the Docker image.** The container runs as that user when
+  they are set, so it can write what Plex makes. Without them it stays root.
+  Settings, Recording says which user made your library's folders.
+- **Retry now.** A recording that could not be given to Plex says which folder
+  and why, in words, and has a Retry now button next to the automatic retry.
+  The apps can use `POST /api/tv/recordings/{id}/retry`.
+
 ## 1.5.37 - 2026-11-23
 
 ### Changed

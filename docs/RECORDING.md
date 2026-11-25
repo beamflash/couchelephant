@@ -238,6 +238,21 @@ watching goes with it as Plex's resume point. CouchElephant removes its own
 copy only after Plex lists the file. The recording plays the whole way
 through the move.
 
+**A folder it cannot write is found early.** Plex makes a show's folder as its
+own user, often mode 755, and a copy into it can fail even for root (NFS
+squashes root to another user). CouchElephant makes and removes a small test
+file, never trusting the permission bits. It does this for every show and
+season folder at setup and once a day, for the folder a recording is booked
+into (or the nearest parent that exists) the moment it is booked, and again
+when the recording starts. One notice names the folders and the command to
+copy, such as `chmod -R a+rwX "/mnt/user/tv/NFL Football (2002)"`; on Unraid,
+Tools, New Permissions does the same. It is a warning until a recording is
+stuck behind a folder, then it turns red and the apps get a push. After a
+failed copy the recording says "CouchElephant cannot write to the folder X",
+and **Retry now** tries again without waiting. CouchElephant never changes a
+permission itself: only the folder's owner, or root on the machine that holds
+the disk, can.
+
 **Deleting.** CouchElephant deletes a recording only when a person asks it
 to, from a television whose own **Allow delete** setting is on (Settings,
 Recording, Televisions), or from the web app as an administrator. Before the
