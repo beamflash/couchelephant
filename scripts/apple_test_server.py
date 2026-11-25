@@ -131,12 +131,14 @@ def main():
         @web.app.middleware("http")
         async def _watch_key(request, call_next):
             auth = request.headers.get("authorization")
-            # The Top Shelf extension asks for the home row by itself, whenever
-            # the system wants it, with the key, to the origin it keeps. That is
-            # allowed and is not what these tests watch for, so it is not counted.
-            ua = request.headers.get("user-agent", "")
-            if auth and not request.url.path.startswith("/test/") and "topshelf" not in ua.lower():
-                keys_seen.append((request.url.scheme, request.url.path, time.time()))
+            if auth and not request.url.path.startswith("/test/"):
+                # The Top Shelf extension asks for the home row by itself, with
+                # the key, to the origin it keeps. That is allowed, so the key
+                # count skips it. requests_seen keeps it, so a test still sees
+                # the key going to an address it must not.
+                ua = request.headers.get("user-agent", "")
+                if "topshelf" not in ua.lower():
+                    keys_seen.append((request.url.scheme, request.url.path, time.time()))
                 requests_seen.append({"port": request.url.port, "path": request.url.path,
                                       "key": hashlib.sha256(auth.encode()).hexdigest()[:8]})
             return await call_next(request)
