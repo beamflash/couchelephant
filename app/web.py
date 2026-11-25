@@ -19,6 +19,7 @@ from . import (
     backups,
     db,
     exposure,
+    folders,
     handover,
     logring,
     overtime,
@@ -362,6 +363,7 @@ async def recorder_loop():
             if recorder.available():
                 await asyncio.to_thread(handover.tick)
                 await asyncio.to_thread(handover.tidy)
+                await asyncio.to_thread(folders.tick)
                 await asyncio.to_thread(adskip.tick)
         except Exception as e:
             # One bad pass must not be the end of every recording after it,

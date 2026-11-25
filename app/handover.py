@@ -18,7 +18,7 @@ import zoneinfo
 
 import httpx
 
-from . import db, paths, recorder
+from . import db, folders, paths, recorder
 from .plex import Plex, PlexError
 
 log = logging.getLogger("couchelephant.handover")
@@ -188,6 +188,23 @@ def _copy(src: str, dest: str) -> None:
     os.replace(part, dest)
 
 
+def target_dir(rec) -> str | None:
+    """The folder this recording goes into, or None when no handover is set up.
+
+    It may not exist yet. The path is worked out the way the copy works it out."""
+    if why_unavailable(rec):
+        return None
+    k = _kind(rec)
+    folder = db.get_setting(f"recorder_{k}_folder").strip()
+    if LIB_DIR:
+        folder = folder.strip("/")
+    root = os.path.join(LIB_DIR or "", folder)
+    old = rec["plex_path"]
+    if old and not os.path.relpath(old, root).startswith(".."):
+        return os.path.dirname(old)
+    return os.path.dirname(os.path.join(root, relative_path(rec, root)))
+
+
 def hand_over(rec) -> None:
     """Copy, scan, wait, carry the position, then let go of our copy.
 
@@ -240,6 +257,11 @@ def hand_over(rec) -> None:
     try:
         _copy(src, dest)
     except OSError as e:
+        near = folders.nearest_existing(os.path.dirname(dest))
+        if near and not folders.writable(near):
+            # In words, not the errno: the folder is what the person can fix.
+            raise HandoverError(
+                f"{folders.cannot_write(near)} Run: {folders.fix_command([near])}") from e
         raise HandoverError(f"Could not copy into the Plex library: {e}") from e
 
     try:
@@ -289,6 +311,18 @@ def hand_over(rec) -> None:
 
 
 def _run(rec):
+    try:
+        _attempt(rec)
+    finally:
+        # A failure for this folder turns the notice red, and a copy that
+        # went through clears it.
+        try:
+            folders.refresh()
+        except Exception as e:  # noqa: BLE001
+            log.warning("folder check after the handover failed: %s", e)
+
+
+def _attempt(rec):
     try:
         hand_over(rec)
     except HandoverError as e:

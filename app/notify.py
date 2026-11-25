@@ -100,6 +100,7 @@ FAULTS = [
     (health.BOOKING_DRIFT, "A booking no longer matches its pass"),
     (health.BOOKING_REPAIR_FAILED, "A booking could not be repaired"),
     (health.EXPECTATION_MISSED, "The guide passed a date without the series"),
+    (health.FOLDER_BLOCKED, "A Plex library folder blocks a recording"),
 ]
 
 PASS_BOOKED = "pass_booked"
@@ -644,6 +645,10 @@ def _faults(dest, wanted, now) -> int:
         # Checked again here and not only at the catalog: a severity can change
         # under a code, and a tip must never send whatever it is asked.
         if n["severity"] == health.TIP:
+            continue
+        # A folder that is only a risk, days ahead, stays in the notices. The
+        # push waits until a recording is actually stuck behind it.
+        if n["code"] == health.FOLDER_BLOCKED and n["severity"] == "warn":
             continue
         st = _state(dest["id"], n["code"], n["code"])
         if n["resolved_at"] is None:

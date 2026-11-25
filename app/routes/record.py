@@ -8,7 +8,7 @@ import uuid
 from fastapi import APIRouter, Form
 from fastapi.responses import JSONResponse
 
-from .. import db, passes, recorder, smartfilter, sync, tuner
+from .. import db, folders, passes, recorder, smartfilter, sync, tuner
 from ..plex import PlexError
 from ._shared import _plex
 
@@ -382,10 +382,15 @@ def _record_ourselves(row, prefs):
                              f"This is already set to record: {held}. Cancel that "
                              "first to record it with CouchElephant."}, status_code=409)
     lead, trail = passes.padding(prefs)
-    recorder.book(row, "manual", trail_minutes=trail, lead_minutes=lead)
-    return JSONResponse({"ok": True, "recorder": "couchelephant", "message":
-                         "CouchElephant will record this. You can watch it from "
-                         "the start while it records."})
+    rec_id = recorder.book(row, "manual", trail_minutes=trail, lead_minutes=lead)
+    out = {"ok": True, "recorder": "couchelephant", "message":
+           "CouchElephant will record this. You can watch it from "
+           "the start while it records."}
+    # A folder Plex made that we cannot write: say so now, not on the day.
+    warning = folders.booking_warning(recorder.get(rec_id))
+    if warning:
+        out["warning"] = warning
+    return JSONResponse(out)
 
 
 @router.post("/api/record")

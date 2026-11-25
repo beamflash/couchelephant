@@ -403,7 +403,10 @@
       })
       .then(function (res) {
         if (res.j.ok) {
-          say(res.j.message || 'Done.', 'ok');
+          // A recording that will not reach Plex says so now, in plain text,
+          // not green: the booking worked and the folder still needs a fix.
+          say((res.j.message || 'Done.') + (res.j.warning ? ' ' + res.j.warning : ''),
+              res.j.warning ? '' : 'ok');
           btn.textContent = 'Done';
           // Show the programme again so the airing row reflects what just
           // happened: a scheduled airing offers Cancel, a cancelled one Record.
@@ -982,6 +985,9 @@ window.wireSettings = function (root) {
              (x.writable ? '' : ' <span class="dim">(' + CE.esc(x.why) + ')</span>') + '</li>';
       });
       root.querySelector('#recsuglist').innerHTML = h;
+      // Which user to run as, so CouchElephant can write what Plex makes.
+      var adv = root.querySelector('#recsugadvice');
+      if (adv) { adv.textContent = d.user_advice || ''; adv.hidden = !d.user_advice; }
       var btn = root.querySelector('#recsugbtn');
       btn.hidden = !use.length;
       box.hidden = false;

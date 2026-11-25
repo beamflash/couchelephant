@@ -539,7 +539,11 @@ def book(airing, source: str = "manual", pass_id: int | None = None,
              airing["channel_title"], airing["begins_at"], airing["ends_at"],
              airing["begins_at"] - lead,
              airing["ends_at"] + trail, source, pass_id, pass_uid, now, now))
-        return cur.lastrowid
+        rec_id = cur.lastrowid
+    # Days ahead: is the Plex folder it goes into one we can write?
+    from . import folders
+    folders.on_booked(rec_id)
+    return rec_id
 
 
 def cancel(rec_id: int) -> None:
@@ -688,6 +692,12 @@ def _start_due(now):
         _jobs[rec["id"]] = job
         job.start_capture(url)
         job.start_converter()
+        if rec["kind"] == "recording":
+            # On its own thread: a dead network disk must not hold the loop
+            # that starts the next recording.
+            from . import folders
+            threading.Thread(target=folders.on_start, args=(rec,), daemon=True,
+                             name="ce-folder-check").start()
 
 
 def _make_room(now):

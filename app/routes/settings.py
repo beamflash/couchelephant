@@ -17,6 +17,7 @@ from .. import (
     cf_access,
     db,
     exposure,
+    folders,
     handover,
     health,
     language,
@@ -327,7 +328,8 @@ def recorder_library_suggest():
         out.append({"kind": kind, "section_id": str(d.get("key")),
                     "section": d.get("title") or "", "path": path,
                     "writable": not why, "why": why})
-    return JSONResponse({"ok": True, "suggestions": out})
+    return JSONResponse({"ok": True, "suggestions": out,
+                         "user_advice": folders.user_advice()})
 
 
 @router.post("/settings/sources")
