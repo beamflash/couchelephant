@@ -234,6 +234,19 @@ def main():
                 c.execute("DELETE FROM passes WHERE id = ?", (pid,))
         return {"pass_id": pid, "booked": len(made)}
 
+    @web.app.post("/test/seed-recording")
+    def _seed_recording(title: str):
+        """Test only: a finished recording with this title, so a search for a
+        recording has one whatever earlier tests deleted."""
+        now = int(time.time())
+        with db.tx() as c:
+            c.execute("""INSERT INTO recordings (uid, kind, state, title, show_title, section,
+                             channel_vcn, channel_title, begins_at, ends_at)
+                         VALUES (?, 'recording', 'finished', ?, ?, 'shows', '9.1', ?, ?, ?)""",
+                      (f"{now:032x}", title, title, demo_guide.CHANNELS["9.1"][1],
+                       now - 7200, now - 3600))
+        return {"ok": True}
+
     from app.routes import passes as _pass_routes
     _real_tuner_total = _pass_routes._tuner_total
 
