@@ -161,6 +161,11 @@ def _vaapi_works() -> bool:
                      *VAAPI_ENCODE, "-f", "null", "-"],
                     capture_output=True, timeout=30)
                 _vaapi = r.returncode == 0
+                if not _vaapi and hasattr(os, "geteuid") and os.geteuid() != 0:
+                    log.warning(
+                        "The GPU encoder did not start while running as user %s. "
+                        "That user may not be allowed to use /dev/dri; recordings "
+                        "are converted in software instead.", os.geteuid())
             except (OSError, subprocess.SubprocessError):
                 _vaapi = False
     return _vaapi
