@@ -1076,7 +1076,7 @@ footer .divider{height:5px;width:auto;display:block;margin:0 auto 12px}
 .nm-item.warn{border-left-color:var(--warn-bd)}
 .nm-title{color:var(--bad-fg);font-weight:600;font-size:13px}
 .nm-item.warn .nm-title{color:var(--warn-fg)}
-.nm-detail{color:var(--text);font-size:12.5px;line-height:1.45;margin-top:3px}
+.nm-detail{color:var(--text);font-size:12.5px;line-height:1.45;margin-top:3px;white-space:pre-line}
 .nm-hint{color:var(--dim);font-size:12px;line-height:1.45;margin-top:5px}
 .nm-since{color:var(--dim);font-size:11px;margin-top:5px}
 /* A suggestion. It borrows the warn colours because it is yellow to the eye,

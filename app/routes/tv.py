@@ -1441,8 +1441,16 @@ def tv_recording_retry(rec_id: int):
     started = handover.tick()
     if started == rec_id:
         return {"ok": True, "outcome": "started", "message": "Copying it to Plex now."}
+    held = handover.why_unavailable(recorder.get(rec_id))
+    if held:
+        # Not set up: the real reason, not a wait for somebody else's copy.
+        return {"ok": True, "outcome": "held", "message": held}
+    w = handover._worker
+    if w and w.is_alive():
+        return {"ok": True, "outcome": "queued", "message":
+                "Another recording is being copied first. This one goes next."}
     return {"ok": True, "outcome": "queued", "message":
-            "Another recording is being copied first. This one goes next."}
+            "It is next in line and is tried again in a moment."}
 
 
 # ---------- live ----------

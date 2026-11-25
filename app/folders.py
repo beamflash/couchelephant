@@ -50,7 +50,7 @@ SKIP = frozenset({"@eaDir", ".snapshots", "#recycle", "@Recycle", "lost+found",
 # a miss means "not known", and the text still names Unraid.
 UNRAID_FILE = "/etc/unraid-version"
 TEST_NAME = ".couchelephant-write-test"
-NOBODY = 65534
+NOBODY = 65534          # what a NAS squashes root to until a real file says otherwise
 
 _lock = threading.Lock()
 _booking: dict[int, tuple[str, str]] = {}   # recording id -> (blocked folder, title)
@@ -59,29 +59,83 @@ _again = None           # another was asked for meanwhile: None, False or True (
 _threads: list[threading.Thread] = []
 _hung = 0               # real write tests that have not come back
 _last_run = 0.0
-_no_squash = False      # a real write as root on NFS got through: root is not squashed
+_hold_until = 0.0       # do not start a pass before this: the library was not there
+# What root is made into on this NFS mount, learned from a file we made:
+# {"uid": n, "gid": n} when squashed, {"none": True} when root is root. Kept in
+# the database, so a restart does not forget it and go back to guessing.
+_squash: dict | None = None
+_squash_loaded = False
+_passed: dict[str, float] = {}      # folders that took a real write, and when
 
 
 # ---------- the checks ----------
 
-def writable(path: str) -> bool:
-    """The real test: make a file in the folder and remove it.
+def _write_test(path: str):
+    """Make a file in the folder, look at who owns it, remove it. The file's
+    stat when all of that worked, else None.
 
     One fixed name, so a file left behind is reused, never added to. If the
     file cannot be removed again the folder is a problem for us, and no more
     are made."""
     if not os.path.isdir(path):
-        return False
+        return None
     name = os.path.join(path, TEST_NAME)
     try:
-        os.close(os.open(name, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644))
+        fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+        try:
+            st = os.fstat(fd)
+        finally:
+            os.close(fd)
     except OSError:
-        return False
+        return None
     try:
         os.remove(name)
     except OSError:
+        return None
+    return st
+
+
+def writable(path: str) -> bool:
+    """The real test: can a file be made in the folder, and removed again.
+    A folder that passes is remembered for the day, so the stat check cannot
+    flag it again behind the real test's back."""
+    if _write_test(path) is None:
+        _passed.pop(path, None)
         return False
+    _passed[path] = time.time()
     return True
+
+
+def _set_squash(value: dict | None) -> None:
+    global _squash, _squash_loaded
+    _squash, _squash_loaded = value, True
+    db.set_setting("folders_squash", json.dumps(value) if value else "")
+
+
+def _squash_state() -> dict | None:
+    global _squash, _squash_loaded
+    if not _squash_loaded:
+        try:
+            _squash = json.loads(db.get_setting("folders_squash") or "null")
+        except ValueError:
+            _squash = None
+        _squash_loaded = True
+    return _squash
+
+
+def _learn_squash(root: str) -> None:
+    """As root on NFS, who does the NAS make our files? One test file in the
+    library folder says. Done even when that folder is open to everyone,
+    because the answer is about who we are, not about that folder."""
+    if not (hasattr(os, "geteuid") and os.geteuid() == 0 and _on_nfs(root)):
+        return
+    st = _write_test(root)
+    if st is None:
+        return          # could not make one: learn nothing, keep what is known
+    if st.st_uid == 0:
+        _set_squash({"none": True})
+    else:
+        _set_squash({"uid": st.st_uid, "gid": st.st_gid})
 
 
 def _nfs_mounts() -> list[str]:
@@ -129,13 +183,20 @@ def quick_writable(path: str) -> bool:
 
     A user that is not root is asked of the system (os.access reads the
     owner, group and mode, and a network disk answers it itself). Root over
-    NFS is treated as squashed to "nobody", which is what a NAS does by
-    default, unless a real write has shown it is not."""
+    NFS is read as the user the NAS squashes it to, which a real file taught
+    us (nobody until then). A folder that took a real write today passes."""
     try:
+        at = _passed.get(path)
+        if at and time.time() - at < DAY:
+            return True
         if not os.path.isdir(path):
             return False
-        if hasattr(os, "geteuid") and os.geteuid() == 0 and _on_nfs(path) and not _no_squash:
-            return _mode_allows(os.stat(path), NOBODY, {NOBODY})
+        if hasattr(os, "geteuid") and os.geteuid() == 0 and _on_nfs(path):
+            sq = _squash_state()
+            if not (sq and sq.get("none")):
+                uid = (sq or {}).get("uid", NOBODY)
+                gid = (sq or {}).get("gid", NOBODY)
+                return _mode_allows(os.stat(path), uid, {gid})
         return os.access(path, os.W_OK | os.X_OK)
     except OSError:
         return False
@@ -264,11 +325,12 @@ def cannot_write(folder: str) -> str:
 def fix_command(blocked: list[str]) -> str:
     """What to run, and where: on the machine that holds the library."""
     ds = [describe(f) for f in blocked]
-    text = "On the machine that holds the library, run: " + " ; ".join(d["cmd"] for d in ds)
+    text = ("On the machine that holds the library, run:\n"
+            + " ; ".join(d["cmd"] for d in ds))
     if any(d["root"] for d in ds):
-        text += (". That is the library folder itself, so do not use -R on all of it. "
-                 "Make the show's folder there yourself, or fix only that folder's own mode")
-    return text + "."
+        text += ("\nThat is the library folder itself, so do not use -R on all of it. "
+                 "Make the show's folder there yourself, or fix only that folder's own mode.")
+    return text
 
 
 # ---------- which user ----------
@@ -287,18 +349,31 @@ def _me() -> tuple[int, int]:
     return -1, -1
 
 
-def user_advice() -> str | None:
-    """Which user made the library's folders, and to run as that user.
+ADVICE_FOLDERS = 50         # folders looked at to see who made the library
+ADVICE_ENTRIES = 300        # and the most entries read to find them
 
-    The user that owns the show folders Plex made is the one Plex runs as. If
-    CouchElephant is another user, say so: the same user can write whatever
-    Plex makes, now and later."""
+
+def _compute_advice() -> str | None:
+    """Which user made the library's folders. A handful are enough: it is the
+    same user for all of them, and the library may hold thousands."""
     seen: dict[tuple[int, int], int] = {}
+    folders, entries = 0, 0
     for root in library_roots():
-        for p in _subdirs(root)[:50]:
-            o = _owner(p)
-            if o:
-                seen[o] = seen.get(o, 0) + 1
+        try:
+            with os.scandir(root) as it:
+                for e in it:
+                    if folders >= ADVICE_FOLDERS or entries >= ADVICE_ENTRIES:
+                        break
+                    entries += 1
+                    if (e.name.startswith(".") or e.name in SKIP
+                            or not e.is_dir(follow_symlinks=False)):
+                        continue
+                    o = _owner(e.path)
+                    if o:
+                        seen[o] = seen.get(o, 0) + 1
+                    folders += 1
+        except OSError:
+            continue
     if not seen:
         return None
     (uid, gid), _ = max(seen.items(), key=lambda kv: kv[1])
@@ -309,24 +384,47 @@ def user_advice() -> str | None:
             f"and PGID={gid} on the container, then recreate it.")
 
 
+def _advice_cached():
+    """(known, text). Read from the database, never from the library."""
+    try:
+        got = json.loads(db.get_setting("folders_advice") or "null")
+    except ValueError:
+        got = None
+    return (True, got.get("text")) if isinstance(got, dict) else (False, None)
+
+
+def _store_advice(text) -> None:
+    db.set_setting("folders_advice", json.dumps({"text": text}))
+
+
+def user_advice() -> str | None:
+    """Which user made the library's folders, and to run as that user.
+
+    From what the last pass remembered. Until there is one, a short, time-boxed
+    look, so a request for the settings never waits on a slow disk."""
+    known, text = _advice_cached()
+    if known:
+        return text
+    got = _timed(lambda: (_compute_advice(),), REQUEST_WAIT_SECONDS)
+    if got is None:
+        return None
+    _store_advice(got[0])
+    return got[0]
+
+
 # ---------- the scan: reads only ----------
 
 def _scan(budget: float) -> tuple[list[str], bool]:
     """Every show, movie and season folder, one level under each root and the
     season level below a show, that we cannot write. Stat only. Stops at the
     budget and says it did not finish."""
-    global _no_squash
     end = time.monotonic() + budget
     roots = _root_settings()
-    # Root over NFS: one real write in the library's own folder says whether
-    # the NAS squashes root. Only then is root believed.
-    _no_squash = False
-    if hasattr(os, "geteuid") and os.geteuid() == 0:
-        for r in roots.values():
-            if os.path.isdir(r) and _on_nfs(r):
-                if not _mode_allows(os.stat(r), NOBODY, {NOBODY}) and writable(r):
-                    _no_squash = True
-                break
+    # Root over NFS: one real file says who the NAS makes of root.
+    for r in roots.values():
+        if os.path.isdir(r):
+            _learn_squash(r)
+            break
     blocked = []
     for kind, root in roots.items():
         if not os.path.isdir(root):
@@ -404,7 +502,8 @@ def _timed(fn, seconds: float):
 def booking_warning(rec) -> str | None:
     """A sentence for a booking that goes into a folder we cannot write. Waits
     a few seconds at most, and says nothing if the disk does not answer."""
-    near = _timed(lambda: _blocked_for(rec, True), REQUEST_WAIT_SECONDS)
+    got = _timed(lambda: (_blocked_for(rec, True),), REQUEST_WAIT_SECONDS)
+    near = got[0] if got else None      # no answer is no warning, not a finding
     if not near:
         return None
     with _lock:
@@ -419,7 +518,13 @@ def check_recording(rec_id: int) -> None:
             _booking.pop(rec_id, None)
         publish()
         return
-    near = _timed(lambda: _blocked_for(rec, True), CHECK_SECONDS)
+    got = _timed(lambda: (_blocked_for(rec, True),), CHECK_SECONDS)
+    if got is None:
+        # The disk did not answer, or too many tests are stuck: unknown. What
+        # was known stays, and the next pass looks again.
+        publish()
+        return
+    near = got[0]
     with _lock:
         if near:
             _booking[rec_id] = (near, rec["title"] or rec["show_title"] or "")
@@ -461,7 +566,7 @@ def _notice(blocked, by_folder, red) -> dict:
                      f"{describe(folder)['label']}.")
     lines.append(fix_command(blocked))
     hint = unraid_note() + " CouchElephant never changes permissions itself."
-    advice = user_advice()
+    advice = _advice_cached()[1]        # remembered: publishing never reads the disk
     if advice:
         hint += " " + advice
     return {
@@ -469,7 +574,7 @@ def _notice(blocked, by_folder, red) -> dict:
         "severity": "bad" if red else "warn",
         "title": ("A recording cannot be saved to Plex"
                   if red else "A Plex library folder will block a recording"),
-        "detail": " ".join(lines),
+        "detail": "\n".join(lines),
         "hint": hint,
     }
 
@@ -484,14 +589,26 @@ def refresh(now: int | None = None, rescan: bool = False) -> None:
     global _last_run
     now = now or int(time.time())
     _last_run = time.time()
-    if not _root_settings() or not library_roots():
-        # Nothing to be blocked from: clear what an old library left open.
+    if not _root_settings():
+        # No library chosen: nothing to be blocked from. Clear what an old
+        # one left open.
         db.set_setting("folders_scan", json.dumps({"at": now, "blocked": []}))
         with _lock:
             _booking.clear()
         publish(now)
         return
+    if not library_roots():
+        # Chosen, but not there just now: a mount that blinked. Keep the last
+        # result, leave the daily rescan due, and look again in a minute.
+        global _hold_until
+        _hold_until = time.time() + 60
+        return
+    if rescan or _squash_state() is None:
+        for r in library_roots():
+            _learn_squash(r)
+            break
     if rescan:
+        _store_advice(_compute_advice())
         _learn_plex_roots()
         found, whole = _scan(SCAN_BUDGET_SECONDS)
         # An unfinished pass keeps what the last one found beyond its reach.
@@ -515,14 +632,17 @@ def refresh(now: int | None = None, rescan: bool = False) -> None:
     publish(now)
 
 
-def _spawn(fn, *args) -> None:
+def _spawn(fn, *args) -> bool:
+    """Run fn on a worker thread. False when there are too many already: a
+    disk that hangs must not pile up threads."""
     with _lock:
         _threads[:] = [t for t in _threads if t.is_alive()]
         if len(_threads) >= 8:
-            return              # a disk that hangs must not pile up threads
+            return False
         t = threading.Thread(target=fn, args=args, daemon=True, name="ce-folders")
         _threads.append(t)
     t.start()
+    return True
 
 
 def _pass(rescan: bool) -> None:
@@ -548,13 +668,17 @@ def rescan_soon(rescan: bool = True) -> None:
             _again = bool(rescan or _again)
             return
         _running = True
-    _spawn(_pass, rescan)
+    if not _spawn(_pass, rescan):
+        with _lock:
+            _running = False        # not started, so not running: ask again next time
 
 
 def tick(now: int | None = None) -> None:
     """From the recorder's loop, so it only decides and starts a thread: the
     daily scan, and a recheck every few minutes so a fixed folder clears."""
     now = now or int(time.time())
+    if time.time() < _hold_until:
+        return
     if now - int(_stored().get("at") or 0) >= DAY:
         rescan_soon(True)
     elif time.time() - _last_run >= RECHECK_SECONDS:

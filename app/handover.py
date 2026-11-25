@@ -33,7 +33,6 @@ SCAN_WAIT_SECONDS = 180
 SCAN_POLL_SECONDS = 5
 
 _worker: threading.Thread | None = None
-_current: int | None = None        # the recording the worker is giving to Plex
 _lock = threading.Lock()
 
 
@@ -367,7 +366,7 @@ def tick(now: int | None = None, wait: bool = False) -> int | None:
     One at a time, in its own thread: a copy to a network disk takes minutes,
     and the recorder loop must keep starting recordings meanwhile.
     """
-    global _worker, _current
+    global _worker
     now = now or int(time.time())
     with _lock:
         if _worker and _worker.is_alive():
@@ -385,7 +384,6 @@ def tick(now: int | None = None, wait: bool = False) -> int | None:
             return
         _worker = threading.Thread(target=_run, args=(rec,), daemon=True,
                                    name="ce-handover")
-        _current = rec["id"]
         _worker.start()
         w = _worker
     if wait:
