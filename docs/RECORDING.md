@@ -240,11 +240,14 @@ through the move.
 
 **A folder it cannot write is found early.** Plex makes a show's folder as its
 own user, often mode 755, and a copy into it can fail even for root (NFS
-squashes root to another user). CouchElephant makes and removes a small test
-file, never trusting the permission bits. It does this for every show and
-season folder at setup and once a day, for the folder a recording is booked
-into (or the nearest parent that exists) the moment it is booked, and again
-when the recording starts. One notice names the folders and the command to
+squashes root to another user). CouchElephant reads the owner and mode of every show and
+season folder at setup and once a day (it writes nothing there, so Plex has no
+reason to rescan). For the folder a recording is booked into (or the nearest
+parent that exists) it makes and removes a small test file the moment it is
+booked, and again when the recording starts, never trusting the permission bits
+alone. The fix is named by the library and the folder in it, not by the
+container's path, and given as a command for the machine that holds the
+library. One notice names the folders and the command to
 copy, such as `chmod -R a+rwX "/mnt/user/tv/NFL Football (2002)"`; on Unraid,
 Tools, New Permissions does the same. It is a warning until a recording is
 stuck behind a folder, then it turns red and the apps get a push. After a

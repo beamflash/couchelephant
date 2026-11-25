@@ -17,7 +17,21 @@
   Settings, Recording says which user made your library's folders.
 - **Retry now.** A recording that could not be given to Plex says which folder
   and why, in words, and has a Retry now button next to the automatic retry.
-  The apps can use `POST /api/tv/recordings/{id}/retry`.
+  The apps can use `POST /api/tv/recordings/{id}/retry`, which says what it
+  did: started, queued behind another copy, already copying, still converting,
+  or watched a moment ago.
+- The notice is named by the library and the folder in it, with a quoted
+  command for the machine that holds the library (Plex's own path when Plex
+  says it), not the container's `/library` path. It is a new alert event,
+  `folder_blocked`: alert destinations that had every other fault ticked get
+  it added once; a destination with a narrower list needs it ticked under
+  Settings, Notifications to hear about this.
+
+### Notes
+
+- The library scan only reads owner and mode, and runs on its own thread with
+  a time budget. The real write test is only for the folder a recording goes
+  into.
 
 ## 1.5.37 - 2026-11-23
 

@@ -72,10 +72,13 @@ network disk takes minutes. It deletes nothing until Plex lists the file.
 
 `folders.py` warns before that copy can fail. Plex makes a show's folder as
 its own user, and CouchElephant, another user (or root squashed over NFS),
-may not be able to write it. Setup and then once a day it makes and removes a
-temp file in every show and season folder under the library roots. A booking
-checks its own folder, or the nearest parent that exists, days ahead. The start
-of the recording checks again. All of it is one notice, `folder_blocked`, kept
+may not be able to write it. Setup and then once a day it reads the owner, group and mode of every show
+and season folder under the library roots (root over NFS counts as squashed to
+nobody unless a real write has shown otherwise). It writes nothing there: a
+file in every folder would change each folder's time and make Plex rescan. Only
+the folder one recording goes into gets the real test, a file made and removed:
+when it is booked, when it starts, and when its copy fails. All of it runs on
+worker threads with a time budget, never on the recorder loop or a request. All of it is one notice, `folder_blocked`, kept
 up to date and cleared when the folders are fixed: a warning until a recording
 is stuck behind it, red and pushed once one is. It never changes permissions.
 

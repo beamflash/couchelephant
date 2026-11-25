@@ -89,7 +89,7 @@ up.
 | `COUCHELEPHANT_RECORDINGS` | `/recordings` | Where CouchElephant DVR keeps its files. It is off unless this folder exists |
 | `COUCHELEPHANT_LIBRARY` | `/library` | The Plex library folder a finished recording is moved into |
 | `COUCHELEPHANT_ADDRESS` | none | The address of this machine on your home network, such as `192.168.1.20`. The QR code under Settings carries it. Set it when the container is on Docker's bridge network, where it cannot see that address itself. With **Use away from home** on, the QR code is an `https://` address |
-| `PUID`, `PGID` | none | Docker only. Run CouchElephant as this user and group, so it can write the folders Plex makes in your library. Set them to the user Plex runs as (on Unraid, usually `99` and `100`). Without them the container runs as root, as before. `PGID` defaults to `PUID`. CouchElephant takes over only `/data` and `/recordings`, never the library |
+| `PUID`, `PGID` | none | Docker only. Run CouchElephant as this user and group, so it can write the folders Plex makes in your library. Set them to the user Plex runs as (on Unraid, usually `99` and `100`). Without them the container runs as root, as before. `PGID` defaults to `PUID`. The user keeps the group of every `/dev/dri` device, so hardware encoding still works CouchElephant takes over only `/data` and `/recordings`, never the library |
 | `TZ` | `UTC` | The container's clock |
 
 Everything else is a setting in the app, not an environment variable, because

@@ -32,6 +32,14 @@ export/import. See [AUTH.md](AUTH.md).
 
 `POST /api/record` refuses while preview mode is on, and says so.
 
+When CouchElephant records one broadcast itself (`POST /api/record` with
+`recorder=couchelephant` on a one-shot choice, and `POST /api/tv/record` with
+`scope=one`), the answer can carry `warning`: a sentence saying the Plex folder
+the recording goes into cannot be written by CouchElephant, which folder, and
+the command to run on the machine that holds the library. The booking is made
+either way. The check waits at most a few seconds for the disk and leaves
+`warning` out if it does not answer.
+
 `GET /api/record/options` also answers `recorder`: whether CouchElephant's own
 recorder can run here, and which recorder a new booking starts with.
 `POST /api/rules` and `POST /api/rules/{id}` take the same `recorder` field,
@@ -77,7 +85,7 @@ Recorded list.
 | `POST /api/tv/live/{id}/keepalive` | Still watching. Live viewing nobody keeps alive is closed after a minute and its tuner given back |
 | `GET /api/tv/guide` | The grid for a television: every channel and its programmes from now for `hours` (24). Each programme says whether it is set to record and by whom |
 | `GET /api/tv/program?airing_id=` | One broadcast: summary, whether it is on now, whether it records, and what "every one of these" can mean for it (its series, or its teams) |
-| `POST /api/tv/record` | Record from a television, always with CouchElephant's recorder. `airing_id`, and `scope`: `one`, `series`, or `team` with `team_id` |
+| `POST /api/tv/record` | Record from a television, always with CouchElephant's recorder. `airing_id`, and `scope`: `one` (this broadcast; the answer can carry `warning`, see above), `series`, or `team` with `team_id` |
 | `GET /api/tv/record/options` | What "Record every episode" or "Record every <team> game" can be set to before the pass is made. `airing_id`, `scope` (`series` or `team`), `team_id`. The web's `/api/record/options` answer with only Plex's recurring choices left, `pick` (the index of the one asked for), and the recorder default `couchelephant` wherever it can run |
 | `POST /api/tv/record/all` | Make that pass with the chosen options, through the web's own `/api/record`. `airing_id`, `template` (an index from the options), `settings` (JSON), `networks` and `channels` (JSON lists), `recorder` |
 | `GET /api/tv/passes/options` | The same options for a new pass from the + button, before it is made. `kind` (`series`, `announced` or `team`), `id`, `title`. The answer has the shape of `/api/tv/record/options` |
@@ -90,7 +98,7 @@ Recorded list.
 | `POST /api/tv/passes/lost/{lost_id}/cancel` | Cancel every upcoming booking of a lost pass |
 | `POST /api/tv/passes/lost/{lost_id}/follow` | Follow the series again with default settings and give it those bookings. `409` for a lost team pass, which cannot be rebuilt from its games |
 | `POST /api/tv/record/move` | Hand one booked broadcast to the other recorder. `airing_id`, `recorder` |
-| `POST /api/tv/recordings/{id}/retry` | Give a finished recording to Plex again now, instead of waiting for the automatic try. `409` unless it is finished and waiting. `GET /api/tv/recordings` gives such a row `handover_error` (the reason, in words) and `retry_in` (seconds to the automatic try) |
+| `POST /api/tv/recordings/{id}/retry` | Give a finished recording to Plex again now, instead of waiting for the automatic try. Answers `outcome` and a `message`: `started`, `queued` (another is being copied first), `copying` (already is), `converting` (the viewing copy is still being made) or `watched` (somebody watched it a moment ago). `409` unless it is finished or moving. `GET /api/tv/recordings` gives such a row `handover_error` (the reason, in words) and `retry_in` (seconds to the automatic try) |
 | `POST /api/tv/recordings/{id}/delete` | Delete for good, from Plex too. `403` unless this television's Allow delete is on |
 | `POST /api/tv/devices/{id}/settings` | Administrators. `allow_delete` for one television |
 | `GET /hls/{uid}/index.m3u8` | The viewing copy, as an HLS playlist. `?start=0` marks it to open at its first second, which is how a player starts a recording that is still growing from the beginning |
