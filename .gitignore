@@ -25,3 +25,8 @@ clients/apple/
 # Rules test dependencies.
 tests/firestore_rules/node_modules/
 firestore-debug.log
+
+# Built by scripts/wiki_build.py
+site/wiki/
+.wiki-work/
+wiki-src/
