@@ -1,0 +1,3 @@
+# Builds the wiki into site/wiki. Used only by .github/workflows/site.yml.
+mkdocs==1.6.1
+mkdocs-material==9.8.2

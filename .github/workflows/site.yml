@@ -1,4 +1,5 @@
-# Publishes the download page at couchelephant.app (Cloudflare Pages).
+# Publishes couchelephant.app (Cloudflare Pages): the download page, and the
+# help pages at /wiki, built from the GitHub wiki of this repository.
 name: Site
 
 on:
@@ -7,18 +8,24 @@ on:
     paths:
       - "site/**"
       - "packaging/linux/install.sh"
+      - "scripts/wiki_build.py"
+      - "requirements-wiki.txt"
       - ".github/workflows/site.yml"
+  # An edit to the wiki. Only people with write access can make one.
+  gollum:
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# Two edits close together build one after the other, never at the same time.
+concurrency:
+  group: site
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    env:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PAGES_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
     steps:
       - uses: actions/checkout@v7
 
@@ -26,7 +33,33 @@ jobs:
       - name: Copy the install script into the site
         run: cp packaging/linux/install.sh site/install.sh
 
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      # The wiki is the only source of the help pages. Its repository is public.
+      # If it cannot be cloned, stop: deploying without /wiki would remove the
+      # pages that are live now.
+      - name: Get the wiki
+        run: |
+          for i in 1 2 3; do
+            git clone --depth 1 "https://github.com/${{ github.repository }}.wiki.git" wiki-src && exit 0
+            sleep 10
+          done
+          echo "::error::Could not clone the wiki. Save a first page in the repository's Wiki tab."
+          exit 1
+
+      - name: Build the wiki into site/wiki
+        env:
+          NO_MKDOCS_2_WARNING: "1"
+        run: |
+          python -m pip install --quiet -r requirements-wiki.txt
+          python scripts/wiki_build.py --wiki wiki-src --out site/wiki
+
       - name: Deploy to Cloudflare Pages
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PAGES_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
             echo "Skipping the deploy: CLOUDFLARE_PAGES_TOKEN or CLOUDFLARE_ACCOUNT_ID is not set."
