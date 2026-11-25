@@ -22,7 +22,7 @@ if [ -n "${PUID:-}" ] && [ "$(id -u)" = "0" ]; then
   for d in ${CE_OWNED_DIRS:-/data /recordings}; do
     [ -d "$d" ] || continue
     find "$d" \( ! -user "$PUID" -o ! -group "$PGID" \) \
-      -exec chown "$PUID:$PGID" {} + ||
+      -exec chown -h "$PUID:$PGID" {} + ||
       echo "CouchElephant: could not give $d to $PUID:$PGID. Carrying on; if it cannot write there, fix that folder's owner." >&2
   done
 
@@ -31,8 +31,9 @@ if [ -n "${PUID:-}" ] && [ "$(id -u)" = "0" ]; then
   # group is kept, so hardware encoding still works as this user.
   groups="$PGID"
   for dev in ${CE_DRI_DIR:-/dev/dri}/*; do
-    [ -e "$dev" ] || continue
-    g="$(stat -c %g "$dev" 2>/dev/null)" || continue
+    # Character devices only: /dev/dri also holds a by-path folder.
+    [ -c "$dev" ] || continue
+    g="$(stat -L -c %g "$dev" 2>/dev/null)" || continue
     case ",$groups," in *",$g,"*) ;; *) groups="$groups,$g" ;; esac
   done
 
