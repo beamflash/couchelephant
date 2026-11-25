@@ -25,3 +25,24 @@ def test_a_stuck_handover_says_why_and_retry_now_asks_again(page):
         time.sleep(0.1)
     assert recorder.get(rec_id)["error"] != WHY
     db.set_setting("recorder_shows_folder", "")
+
+
+def test_a_failed_retry_request_never_leaves_the_button_stuck(page):
+    now = int(time.time())
+    rec_id = recorder.book(_airing("ui-retry2", "g-ui-retry2", "5.1", now - 7200))
+    recorder._set(rec_id, state="finished", ended_at=now - 3600, error=WHY,
+                  tried_at=now)
+    page.goto("/recordings")
+    page.click('.subtab[data-sub="recorded"]')
+    page.wait_for_selector("[data-retry]")
+    page.route("**/retry", lambda route: route.abort())
+    page.click("[data-retry]")
+    page.wait_for_function(
+        "document.querySelector('[data-retry]').textContent === 'Retry now'")
+    assert "Could not reach CouchElephant" in page.locator(".retrysay").inner_text()
+    page.unroute("**/retry")
+    page.route("**/retry", lambda route: route.fulfill(
+        status=500, content_type="text/plain", body="boom"))
+    page.click("[data-retry]")
+    page.wait_for_function("document.querySelector('.retrysay').textContent.includes('HTTP 500')")
+    assert page.locator("[data-retry]").inner_text() == "Retry now"

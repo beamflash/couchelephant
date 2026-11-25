@@ -1465,10 +1465,35 @@ window.passTab = 'sports';
     if (grp) { open[grp.dataset.group] = !open[grp.dataset.group]; draw(); return; }
     var again = e.target.closest('[data-retry]');
     if (again) {
+      // Whatever happens, the button comes back and the answer is shown: a
+      // failed request must never leave it saying "Trying...".
+      var said = again.parentNode.querySelector('.retrysay');
+      if (!said) {
+        said = document.createElement('span');
+        said.className = 'retrysay tiny';
+        again.parentNode.appendChild(said);
+      }
+      var back = function (text, bad, reload) {
+        again.disabled = false;
+        again.textContent = 'Retry now';
+        said.textContent = text;
+        said.className = 'retrysay tiny' + (bad ? ' bad' : ' dim');
+        if (reload) setTimeout(window.loadRecorded, 2500);
+      };
       again.disabled = true;
       again.textContent = 'Trying...';
+      said.textContent = '';
       fetch('/api/tv/recordings/' + again.dataset.retry + '/retry', {method: 'POST'})
-        .then(CE.readJson).then(function () { window.loadRecorded(); });
+        .then(function (r) {
+          return r.json().catch(function () { return {ok: false, error: 'HTTP ' + r.status}; });
+        })
+        .then(function (j) {
+          if (j.ok) back(j.message || 'Asked again.', false, true);
+          else back(j.error || 'It could not be tried again.', true, false);
+        })
+        .catch(function () {
+          back('Could not reach CouchElephant, so nothing was tried. Try again in a moment.', true, false);
+        });
       return;
     }
     var rowEl = e.target.closest('[data-rec]');

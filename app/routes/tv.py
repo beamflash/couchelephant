@@ -1416,18 +1416,33 @@ def tv_recording_delete(request: Request, rec_id: int):
 @router.post("/api/tv/recordings/{rec_id}/retry")
 def tv_recording_retry(rec_id: int):
     """Give a finished recording to Plex again now, without waiting for the
-    automatic try. Only for one that failed its handover and is waiting."""
+    automatic try, and say what happened. `outcome` is one of `started`,
+    `queued` (another is being copied first), `copying` (this one already is),
+    `converting` (the viewing copy is still being made) or `watched` (somebody
+    watched it a moment ago, so it waits for them)."""
     rec = recorder.get(rec_id)
     if not rec or rec["kind"] != "recording":
         return JSONResponse({"ok": False, "error": "That recording is gone."},
                             status_code=404)
+    if rec["state"] == "moving":
+        return {"ok": True, "outcome": "copying",
+                "message": "It is being copied to Plex right now."}
     if rec["state"] != "finished":
         return JSONResponse({"ok": False, "error":
                              "That recording is not waiting to go to Plex."},
                             status_code=409)
+    if recorder.watched_recently(rec):
+        return {"ok": True, "outcome": "watched", "message":
+                "Somebody watched it a moment ago. It goes to Plex when they stop."}
+    if recorder.busy(rec_id):
+        return {"ok": True, "outcome": "converting", "message":
+                "Its viewing copy is still being made. It goes to Plex when that is done."}
     recorder._set(rec_id, tried_at=0)
-    handover.tick()
-    return {"ok": True, "message": "Trying again now."}
+    started = handover.tick()
+    if started == rec_id:
+        return {"ok": True, "outcome": "started", "message": "Copying it to Plex now."}
+    return {"ok": True, "outcome": "queued", "message":
+            "Another recording is being copied first. This one goes next."}
 
 
 # ---------- live ----------
