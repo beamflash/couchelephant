@@ -15,7 +15,7 @@
 </div>
 
 {# The tabs are named filters on the same page, and stay on a search. #}
-<nav class="daybar tabbar" id="gtabs" aria-label="Guide tabs">
+<nav class="tabbar" id="gtabs" aria-label="Guide tabs">
   {% for key, label in [('', 'All'), ('favorites', 'Favorites'), ('news', 'News'), ('sports', 'Sports')] %}
     <a href="/guide?{% if key %}tab={{ key }}{% endif %}{% if q %}{{ '&' if key else '' }}q={{ q|urlencode }}{% endif %}"
        id="tab-{{ key or 'all' }}" class="{{ 'on' if tab == key }}"
