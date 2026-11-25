@@ -87,6 +87,23 @@ def _longest_on_now():
                      ORDER BY a.ends_at DESC LIMIT 1""", (now, now))
 
 
+def _add_news():
+    """A half hour of news at the end of two channels' day. The demo's own news
+    slot is long over by the time a test runs, and the News tab needs some."""
+    with db.tx() as c:
+        c.execute("""INSERT OR REPLACE INTO programs (guid, title, grandparent_title, summary,
+                         type, section, genres, teams, year)
+                     VALUES ('plex://episode/demo-news-late', 'Late News', 'Local News',
+                             'The day in review.', 'episode', 'shows', '["News"]', '[]', 2026)""")
+        for vcn in ("9.1", "41.1"):
+            last = db.one("SELECT MAX(ends_at) e FROM airings WHERE channel_vcn = ?", (vcn,))["e"]
+            call, title = demo_guide.CHANNELS[vcn]
+            c.execute("""INSERT OR REPLACE INTO airings (id, program_guid, channel_vcn,
+                             channel_call_sign, channel_title, begins_at, ends_at, drm)
+                         VALUES (?, 'plex://episode/demo-news-late', ?, ?, ?, ?, ?, 0)""",
+                      (f"demo-late-news-{vcn}", vcn, call, title, last, last + 1800))
+
+
 def _ticking():
     """The recorder's own loop, without the ones that reach other servers."""
     while True:
@@ -166,6 +183,7 @@ def main():
     if not ok:
         raise SystemExit(f"the demo guide would not sync: {detail}")
     print("guide:", detail, flush=True)
+    _add_news()
 
     @web.app.get("/test/reports")
     def _reports():
