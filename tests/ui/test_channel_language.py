@@ -190,7 +190,14 @@ def test_editing_a_pass_shows_and_changes_its_choice(page):
         "() => /\\(English\\)/.test(document.getElementById('cpg').textContent)",
         timeout=15000)
     assert page.locator("#cpg").input_value() == "any"
-    page.select_option("#cpg", "one")
+    # A late redraw (Plex's templates arriving) can replace the list just as
+    # the pick lands. Pick again until the live list shows it.
+    for _ in range(5):
+        page.select_option("#cpg", "one")
+        page.wait_for_timeout(300)
+        if page.locator("#cpg").input_value() == "one":
+            break
+    assert page.locator("#cpg").input_value() == "one"
     page.click("#rgo")
     page.wait_for_function(
         "() => /Done/.test(document.getElementById('rgo').textContent)", timeout=30000)
