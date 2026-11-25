@@ -114,7 +114,7 @@ def test_the_favorite_token_filters_by_favorite_channel(client):
 
 
 def test_favorites_survive_a_restart_of_the_schema(client):
-    """The table comes from the schema and the migration list alike."""
+    """The table comes from the schema, and a second init keeps its rows."""
     _seed()
     client.post("/api/tv/favorites/add", data={"vcn": "9.1"})
     db.init()
@@ -184,3 +184,57 @@ def test_favorites_travel_in_an_export(client):
         c.execute("DELETE FROM favorite_channels")
     portable.import_bytes(blob, replace=True)
     assert [c["number"] for c in client.get("/api/tv/favorites").json()["channels"]] == ["9.1"]
+
+
+def test_favorite_is_a_tab_and_not_a_facet(client):
+    _seed()
+    client.post("/api/tv/favorites/add", data={"vcn": "9.1"})
+    kinds = [r["id"] for sec in client.get("/api/facets").json() for r in sec["rows"]]
+    assert "favorite" not in kinds
+    # the token still filters
+    frags, args = filters.build(["favorite"], [])
+    assert frags
+
+
+def test_search_recordings_follow_the_tab(client):
+    _seed()
+    with db.tx() as c:
+        c.execute("""INSERT INTO recordings (uid, kind, state, title, show_title, section,
+                                             channel_vcn, begins_at, ends_at)
+                     VALUES ('u3','recording','finished','Evening Game','Evening Game','sports',
+                             '14.1',1000,2000)""")
+    page = client.get("/guide", params={"q": "evening", "tab": "sports"}).text
+    assert "Evening Game" in page and "Local News" not in page
+    page = client.get("/guide", params={"q": "evening", "tab": "favorites"}).text
+    assert 'id="recresults"' not in page
+    client.post("/api/tv/favorites/add", data={"vcn": "4.1"})
+    page = client.get("/guide", params={"q": "evening", "tab": "favorites"}).text
+    assert "Local News" in page and "Evening Game" not in page
+
+
+def test_a_recording_result_links_to_the_recording(client):
+    _seed()
+    rid = db.one("SELECT id FROM recordings WHERE uid = 'u1'")["id"]
+    page = client.get("/guide", params={"q": "evening"}).text
+    assert f'href="/recordings?rec={rid}"' in page
+
+
+def test_the_tab_channels_are_those_with_something_in_the_window(client):
+    _seed()
+    now = int(time.time())
+    client.post("/api/tv/favorites/add", data={"vcn": "9.1"})
+    client.post("/api/tv/favorites/add", data={"vcn": "4.1"})
+    with db.tx() as c:
+        c.execute("UPDATE airings SET begins_at = ?, ends_at = ? WHERE id = 'a1'",
+                  (now + 86400, now + 90000))
+    d = client.get("/api/grid", params={"start": now - 900, "end": now + 3600,
+                                        "tab": "favorites"}).json()
+    assert [c["vcn"] for c in d["channels"]] == ["9.1"]
+
+
+def test_search_matches_a_channel_name_through_the_channel_list_first(client):
+    """The channel is found in the channel table, then the airings are asked
+    for by number, so a channel with no airing is simply not listed."""
+    _seed()
+    ids, _ = _ids(client, q="abc")
+    assert ids == ["a3"]

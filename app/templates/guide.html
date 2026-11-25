@@ -15,13 +15,13 @@
 </div>
 
 {# The tabs are named filters on the same page, and stay on a search. #}
-<div class="daybar tabbar" id="gtabs" role="tablist">
+<nav class="daybar tabbar" id="gtabs" aria-label="Guide tabs">
   {% for key, label in [('', 'All'), ('favorites', 'Favorites'), ('news', 'News'), ('sports', 'Sports')] %}
     <a href="/guide?{% if key %}tab={{ key }}{% endif %}{% if q %}{{ '&' if key else '' }}q={{ q|urlencode }}{% endif %}"
-       role="tab" id="tab-{{ key or 'all' }}" class="{{ 'on' if tab == key }}"
-       aria-selected="{{ 'true' if tab == key else 'false' }}">{{ label }}</a>
+       id="tab-{{ key or 'all' }}" class="{{ 'on' if tab == key }}"
+       {% if tab == key %}aria-current="page"{% endif %}>{{ label }}</a>
   {% endfor %}
-</div>
+</nav>
 
 {% if not q %}
 <div class="daybar">
@@ -102,7 +102,7 @@
     {% for r in recs %}
     <tr>
       <td class="dim" style="white-space:nowrap"><time data-ts="{{ r.begins_at }}" data-fmt="when">{{ r.begins_at|fmt }}</time></td>
-      <td><a href="/recordings"><b>{{ r.title }}</b></a>
+      <td><a href="/recordings?rec={{ r.id }}"><b>{{ r.title }}</b></a>
         {% if r.sub %}<div class="tiny dim">{{ r.sub }}</div>{% endif %}</td>
       <td class="tiny dim">{{ r.vcn or '' }}</td>
     </tr>
@@ -374,10 +374,14 @@
         status.style.display = 'block';
       });
     });
-    label.appendChild(star);
     var lane = document.createElement('div');
     lane.className = 'glane';
-    row.appendChild(label); row.appendChild(lane); rowsEl.appendChild(row);
+    // The star is beside the channel button, not inside it: a button in a
+    // button, and its Enter would also reach the channel's own key handler.
+    var col = document.createElement('div');
+    col.className = 'gchcol';
+    col.appendChild(label); col.appendChild(star);
+    row.appendChild(col); row.appendChild(lane); rowsEl.appendChild(row);
     rowByVcn[c.vcn] = lane;
     channels.push(c);
   }

@@ -11,6 +11,8 @@ What cannot be rebuilt is what you decided:
 | Passes | teams, programmes, smart filters, their source limits and Plex settings |
 | Recordings you booked | and which pass booked each one |
 | Channel artwork | the images you supplied, and the files themselves |
+| Channel languages | the language you set by hand on a channel |
+| Favorite channels | the channels you starred, one list for the whole house |
 | Settings | server address, timezone, sync interval, preview mode |
 | Accounts | local users, their preferences, and Cloudflare identities |
 | Alert destinations | where alerts go, and which events each one carries |

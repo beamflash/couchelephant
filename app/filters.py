@@ -16,10 +16,11 @@ FLAGS = [
     ("movie", "Movies", "p.section = 'movies'"),
     ("sport", "Sport", "p.section = 'sports'"),
     ("show", "TV", "p.section = 'shows'"),
-    ("favorite", "Favorite channels",
-     "a.channel_vcn IN (SELECT vcn FROM favorite_channels)"),
 ]
 FLAG_SQL = {k: sql for k, _, sql in FLAGS}
+# A tab's token, not a facet: it is not in FLAGS, so the filter panel neither
+# lists nor counts it.
+FLAG_SQL["favorite"] = "a.channel_vcn IN (SELECT vcn FROM favorite_channels)"
 
 
 # The guide's tabs, each said in the filter tokens above, so a tab is only a

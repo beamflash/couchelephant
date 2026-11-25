@@ -27,22 +27,26 @@ def _airings_query(day: str, channel: str, sports: int, q: str, offset: int, lim
     """
     now = int(time.time())
     sql = ["""SELECT a.*, p.title, p.grandparent_title, p.summary, p.teams, p.section
-              FROM airings a JOIN programs p ON p.guid = a.program_guid
-              LEFT JOIN channels c ON c.vcn = a.channel_vcn"""]
+              FROM airings a JOIN programs p ON p.guid = a.program_guid"""]
     args = []
     if q.strip():
         like = f"%{smartfilter.like(q.strip()).lower()}%"
-        # The channel is matched by call sign, network, its name without the
-        # number, and the number whole, so "4.1" does not also find 14.1.
-        sql.append("""WHERE (ulower(p.title) LIKE ? ESCAPE '\\'
+        # The channel is matched in the channel table first: call sign, network,
+        # its name without the number, and the number whole, so "4.1" does not
+        # also find 14.1. The airings are then asked for by those numbers.
+        vcns = [r["vcn"] for r in db.query(
+            """SELECT vcn FROM channels
+               WHERE ulower(call_sign) LIKE ? ESCAPE '\\'
+                  OR ulower(network) LIKE ? ESCAPE '\\'
+                  OR ulower(SUBSTR(title, INSTR(title, ' ') + 1)) LIKE ? ESCAPE '\\'
+                  OR vcn = ?""", (like, like, like, q.strip()))]
+        by_channel = ("OR a.channel_vcn IN (" + ",".join("?" for _ in vcns) + ")") if vcns else ""
+        sql.append(f"""WHERE (ulower(p.title) LIKE ? ESCAPE '\\'
                             OR ulower(p.grandparent_title) LIKE ? ESCAPE '\\'
                             OR ulower(p.summary) LIKE ? ESCAPE '\\'
-                            OR ulower(c.call_sign) LIKE ? ESCAPE '\\'
-                            OR ulower(c.network) LIKE ? ESCAPE '\\'
-                            OR ulower(SUBSTR(c.title, INSTR(c.title, ' ') + 1)) LIKE ? ESCAPE '\\'
-                            OR a.channel_vcn = ?)
+                            {by_channel})
                         AND a.ends_at > ?""")
-        args += [like] * 6 + [q.strip(), now]
+        args += [like] * 3 + vcns + [now]
         order = "ORDER BY a.begins_at, CAST(a.channel_vcn AS REAL), a.id"
     else:
         start = now
@@ -68,34 +72,48 @@ def _airings_query(day: str, channel: str, sports: int, q: str, offset: int, lim
     return db.query(" ".join(sql), tuple(args))
 
 
-def search_recordings(q: str, limit: int = 12):
+def search_recordings(q: str, limit: int = 12, tab: str = ""):
     """Recordings whose title or show matches, newest first. Title only: the
-    description of a recording is not kept."""
+    description of a recording is not kept. A tab narrows them the way it
+    narrows the guide: starred channels, sport, or a news programme."""
     if not q.strip():
         return []
     like = f"%{smartfilter.like(q.strip()).lower()}%"
+    where = ""
+    tab = (tab or "").lower()
+    if tab == "favorites":
+        where = "AND channel_vcn IN (SELECT vcn FROM favorite_channels)"
+    elif tab == "sports":
+        where = "AND section = 'sports'"
+    elif tab == "news":
+        where = ("AND program_guid IN (SELECT guid FROM programs "
+                 "WHERE genres LIKE '%\"News\"%')")
     return db.query(
-        """SELECT * FROM recordings
-           WHERE kind = 'recording' AND state IN ('recording', 'finished', 'moving', 'in_plex')
-             AND (ulower(title) LIKE ? ESCAPE '\\' OR ulower(show_title) LIKE ? ESCAPE '\\')
-           ORDER BY COALESCE(begins_at, 0) DESC, id DESC LIMIT ?""", (like, like, limit))
+        f"""SELECT * FROM recordings
+            WHERE kind = 'recording' AND state IN ('recording', 'finished', 'moving', 'in_plex')
+              AND (ulower(title) LIKE ? ESCAPE '\\' OR ulower(show_title) LIKE ? ESCAPE '\\')
+              {where}
+            ORDER BY COALESCE(begins_at, 0) DESC, id DESC LIMIT ?""", (like, like, limit))
 
 
 def favorite_vcns() -> set:
     return {r["vcn"] for r in db.query("SELECT vcn FROM favorite_channels")}
 
 
-def _tab_channels(tab: str):
-    """SQL limiting the channel list to what a tab is about, and its args."""
+def _tab_channels(tab: str, start: int, end: int):
+    """SQL limiting the channel list to what a tab is about, and its args.
+
+    Only channels with something in the window shown: a starred channel with
+    nothing on is an empty row, and the News and Sports tabs are about what
+    is on.
+    """
     tokens = filters.tab_tokens(tab)
     if not tokens:
         return "", []
-    if tab.lower() == "favorites":
-        return "AND vcn IN (SELECT vcn FROM favorite_channels)", []
     frags, fargs = filters.build(tokens, [])
     return ("AND vcn IN (SELECT a.channel_vcn FROM airings a JOIN programs p "
-            "ON p.guid = a.program_guid WHERE a.ends_at > ? " + " ".join(frags) + ")",
-            [int(time.time())] + fargs)
+            "ON p.guid = a.program_guid WHERE a.ends_at > ? AND a.begins_at < ? "
+            + " ".join(frags) + ")", [start, end] + fargs)
 
 
 @router.get("/api/grid")
@@ -117,7 +135,7 @@ def api_grid(start: int, end: int, choffset: int = 0, chlimit: int = 12,
         csql.append("""AND vcn IN (SELECT a.channel_vcn FROM airings a
                                    JOIN programs p ON p.guid = a.program_guid
                                    WHERE p.section = 'sports')""")
-    tsql, targs = _tab_channels(tab)
+    tsql, targs = _tab_channels(tab, start, end)
     if tsql:
         csql.append(tsql)
         cargs += targs
@@ -360,7 +378,7 @@ def guide(request: Request, day: str = "", channel: str = "", sports: int = 0,
     recs = [{"id": r["id"], "title": r["show_title"] or r["title"] or "",
              "sub": r["title"] if r["show_title"] and r["title"] != r["show_title"] else "",
              "vcn": r["channel_vcn"], "begins_at": r["begins_at"]}
-            for r in search_recordings(q)] if q.strip() else []
+            for r in search_recordings(q, tab=tab)] if q.strip() else []
     stars = favorite_vcns()
 
     days = []
