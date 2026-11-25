@@ -22,6 +22,7 @@ from . import (
     folders,
     handover,
     logring,
+    notify,
     overtime,
     passes,
     paths,
@@ -316,6 +317,7 @@ async def _server_error(request: Request, exc: Exception):
 @app.on_event("startup")
 async def startup():
     db.init()
+    notify.add_folder_event()
     # A test drives sync itself and asserts on the result. A loop waking up
     # underneath it rewrites the database mid-assertion, which is a flake that
     # takes an afternoon to explain.
