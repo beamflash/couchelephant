@@ -443,6 +443,11 @@ def recording_json(request: Request, rec) -> dict:
         # The master playlist, which tells a player the captions are there.
         "playlist": f"{_base(request)}/hls/{rec['uid']}/master.m3u8",
         "error": rec["error"] if state == "failed" else None,
+        # A finished recording that Plex has not been given yet, and why, and
+        # how long until the automatic try. "Retry now" does not wait for it.
+        "handover_error": rec["error"] if state == "finished" and rec["error"] else None,
+        "retry_in": (max(0, (rec["tried_at"] or 0) + handover.RETRY_SECONDS - int(time.time()))
+                     if state == "finished" and rec["error"] else None),
         # Sports overtime: how long a game ran past its padding, or why it
         # was not followed.
         "note": rec["ot_note"] if rec["ot_state"] in ("in", "post") else None,
@@ -1474,6 +1479,48 @@ def tv_recording_delete(request: Request, rec_id: int):
     except handover.HandoverError as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=409)
     return {"ok": True, "message": "Deleted."}
+
+
+@router.post("/api/tv/recordings/{rec_id}/retry")
+def tv_recording_retry(rec_id: int):
+    """Give a finished recording to Plex again now, without waiting for the
+    automatic try, and say what happened. `outcome` is one of `started`,
+    `queued` (another is being copied first), `copying` (this one already is),
+    `converting` (the viewing copy is still being made), `watched` (somebody
+    watched it a moment ago, so it waits for them) or `held` (the handover is
+    not set up and the message says what is missing: a problem to fix, not a
+    wait)."""
+    rec = recorder.get(rec_id)
+    if not rec or rec["kind"] != "recording":
+        return JSONResponse({"ok": False, "error": "That recording is gone."},
+                            status_code=404)
+    if rec["state"] == "moving":
+        return {"ok": True, "outcome": "copying",
+                "message": "It is being copied to Plex right now."}
+    if rec["state"] != "finished":
+        return JSONResponse({"ok": False, "error":
+                             "That recording is not waiting to go to Plex."},
+                            status_code=409)
+    if recorder.watched_recently(rec):
+        return {"ok": True, "outcome": "watched", "message":
+                "Somebody watched it a moment ago. It goes to Plex when they stop."}
+    if recorder.busy(rec_id):
+        return {"ok": True, "outcome": "converting", "message":
+                "Its viewing copy is still being made. It goes to Plex when that is done."}
+    recorder._set(rec_id, tried_at=0)
+    started = handover.tick()
+    if started == rec_id:
+        return {"ok": True, "outcome": "started", "message": "Copying it to Plex now."}
+    held = handover.why_unavailable(recorder.get(rec_id))
+    if held:
+        # Not set up: the real reason, not a wait for somebody else's copy.
+        return {"ok": True, "outcome": "held", "message": held}
+    w = handover._worker
+    if w and w.is_alive():
+        return {"ok": True, "outcome": "queued", "message":
+                "Another recording is being copied first. This one goes next."}
+    return {"ok": True, "outcome": "queued", "message":
+            "It is next in line and is tried again in a moment."}
 
 
 # ---------- live ----------

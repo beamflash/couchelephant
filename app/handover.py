@@ -18,7 +18,7 @@ import zoneinfo
 
 import httpx
 
-from . import db, paths, recorder
+from . import db, folders, paths, recorder
 from .plex import Plex, PlexError
 
 log = logging.getLogger("couchelephant.handover")
@@ -84,7 +84,17 @@ def _zone():
         return zoneinfo.ZoneInfo("UTC")
 
 
-def _existing(root: str, show: str) -> str:
+def _listdir(path: str, cache: dict | None) -> list[str]:
+    """os.listdir, remembered in `cache` when one is given. A library of
+    thousands of folders is listed once per check, not once per recording."""
+    if cache is None:
+        return os.listdir(path)
+    if path not in cache:
+        cache[path] = os.listdir(path)
+    return cache[path]
+
+
+def _existing(root: str, show: str, cache: dict | None = None) -> str:
     """The folder this show already has in the library, or the plain name.
 
     Plex names a show folder `Show (Year)`, and the guide does not say the
@@ -93,7 +103,7 @@ def _existing(root: str, show: str) -> str:
     """
     want = show.lower()
     try:
-        names = os.listdir(root)
+        names = _listdir(root, cache)
     except OSError:
         return show
     for n in sorted(names):
@@ -104,16 +114,16 @@ def _existing(root: str, show: str) -> str:
     return show
 
 
-def _season_folder(root: str, show_folder: str, n: int) -> str:
+def _season_folder(root: str, show_folder: str, n: int, cache: dict | None = None) -> str:
     """The season folder the show already has on disk ("Season 1" as well as
     "Season 01"), or the plain two digit name. With both, the one with more in
     it, which is the one Plex is reading."""
     best, size = None, -1
     try:
-        for name in sorted(os.listdir(os.path.join(root, show_folder)), reverse=True):
+        for name in sorted(_listdir(os.path.join(root, show_folder), cache), reverse=True):
             path = os.path.join(root, show_folder, name)
             if re.fullmatch(rf"season 0*{n}", name.lower()) and os.path.isdir(path):
-                count = len(os.listdir(path))
+                count = len(_listdir(path, cache))
                 if count > size:   # a tie goes to "Season 1" over "Season 01"
                     best, size = name, count
     except OSError:
@@ -121,7 +131,7 @@ def _season_folder(root: str, show_folder: str, n: int) -> str:
     return best or f"Season {n:02d}"
 
 
-def relative_path(rec, root: str | None = None, number=None) -> str:
+def relative_path(rec, root: str | None = None, number=None, cache=None) -> str:
     """Where the file goes, under the TV or movies folder.
 
     `number` is (season, episode) as Plex numbers it, when that is known and
@@ -131,10 +141,10 @@ def relative_path(rec, root: str | None = None, number=None) -> str:
         name = f"{title} ({rec['year']})" if rec["year"] else title
         return os.path.join(name, name + ".ts")
     show = clean(rec["show_title"] or rec["title"])
-    folder = _existing(root, show) if root else show
+    folder = _existing(root, show, cache) if root else show
     if rec["season"] is not None and rec["episode"] is not None:
         sn, ep = number or (int(rec["season"]), int(rec["episode"]))
-        season = _season_folder(root, folder, sn) if root else f"Season {sn:02d}"
+        season = _season_folder(root, folder, sn, cache) if root else f"Season {sn:02d}"
         name = f"{folder} - S{sn:02d}E{ep:02d}"
     else:
         # Sport, news, anything the guide gives no number: by the day it aired.
@@ -186,6 +196,23 @@ def _copy(src: str, dest: str) -> None:
         os.remove(part)
         raise HandoverError("The copy into the Plex library came out the wrong size.")
     os.replace(part, dest)
+
+
+def target_dir(rec, cache: dict | None = None) -> str | None:
+    """The folder this recording goes into, or None when no handover is set up.
+
+    It may not exist yet. The path is worked out the way the copy works it out."""
+    if why_unavailable(rec):
+        return None
+    k = _kind(rec)
+    folder = db.get_setting(f"recorder_{k}_folder").strip()
+    if LIB_DIR:
+        folder = folder.strip("/")
+    root = os.path.join(LIB_DIR or "", folder)
+    old = rec["plex_path"]
+    if old and not os.path.relpath(old, root).startswith(".."):
+        return os.path.dirname(old)
+    return os.path.dirname(os.path.join(root, relative_path(rec, root, cache=cache)))
 
 
 def hand_over(rec) -> None:
@@ -240,6 +267,11 @@ def hand_over(rec) -> None:
     try:
         _copy(src, dest)
     except OSError as e:
+        near = folders.nearest_existing(os.path.dirname(dest))
+        if near and not folders.writable(near):
+            # In words, not the errno: the folder is what the person can fix.
+            raise HandoverError(
+                f"{folders.cannot_write(near)} {folders.fix_command([near])}") from e
         raise HandoverError(f"Could not copy into the Plex library: {e}") from e
 
     try:
@@ -290,6 +322,18 @@ def hand_over(rec) -> None:
 
 def _run(rec):
     try:
+        _attempt(rec)
+    finally:
+        # A failure for this folder turns the notice red, and a copy that
+        # went through clears it.
+        try:
+            folders.check_recording(rec["id"])
+        except Exception as e:  # noqa: BLE001
+            log.warning("folder check after the handover failed: %s", e)
+
+
+def _attempt(rec):
+    try:
         hand_over(rec)
     except HandoverError as e:
         recorder._set(rec["id"], state="finished", error=str(e),
@@ -316,7 +360,7 @@ def due(now: int) -> list:
             and (r["tried_at"] or 0) <= now - RETRY_SECONDS]
 
 
-def tick(now: int | None = None, wait: bool = False) -> None:
+def tick(now: int | None = None, wait: bool = False) -> int | None:
     """Start the next handover, if one is due and none is running.
 
     One at a time, in its own thread: a copy to a network disk takes minutes,
@@ -344,6 +388,7 @@ def tick(now: int | None = None, wait: bool = False) -> None:
         w = _worker
     if wait:
         w.join()
+    return rec["id"]
 
 
 # Plex hears a new position once the player has been quiet this long, not

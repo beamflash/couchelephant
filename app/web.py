@@ -19,8 +19,10 @@ from . import (
     backups,
     db,
     exposure,
+    folders,
     handover,
     logring,
+    notify,
     overtime,
     passes,
     paths,
@@ -315,6 +317,7 @@ async def _server_error(request: Request, exc: Exception):
 @app.on_event("startup")
 async def startup():
     db.init()
+    notify.add_folder_event()
     # A test drives sync itself and asserts on the result. A loop waking up
     # underneath it rewrites the database mid-assertion, which is a flake that
     # takes an afternoon to explain.
@@ -362,6 +365,7 @@ async def recorder_loop():
             if recorder.available():
                 await asyncio.to_thread(handover.tick)
                 await asyncio.to_thread(handover.tidy)
+                await asyncio.to_thread(folders.tick)
                 await asyncio.to_thread(adskip.tick)
         except Exception as e:
             # One bad pass must not be the end of every recording after it,

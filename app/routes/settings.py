@@ -17,6 +17,7 @@ from .. import (
     cf_access,
     db,
     exposure,
+    folders,
     handover,
     health,
     language,
@@ -202,6 +203,8 @@ def settings_recorder(tuner_url: str = Form(""), recorder_default: str = Form("a
                adskip_live=adskip_live, adskip_final=adskip_final,
                sports_overtime=sports_overtime,
                overtime_cap_minutes=overtime_cap_minutes))
+    # Setup: look at the chosen library's folders now, on a thread of its own.
+    folders.rescan_soon(True)
     return RedirectResponse("/settings", status_code=303)
 
 
@@ -327,7 +330,8 @@ def recorder_library_suggest():
         out.append({"kind": kind, "section_id": str(d.get("key")),
                     "section": d.get("title") or "", "path": path,
                     "writable": not why, "why": why})
-    return JSONResponse({"ok": True, "suggestions": out})
+    return JSONResponse({"ok": True, "suggestions": out,
+                         "user_advice": folders.user_advice()})
 
 
 @router.post("/settings/sources")

@@ -29,6 +29,7 @@ TEAM_PASS_UNMATCHED = "team_pass_unmatched"
 BOOKING_DRIFT = "booking_drift"
 BOOKING_REPAIR_FAILED = "booking_repair_failed"
 EXPECTATION_MISSED = "expectation_missed"
+FOLDER_BLOCKED = "folder_blocked"
 
 # A suggestion rather than a fault: something optional that would work better
 # if it were set up. The ONLY severity that may ever be dismissed.
@@ -44,6 +45,7 @@ REACH_CODES = frozenset((PLEX_UNREACHABLE,))
 TEAM_CODES = frozenset((TEAM_PASS_UNMATCHED,))
 BOOKING_CODES = frozenset((BOOKING_DRIFT, BOOKING_REPAIR_FAILED))
 EXPECT_CODES = frozenset((EXPECTATION_MISSED,))
+FOLDER_CODES = frozenset((FOLDER_BLOCKED,))
 TIP_CODES = frozenset((KEYS_AVAILABLE,))
 
 # Plex's guide refresh is a daily task. Complaining the first time it slips a

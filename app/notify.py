@@ -100,6 +100,7 @@ FAULTS = [
     (health.BOOKING_DRIFT, "A booking no longer matches its pass"),
     (health.BOOKING_REPAIR_FAILED, "A booking could not be repaired"),
     (health.EXPECTATION_MISSED, "The guide passed a date without the series"),
+    (health.FOLDER_BLOCKED, "A Plex library folder blocks a recording"),
 ]
 
 PASS_BOOKED = "pass_booked"
@@ -231,6 +232,24 @@ def split_events(events) -> list[str]:
     return [e for e in (events or "").split(",") if e]
 
 
+def add_folder_event() -> None:
+    """Once: a destination that was set to hear every fault is set to hear the
+    folder one too. Destinations store their events as a list, so a fault
+    added later reaches none of them on its own. One that left any fault
+    unticked chose a narrower list and is left as it is."""
+    if db.get_setting("mig_folder_event"):
+        return
+    others = {c for c, _ in FAULTS} - {health.FOLDER_BLOCKED}
+    for d in db.query("SELECT id, events FROM destinations"):
+        have = set(split_events(d["events"]))
+        if others <= have and health.FOLDER_BLOCKED not in have:
+            with db.tx() as c:
+                c.execute("UPDATE destinations SET events = ? WHERE id = ?",
+                          (",".join(split_events(d["events"]) + [health.FOLDER_BLOCKED]),
+                           d["id"]))
+    db.set_setting("mig_folder_event", "1")
+
+
 def save_destination(*, name, kind, events, remind_hours=24, webhook=None,
                      token=None, chat_id=None, dest_id=None, hosts=None,
                      schemes=None) -> int:
@@ -297,8 +316,13 @@ def _seed(dest_id: int, now: int) -> None:
     fault seeded this way sends no recovery either, because a channel cannot be
     told a problem ended when it was never told the problem started.
     """
+    # A folder risk that has not turned red is not yet something to have told,
+    # so it is not recorded as known: the day it turns red, a new channel
+    # hears it.
     rows = [(r["code"], r["code"]) for r in
-            db.query("SELECT code FROM notices WHERE resolved_at IS NULL")]
+            db.query("SELECT code FROM notices WHERE resolved_at IS NULL "
+                     "AND NOT (code = ? AND severity = 'warn')",
+                     (health.FOLDER_BLOCKED,))]
     rows += [(PASS_BOOKED, r["airing_id"]) for r in
              db.query("SELECT airing_id FROM our_grabs")]
     rows += [(RECORDING_STARTED, r["id"]) for r in
@@ -646,6 +670,18 @@ def _faults(dest, wanted, now) -> int:
         if n["severity"] == health.TIP:
             continue
         st = _state(dest["id"], n["code"], n["code"])
+        if n["code"] == health.FOLDER_BLOCKED and n["resolved_at"] is None:
+            # A folder that is only a risk, days ahead, stays in the notices.
+            # The push waits until a recording is stuck behind it. Dropping
+            # back to a risk forgets what was sent, so the next time it turns
+            # red it is news again; so does one that was fixed and broke anew.
+            if n["severity"] == "warn" or (
+                    st is not None and (st["opened_at"] or 0) < n["first_seen"]):
+                if st is not None:
+                    _forget(dest["id"], n["code"], n["code"])
+                    st = None
+                if n["severity"] == "warn":
+                    continue
         if n["resolved_at"] is None:
             if st is None:
                 if _deliver(dest, n["title"], n["detail"], n["severity"],

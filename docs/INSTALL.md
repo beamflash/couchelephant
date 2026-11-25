@@ -52,6 +52,15 @@ and the appdata path to `/mnt/user/appdata/couchelephant`, which is all it
 needs. For the apps to list it by name, set **Network Type** to **Host**;
 on the default bridge, type its address in the app. Everything else is configured in the app itself.
 
+If you use CouchElephant DVR, add two variables, **PUID** and **PGID**, and set
+them to the user and group Plex runs as (on Unraid usually `99` and `100`).
+Plex makes each show's folder as its own user, and CouchElephant can write
+into whatever Plex makes only when it runs as that same user. Settings,
+Recording says which user made your library's folders. If a folder still
+blocks a recording, CouchElephant tells you which one and gives the command to
+run. On Unraid, **Tools, New Permissions** on the share fixes every folder at
+once.
+
 The template lives in
 [datbird/unraid-templates](https://github.com/datbird/unraid-templates), which
 is what Community Applications reads.
@@ -80,6 +89,7 @@ up.
 | `COUCHELEPHANT_RECORDINGS` | `/recordings` | Where CouchElephant DVR keeps its files. It is off unless this folder exists |
 | `COUCHELEPHANT_LIBRARY` | `/library` | The Plex library folder a finished recording is moved into |
 | `COUCHELEPHANT_ADDRESS` | none | The address of this machine on your home network, such as `192.168.1.20`. The QR code under Settings carries it. Set it when the container is on Docker's bridge network, where it cannot see that address itself. With **Use away from home** on, the QR code is an `https://` address |
+| `PUID`, `PGID` | none | Docker only. Run CouchElephant as this user and group, so it can write the folders Plex makes in your library. Set them to the user Plex runs as (on Unraid, usually `99` and `100`). Without them the container runs as root, as before. `PGID` defaults to `PUID`. The user keeps the group of every `/dev/dri` device, so hardware encoding still works CouchElephant takes over only `/data` and `/recordings`, never the library |
 | `TZ` | `UTC` | The container's clock |
 
 Everything else is a setting in the app, not an environment variable, because
