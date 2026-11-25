@@ -125,13 +125,18 @@ def main():
         # Test only: counts the requests that carried the device key, so a
         # test can say the key never reached an address it must not.
         keys_seen = []
+        resets = []
         requests_seen = []
 
         @web.app.middleware("http")
         async def _watch_key(request, call_next):
             auth = request.headers.get("authorization")
-            if auth and not request.url.path.startswith("/test/"):
-                keys_seen.append(f"{request.url.scheme} {request.url.path}")
+            # The Top Shelf extension asks for the home row by itself, whenever
+            # the system wants it, with the key, to the origin it keeps. That is
+            # allowed and is not what these tests watch for, so it is not counted.
+            ua = request.headers.get("user-agent", "")
+            if auth and not request.url.path.startswith("/test/") and "topshelf" not in ua.lower():
+                keys_seen.append((request.url.scheme, request.url.path, time.time()))
                 requests_seen.append({"port": request.url.port, "path": request.url.path,
                                       "key": hashlib.sha256(auth.encode()).hexdigest()[:8]})
             return await call_next(request)
@@ -146,9 +151,15 @@ def main():
         @web.app.get("/test/keyseen")
         def _keyseen(reset: int = 0):
             seen = list(keys_seen)
+            now = time.time()
             if reset:
                 keys_seen.clear()
-            return {"count": len(seen), "paths": seen[-5:]}
+                resets.append(now)
+            # The last few, each with how long ago it came, so a failure says
+            # whether it was late from an earlier test or new.
+            return {"count": len(seen),
+                    "paths": [f"{s} {p} {now - t:.1f}s ago" for s, p, t in seen[-5:]],
+                    "reset": f"{now - resets[-1]:.1f}s ago" if resets else "never"}
     ok, detail = sync.full_sync()
     if not ok:
         raise SystemExit(f"the demo guide would not sync: {detail}")
