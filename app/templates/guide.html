@@ -173,6 +173,9 @@
   });
 
   inp.addEventListener('keydown', function (e) {
+    // The filter box is a second text field in this form, and with two the
+    // browser does not submit on Enter by itself.
+    if (e.key === 'Enter') { e.preventDefault(); if (inp.value.trim()) form.submit(); }
     if (e.key === 'Escape') { inp.value = ''; close(); inp.blur(); }
   });
 
