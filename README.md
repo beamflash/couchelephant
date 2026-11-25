@@ -15,7 +15,8 @@ It sits beside Plex. It does not replace it, proxy it, or ask you to watch
 anything anywhere else. Recordings land in your Plex library exactly as they
 always did.
 
-Version 1.2.2.
+Latest version and downloads: [releases](https://github.com/beamflash/couchelephant/releases/latest).
+Setup guides and help: the [CouchElephant wiki](https://couchelephant.app/wiki/).
 
 ---
 
@@ -310,6 +311,7 @@ and they can be remade whenever the interface changes.
 
 | | |
 | --- | --- |
+| [**Help and guides (the wiki)**](https://couchelephant.app/wiki/) | Setup, recording your teams, the apps, and fixes, in plain words |
 | [Install and configure](docs/INSTALL.md) | Docker, volumes, environment, the Plex token |
 | [How recording works](docs/RECORDING.md) | Choosing the airing, passes, source limits, who owns a rule |
 | [Architecture](docs/ARCHITECTURE.md) | Modules, the database, the sync loop |
