@@ -26,6 +26,7 @@ import json
 import logging
 import os
 import shlex
+import stat
 import threading
 import time
 
@@ -66,28 +67,53 @@ _hold_until = 0.0       # do not start a pass before this: the library was not t
 _squash: dict | None = None
 _squash_loaded = False
 _passed: dict[str, float] = {}      # folders that took a real write, and when
+_pending: set[int] = set()          # recordings whose check got no thread: first next tick
+
+
+class _Unknown(Exception):
+    """The probe could not be run safely, so nothing is known."""
+
+
+UNKNOWN = object()      # what _write_test answers when it must not touch what is there
 
 
 # ---------- the checks ----------
 
 def _write_test(path: str):
     """Make a file in the folder, look at who owns it, remove it. The file's
-    stat when all of that worked, else None.
+    stat when all of that worked, None when the folder refused, UNKNOWN when
+    something not ours is at the probe's name.
 
-    One fixed name, so a file left behind is reused, never added to. If the
-    file cannot be removed again the folder is a problem for us, and no more
-    are made."""
+    The file is made new (never truncated, never through a symlink): the
+    folder is somebody else's, and a link planted at that name must not make
+    us write into whatever it points at. A plain file left by an earlier test
+    is ours to remove and replace; anything else is left alone."""
     if not os.path.isdir(path):
         return None
     name = os.path.join(path, TEST_NAME)
-    try:
-        fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0)
+    for attempt in (1, 2):
+        try:
+            fd = os.open(name, flags, 0o644)
+        except FileExistsError:
+            try:
+                left = os.lstat(name)
+            except OSError:
+                return None
+            if not stat.S_ISREG(left.st_mode) or attempt == 2:
+                return UNKNOWN
+            try:
+                os.remove(name)
+            except OSError:
+                return None
+            continue
+        except OSError:
+            return None
         try:
             st = os.fstat(fd)
         finally:
             os.close(fd)
-    except OSError:
-        return None
+        break
     try:
         os.remove(name)
     except OSError:
@@ -99,7 +125,7 @@ def writable(path: str) -> bool:
     """The real test: can a file be made in the folder, and removed again.
     A folder that passes is remembered for the day, so the stat check cannot
     flag it again behind the real test's back."""
-    if _write_test(path) is None:
+    if _write_test(path) in (None, UNKNOWN):
         _passed.pop(path, None)
         return False
     _passed[path] = time.time()
@@ -130,12 +156,19 @@ def _learn_squash(root: str) -> None:
     if not (hasattr(os, "geteuid") and os.geteuid() == 0 and _on_nfs(root)):
         return
     st = _write_test(root)
-    if st is None:
+    if st is None or st is UNKNOWN:
         return          # could not make one: learn nothing, keep what is known
     if st.st_uid == 0:
         _set_squash({"none": True})
-    else:
-        _set_squash({"uid": st.st_uid, "gid": st.st_gid})
+        return
+    # A new file takes its folder's group on a setgid folder or BSD rules, so
+    # that group says nothing about the squash. Only a different one does.
+    try:
+        folder_gid = os.stat(root).st_gid
+    except OSError:
+        folder_gid = None
+    gid = st.st_gid if st.st_gid != folder_gid else NOBODY
+    _set_squash({"uid": st.st_uid, "gid": gid})
 
 
 def _nfs_mounts() -> list[str]:
@@ -384,17 +417,32 @@ def _compute_advice() -> str | None:
             f"and PGID={gid} on the container, then recreate it.")
 
 
+def _identity() -> list:
+    """Who we are: user, group and the other groups. What the advice and the
+    squash were worked out for."""
+    uid, gid = _me()
+    try:
+        groups = sorted(os.getgroups())
+    except (AttributeError, OSError):
+        groups = []
+    return [uid, gid, groups]
+
+
 def _advice_cached():
-    """(known, text). Read from the database, never from the library."""
+    """(known, text). Read from the database, never from the library. Advice
+    written for another user (the container was recreated with a new PUID) is
+    not known: it is worked out again."""
     try:
         got = json.loads(db.get_setting("folders_advice") or "null")
     except ValueError:
         got = None
-    return (True, got.get("text")) if isinstance(got, dict) else (False, None)
+    if isinstance(got, dict) and got.get("me") == _identity():
+        return True, got.get("text")
+    return False, None
 
 
 def _store_advice(text) -> None:
-    db.set_setting("folders_advice", json.dumps({"text": text}))
+    db.set_setting("folders_advice", json.dumps({"text": text, "me": _identity()}))
 
 
 def user_advice() -> str | None:
@@ -420,11 +468,6 @@ def _scan(budget: float) -> tuple[list[str], bool]:
     budget and says it did not finish."""
     end = time.monotonic() + budget
     roots = _root_settings()
-    # Root over NFS: one real file says who the NAS makes of root.
-    for r in roots.values():
-        if os.path.isdir(r):
-            _learn_squash(r)
-            break
     blocked = []
     for kind, root in roots.items():
         if not os.path.isdir(root):
@@ -469,7 +512,17 @@ def _blocked_for(rec, real: bool, cache: dict | None = None) -> str | None:
     near = nearest_existing(d)
     if not near:
         return None
-    ok = writable(near) if real else quick_writable(near)
+    if real:
+        st = _write_test(near)
+        if st is UNKNOWN:
+            raise _Unknown(near)
+        ok = st is not None
+        if ok:
+            _passed[near] = time.time()
+        else:
+            _passed.pop(near, None)
+    else:
+        ok = quick_writable(near)
     return None if ok else near
 
 
@@ -586,12 +639,13 @@ def refresh(now: int | None = None, rescan: bool = False) -> None:
     `rescan`, looks again at what is known blocked, looks at every active
     recording, and publishes. Never called from the recorder loop or a
     request: use `rescan_soon` or `tick`."""
-    global _last_run
+    global _last_run, _hold_until
     now = now or int(time.time())
     _last_run = time.time()
     if not _root_settings():
         # No library chosen: nothing to be blocked from. Clear what an old
         # one left open.
+        db.set_setting("folders_identity", json.dumps(_identity()))
         db.set_setting("folders_scan", json.dumps({"at": now, "blocked": []}))
         with _lock:
             _booking.clear()
@@ -600,7 +654,6 @@ def refresh(now: int | None = None, rescan: bool = False) -> None:
     if not library_roots():
         # Chosen, but not there just now: a mount that blinked. Keep the last
         # result, leave the daily rescan due, and look again in a minute.
-        global _hold_until
         _hold_until = time.time() + 60
         return
     if rescan or _squash_state() is None:
@@ -611,10 +664,23 @@ def refresh(now: int | None = None, rescan: bool = False) -> None:
         _store_advice(_compute_advice())
         _learn_plex_roots()
         found, whole = _scan(SCAN_BUDGET_SECONDS)
+        old = _stored().get("blocked", [])
         # An unfinished pass keeps what the last one found beyond its reach.
         if not whole:
-            found = sorted(set(found) | set(_stored().get("blocked", [])))
-        db.set_setting("folders_scan", json.dumps({"at": now, "blocked": found}))
+            found = sorted(set(found) | set(old))
+        at = now
+        gone = [r for r in _root_settings().values() if not os.path.isdir(r)]
+        if gone:
+            # One library folder blinked out of sight: its last results stay,
+            # and the pass is due again in a minute.
+            found = sorted(set(found) | {
+                f for f in old if any(f == r or f.startswith(r.rstrip("/") + "/")
+                                      for r in gone)})
+            at = _stored().get("at") or 0
+            _hold_until = time.time() + 60
+        else:
+            db.set_setting("folders_identity", json.dumps(_identity()))
+        db.set_setting("folders_scan", json.dumps({"at": at, "blocked": found}))
     else:
         still = [f for f in _stored().get("blocked", []) if not quick_writable(f)]
         db.set_setting("folders_scan", json.dumps(
@@ -623,7 +689,10 @@ def refresh(now: int | None = None, rescan: bool = False) -> None:
     for rec in _active_recordings():
         with _lock:
             known = rec["id"] in _booking
-        near = _blocked_for(rec, real=known, cache=cache)
+        try:
+            near = _blocked_for(rec, real=known, cache=cache)
+        except _Unknown:
+            continue            # not ours to touch: what was known stays
         with _lock:
             if near:
                 _booking[rec["id"]] = (near, rec["title"] or rec["show_title"] or "")
@@ -677,9 +746,19 @@ def tick(now: int | None = None) -> None:
     """From the recorder's loop, so it only decides and starts a thread: the
     daily scan, and a recheck every few minutes so a fixed folder clears."""
     now = now or int(time.time())
+    with _lock:
+        waiting = sorted(_pending)
+        _pending.clear()
+    for rec_id in waiting:
+        on_booked(rec_id)
     if time.time() < _hold_until:
         return
-    if now - int(_stored().get("at") or 0) >= DAY:
+    try:
+        mine = json.loads(db.get_setting("folders_identity") or "null")
+    except ValueError:
+        mine = None
+    if mine != _identity() or now - int(_stored().get("at") or 0) >= DAY:
+        # A different user than the last pass (a new PUID) or a day gone by.
         rescan_soon(True)
     elif time.time() - _last_run >= RECHECK_SECONDS:
         rescan_soon(False)
@@ -700,7 +779,9 @@ def settle(seconds: float = 20) -> None:
 def on_booked(rec_id: int) -> None:
     """A recording was booked. Its own folder is checked on a worker thread,
     so booking never waits on the disk."""
-    _spawn(check_recording, rec_id)
+    if not _spawn(check_recording, rec_id):
+        with _lock:
+            _pending.add(rec_id)        # no thread free: the next tick does it first
 
 
 def on_start(rec) -> None:
