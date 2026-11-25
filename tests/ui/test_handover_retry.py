@@ -1,0 +1,27 @@
+"""A recording Plex has not been given yet says why, and can be retried now."""
+import time
+
+from app import db, recorder
+from tests.test_recorder import _airing
+
+WHY = "CouchElephant cannot write to the folder /library/tv/NFL Football (2002)."
+
+
+def test_a_stuck_handover_says_why_and_retry_now_asks_again(page):
+    now = int(time.time())
+    rec_id = recorder.book(_airing("ui-retry", "g-ui-retry", "5.1", now - 7200))
+    recorder._set(rec_id, state="finished", ended_at=now - 3600, error=WHY,
+                  tried_at=now)
+    page.goto("/recordings")
+    page.click('.subtab[data-sub="recorded"]')
+    page.wait_for_selector("[data-retry]")
+    text = page.locator("#reclist").inner_text()
+    assert WHY in text and "tries again by itself" in text
+    page.click("[data-retry]")
+    # The click gave the handover back to the worker at once: it ran, found
+    # nothing set up, and put its own reason on the row.
+    deadline = time.time() + 10
+    while time.time() < deadline and recorder.get(rec_id)["error"] == WHY:
+        time.sleep(0.1)
+    assert recorder.get(rec_id)["error"] != WHY
+    db.set_setting("recorder_shows_folder", "")

@@ -1402,7 +1402,16 @@ window.passTab = 'sports';
       h += '<button type="button" class="tiny danger" data-del="1">' +
            (live ? 'Stop and delete' : 'Delete') + '</button>';
     }
-    return h + '</div></div>';
+    h += '</div></div>';
+    if (r.handover_error) {
+      // Plex has not been given this one yet. Say why, and offer to try now
+      // instead of waiting for the automatic try.
+      h += '<div class="recin handerr"><span class="dim tiny">' + esc(r.handover_error) +
+           ' CouchElephant tries again by itself' +
+           (r.retry_in ? ' in ' + Math.ceil(r.retry_in / 60) + ' min' : ' soon') + '.</span> ' +
+           '<button type="button" class="tiny" data-retry="' + r.id + '">Retry now</button></div>';
+    }
+    return h;
   }
 
   function draw() {
@@ -1454,6 +1463,14 @@ window.passTab = 'sports';
   wrap.addEventListener('click', function (e) {
     var grp = e.target.closest('.recgroup');
     if (grp) { open[grp.dataset.group] = !open[grp.dataset.group]; draw(); return; }
+    var again = e.target.closest('[data-retry]');
+    if (again) {
+      again.disabled = true;
+      again.textContent = 'Trying...';
+      fetch('/api/tv/recordings/' + again.dataset.retry + '/retry', {method: 'POST'})
+        .then(CE.readJson).then(function () { window.loadRecorded(); });
+      return;
+    }
     var rowEl = e.target.closest('[data-rec]');
     if (!rowEl) return;
     var r = rows.filter(function (x) { return String(x.id) === rowEl.dataset.rec; })[0];

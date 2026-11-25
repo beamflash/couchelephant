@@ -441,6 +441,11 @@ def recording_json(request: Request, rec) -> dict:
         # The master playlist, which tells a player the captions are there.
         "playlist": f"{_base(request)}/hls/{rec['uid']}/master.m3u8",
         "error": rec["error"] if state == "failed" else None,
+        # A finished recording that Plex has not been given yet, and why, and
+        # how long until the automatic try. "Retry now" does not wait for it.
+        "handover_error": rec["error"] if state == "finished" and rec["error"] else None,
+        "retry_in": (max(0, (rec["tried_at"] or 0) + handover.RETRY_SECONDS - int(time.time()))
+                     if state == "finished" and rec["error"] else None),
         # Sports overtime: how long a game ran past its padding, or why it
         # was not followed.
         "note": rec["ot_note"] if rec["ot_state"] in ("in", "post") else None,
@@ -1406,6 +1411,23 @@ def tv_recording_delete(request: Request, rec_id: int):
     except handover.HandoverError as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=409)
     return {"ok": True, "message": "Deleted."}
+
+
+@router.post("/api/tv/recordings/{rec_id}/retry")
+def tv_recording_retry(rec_id: int):
+    """Give a finished recording to Plex again now, without waiting for the
+    automatic try. Only for one that failed its handover and is waiting."""
+    rec = recorder.get(rec_id)
+    if not rec or rec["kind"] != "recording":
+        return JSONResponse({"ok": False, "error": "That recording is gone."},
+                            status_code=404)
+    if rec["state"] != "finished":
+        return JSONResponse({"ok": False, "error":
+                             "That recording is not waiting to go to Plex."},
+                            status_code=409)
+    recorder._set(rec_id, tried_at=0)
+    handover.tick()
+    return {"ok": True, "message": "Trying again now."}
 
 
 # ---------- live ----------
