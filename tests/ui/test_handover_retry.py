@@ -46,3 +46,18 @@ def test_a_failed_retry_request_never_leaves_the_button_stuck(page):
     page.click("[data-retry]")
     page.wait_for_function("document.querySelector('.retrysay').textContent.includes('HTTP 500')")
     assert page.locator("[data-retry]").inner_text() == "Retry now"
+
+
+def test_a_held_handover_is_shown_as_a_problem_not_a_success(page):
+    now = int(time.time())
+    rec_id = recorder.book(_airing("ui-retry3", "g-ui-retry3", "5.1", now - 7200))
+    recorder._set(rec_id, state="finished", ended_at=now - 3600, error=WHY, tried_at=now)
+    page.goto("/recordings")
+    page.click('.subtab[data-sub="recorded"]')
+    page.wait_for_selector("[data-retry]")
+    page.route("**/retry", lambda route: route.fulfill(
+        status=200, content_type="application/json",
+        body='{"ok": true, "outcome": "held", "message": "No Plex library is chosen."}'))
+    page.click("[data-retry]")
+    page.wait_for_selector(".retrysay.bad")
+    assert "No Plex library" in page.locator(".retrysay").inner_text()

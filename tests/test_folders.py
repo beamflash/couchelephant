@@ -48,6 +48,7 @@ def fresh(monkeypatch):
     monkeypatch.setattr(folders, "_hold_until", 0.0)
     folders._booking.clear()
     folders._passed.clear()
+    folders._pending.clear()
     yield
     folders.settle()
 
@@ -62,6 +63,8 @@ def squash(monkeypatch):
     def hit(path):
         path = os.path.normpath(path)
         return any(path == d or path.startswith(d + os.sep) for d in denied)
+    real_test = folders._write_test
+    monkeypatch.setattr(folders, "_write_test", lambda p: None if hit(p) else real_test(p))
     monkeypatch.setattr(folders, "writable", lambda p: False if hit(p) else real(p))
     monkeypatch.setattr(folders, "quick_writable", lambda p: False if hit(p) else quick(p))
     return denied
@@ -157,7 +160,7 @@ def test_root_off_nfs_is_not_second_guessed(tmp_path, monkeypatch):
 def test_the_scan_never_writes_into_a_folder(lib, monkeypatch):
     def boom(path):
         raise AssertionError("the scan wrote into " + path)
-    monkeypatch.setattr(folders, "writable", boom)
+    monkeypatch.setattr(folders, "_write_test", boom)
     assert folders.scan() == []
 
 
@@ -421,7 +424,7 @@ def test_the_record_answer_carries_the_warning(tuner, lib, squash, client):
 
 def test_a_hung_disk_never_holds_a_booking_or_a_request(tuner, lib, monkeypatch):
     release = threading.Event()
-    monkeypatch.setattr(folders, "writable", lambda p: release.wait(10) or True)
+    monkeypatch.setattr(folders, "_write_test", lambda p: release.wait(10) and os.stat(p))
     monkeypatch.setattr(folders, "REQUEST_WAIT_SECONDS", 0.3)
     t0 = time.time()
     rec_id = _book_nfl_no_wait()
@@ -966,3 +969,134 @@ def test_chown_does_not_follow_a_symlink_and_a_dangling_one_is_no_warning(tmp_pa
              "CE_DRI_DIR": str(tmp_path / "none"), "PUID": "99", "PGID": "100"})
     assert "chown -h 99:100" in got.stdout
     assert "could not give" not in got.stderr
+
+
+# ---- the third review ----
+
+def test_advice_made_for_another_user_is_not_trusted_after_a_puid_change(lib, monkeypatch):
+    monkeypatch.setattr(folders, "_owner", lambda p: (99, 100))
+    monkeypatch.setattr(folders, "_me", lambda: (0, 0))
+    monkeypatch.setattr(folders, "_identity", lambda: [0, 0, []])
+    folders.refresh(rescan=True)
+    assert "PUID=99" in folders.user_advice()
+    # The container is now run as 99:100. The old text must not be believed.
+    monkeypatch.setattr(folders, "_me", lambda: (99, 100))
+    monkeypatch.setattr(folders, "_identity", lambda: [99, 100, [100]])
+    assert folders._advice_cached() == (False, None)
+    assert folders.user_advice() is None            # recomputed: nothing to say now
+    assert folders._advice_cached() == (True, None)
+
+
+def test_a_different_user_at_startup_means_one_rescan(lib, monkeypatch):
+    monkeypatch.setattr(folders, "_identity", lambda: [0, 0, []])
+    folders.refresh(rescan=True)
+    asked = []
+    monkeypatch.setattr(folders, "rescan_soon", lambda r=True: asked.append(r))
+    folders.tick(int(time.time()))
+    assert asked == []                                # same user, scanned today
+    monkeypatch.setattr(folders, "_identity", lambda: [99, 100, [100]])
+    folders.tick(int(time.time()))
+    assert asked == [True]
+
+
+def test_a_symlink_at_the_probe_name_is_never_followed_or_touched(tmp_path):
+    target = tmp_path / "precious"
+    target.write_text("keep me")
+    folder = tmp_path / "show"
+    folder.mkdir()
+    os.symlink(target, folder / folders.TEST_NAME)
+    assert folders._write_test(str(folder)) is folders.UNKNOWN
+    assert folders.writable(str(folder)) is False
+    assert target.read_text() == "keep me"
+    assert os.path.islink(folder / folders.TEST_NAME)
+
+
+def test_something_that_is_not_a_plain_file_at_the_probe_name_is_left_alone(tmp_path):
+    folder = tmp_path / "show"
+    folder.mkdir()
+    (folder / folders.TEST_NAME).mkdir()
+    assert folders._write_test(str(folder)) is folders.UNKNOWN
+    assert (folder / folders.TEST_NAME).is_dir()
+
+
+def test_a_plain_file_left_by_an_earlier_test_is_replaced_not_piled_on(tmp_path):
+    (tmp_path / folders.TEST_NAME).write_text("old")
+    assert folders.writable(str(tmp_path)) is True
+    assert os.listdir(tmp_path) == []
+
+
+def test_the_probe_never_truncates(tmp_path, monkeypatch):
+    seen = []
+    real = os.open
+    monkeypatch.setattr(os, "open", lambda p, flags, *a: (seen.append(flags), real(p, flags, *a))[1])
+    folders._write_test(str(tmp_path))
+    flags = seen[0]
+    assert flags & os.O_EXCL and flags & os.O_NOFOLLOW and not flags & os.O_TRUNC
+
+
+def test_a_group_that_is_only_the_folders_own_is_not_taken_for_the_squash_group(nfs_root):
+    # A setgid folder (or BSD rules) gives every new file the folder's group.
+    nfs_root.update(uid=99, gid=100)                  # the folder's gid is 100
+    folders._learn_squash(folders._root_settings()["shows"])
+    assert folders._squash == {"uid": 99, "gid": folders.NOBODY}
+
+
+def test_a_group_that_differs_from_the_folders_is_the_squash_group(nfs_root):
+    nfs_root.update(uid=99, gid=99)
+    folders._learn_squash(folders._root_settings()["shows"])
+    assert folders._squash == {"uid": 99, "gid": 99}
+
+
+def test_one_probe_per_daily_pass(nfs_root, monkeypatch):
+    asked = []
+    real = folders._write_test
+    monkeypatch.setattr(folders, "_write_test", lambda p: (asked.append(p), real(p))[1])
+    folders.refresh(rescan=True)
+    assert len(asked) == 1
+
+
+def test_one_root_briefly_missing_keeps_that_roots_last_results(lib, squash):
+    films = os.path.join(lib, "films")
+    movie = os.path.join(films, "Movie One (1999)")
+    squash.add(movie)
+    folders.refresh(rescan=True)
+    assert movie in db.get_setting("folders_scan")
+    os.rename(films, films + "-away")                 # the movies mount blinks
+    squash.add(os.path.join(lib, "tv", "NFL Football (2002)"))
+    folders.refresh(rescan=True)
+    kept = json.loads(db.get_setting("folders_scan"))
+    assert movie in kept["blocked"]                    # not dropped
+    assert any("NFL Football" in f for f in kept["blocked"])    # the other root was scanned
+    assert time.time() < folders._hold_until           # and it is looked at again soon
+    os.rename(films + "-away", films)
+    squash.discard(movie)
+    folders._hold_until = 0.0
+    folders.refresh(rescan=True)
+    assert movie not in json.loads(db.get_setting("folders_scan"))["blocked"]
+
+
+def test_a_booking_check_that_got_no_thread_is_done_first_on_the_next_tick(tuner, lib, squash,
+                                                                         monkeypatch):
+    squash.add(os.path.join(lib, "tv", "NFL Football (2002)"))
+    stop = threading.Event()
+    busy = [threading.Thread(target=stop.wait, daemon=True) for _ in range(8)]
+    for t in busy:
+        t.start()
+    monkeypatch.setattr(folders, "_threads", list(busy))
+    rec_id = _book_nfl_no_wait()
+    assert rec_id in folders._pending                  # not lost
+    assert _notice() is None
+    stop.set()
+    for t in busy:
+        t.join()
+    monkeypatch.setattr(folders, "_threads", [])
+    folders.tick(int(time.time()))
+    folders.settle()
+    assert rec_id not in folders._pending
+    assert "NFL Football (2002)" in _notice()["detail"]
+
+
+def test_the_retry_docs_list_every_outcome():
+    from app.routes import tv
+    for word in ("started", "queued", "copying", "converting", "watched", "held"):
+        assert word in tv.tv_recording_retry.__doc__
