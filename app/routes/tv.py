@@ -1418,8 +1418,10 @@ def tv_recording_retry(rec_id: int):
     """Give a finished recording to Plex again now, without waiting for the
     automatic try, and say what happened. `outcome` is one of `started`,
     `queued` (another is being copied first), `copying` (this one already is),
-    `converting` (the viewing copy is still being made) or `watched` (somebody
-    watched it a moment ago, so it waits for them)."""
+    `converting` (the viewing copy is still being made), `watched` (somebody
+    watched it a moment ago, so it waits for them) or `held` (the handover is
+    not set up and the message says what is missing: a problem to fix, not a
+    wait)."""
     rec = recorder.get(rec_id)
     if not rec or rec["kind"] != "recording":
         return JSONResponse({"ok": False, "error": "That recording is gone."},

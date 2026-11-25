@@ -1488,7 +1488,8 @@ window.passTab = 'sports';
           return r.json().catch(function () { return {ok: false, error: 'HTTP ' + r.status}; });
         })
         .then(function (j) {
-          if (j.ok) back(j.message || 'Asked again.', false, true);
+          if (j.ok && j.outcome === 'held') back(j.message || 'The handover is not set up.', true, false);
+          else if (j.ok) back(j.message || 'Asked again.', false, true);
           else back(j.error || 'It could not be tried again.', true, false);
         })
         .catch(function () {
