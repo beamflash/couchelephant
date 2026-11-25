@@ -43,8 +43,11 @@ def fresh(monkeypatch):
     """No state carried between tests, and no thread left over from one."""
     folders.settle()
     monkeypatch.setattr(folders, "_last_run", 0.0)
-    monkeypatch.setattr(folders, "_no_squash", False)
+    monkeypatch.setattr(folders, "_squash", None)
+    monkeypatch.setattr(folders, "_squash_loaded", False)
+    monkeypatch.setattr(folders, "_hold_until", 0.0)
     folders._booking.clear()
+    folders._passed.clear()
     yield
     folders.settle()
 
@@ -141,7 +144,7 @@ def test_root_over_nfs_is_read_as_squashed_to_nobody(tmp_path, monkeypatch):
                         if str(p) == str(d) else _s(p))
     assert folders.quick_writable(str(d)) is False
     # Until a real write has shown the NAS does not squash root.
-    monkeypatch.setattr(folders, "_no_squash", True)
+    folders._set_squash({"none": True})
     assert folders.quick_writable(str(d)) is True
 
 
@@ -176,7 +179,10 @@ def test_the_fix_names_the_folder_in_the_library_not_the_container_path(lib):
     assert d["label"] == 'the folder "NFL Football (2002)" in the TV library'
     assert shlex.split(d["cmd"]) == ["chmod", "-R", "a+rwX", "/mnt/user/tv/NFL Football (2002)"]
     fix = folders.fix_command([nfl])
-    assert fix.startswith("On the machine that holds the library, run: chmod")
+    # The command sits on a line of its own, with nothing after it to copy by mistake.
+    head, cmd = fix.split("\n")
+    assert head == "On the machine that holds the library, run:"
+    assert cmd == "chmod -R a+rwX '/mnt/user/tv/NFL Football (2002)'"
 
 
 def test_without_plexs_path_the_fix_is_relative_to_the_library_folder(lib):
@@ -614,7 +620,7 @@ def _entry(tmp_path, env, uid="0", chown_fails=False, dri=()):
     gpu = tmp_path / "dri"
     gpu.mkdir(exist_ok=True)
     for n in dri:
-        (gpu / n).write_text("")
+        os.symlink("/dev/null", gpu / n)       # a character device, as /dev/dri has
     return subprocess.run(
         ["sh", ENTRY, "echo", "started"], capture_output=True, text=True,
         env={"PATH": f"{bin_}:/usr/bin:/bin", "CE_OWNED_DIRS": str(data),
@@ -630,12 +636,12 @@ def test_with_no_puid_the_container_stays_root(tmp_path):
 def test_puid_and_pgid_run_the_app_as_that_user(tmp_path):
     out = _entry(tmp_path, {"PUID": "99", "PGID": "100"})
     assert "setpriv --reuid=99 --regid=100 --groups=100 echo started" in out.stdout
-    assert "chown 99:100" in out.stdout         # our own data, never the library
+    assert "chown -h 99:100" in out.stdout         # our own data, never the library
 
 
 def test_the_gpu_group_is_kept_so_hardware_encoding_still_works(tmp_path):
     out = _entry(tmp_path, {"PUID": "99", "PGID": "100"}, dri=("renderD128", "card0"))
-    gid = os.stat(tmp_path / "dri" / "renderD128").st_gid
+    gid = os.stat("/dev/null").st_gid
     want = "100" if gid == 100 else f"100,{gid}"
     assert f"--groups={want} echo started" in out.stdout
     assert "--clear-groups" not in out.stdout
@@ -747,3 +753,216 @@ def test_existing_destinations_that_hear_every_fault_get_the_folder_one(chat):
     assert health.FOLDER_BLOCKED not in notify.split_events(
         notify.get_destination(narrow)["events"])
     notify.add_folder_event()                        # once only
+
+
+# ---- squash learned from a real file, remembered, never flip-flopping ----
+
+@pytest.fixture
+def nfs_root(lib, monkeypatch):
+    """This process as root on an NFS mount, whose shows are owned by 99 with
+    mode 755. What the NAS squashes root to is decided by `made_as`."""
+    made_as = {"uid": 99, "gid": 99}
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    monkeypatch.setattr(folders, "_on_nfs", lambda p: True)
+    real_stat = os.stat
+
+    def fake_stat(p, *a, **k):
+        st = real_stat(p, *a, **k)
+        if stat.S_ISDIR(st.st_mode) and str(p).startswith(lib) and os.path.normpath(p) != lib:
+            return _St(99, 100, 0o40755)
+        return st
+    monkeypatch.setattr(os, "stat", fake_stat)
+    monkeypatch.setattr(folders, "_write_test", lambda p: _St(
+        made_as["uid"], made_as["gid"], 0o100644) if os.path.isdir(p) else None)
+    monkeypatch.setattr(folders, "_mode_allows", folders._mode_allows)
+    return made_as
+
+
+def test_the_squashed_user_is_read_from_a_file_we_made_not_assumed(nfs_root):
+    # anonuid=99: the NAS makes root's files as 99, who owns every show here.
+    folders.refresh(rescan=True)
+    assert folders.scan() == []
+    assert _notice() is None
+    assert folders._squash["uid"] == 99
+
+
+def test_a_nas_that_squashes_to_nobody_still_flags_a_folder_nobody_cannot_write(nfs_root):
+    nfs_root.update(uid=65534, gid=65534)
+    assert len(folders.scan()) > 0
+
+
+def test_what_was_learned_survives_a_restart(nfs_root, monkeypatch):
+    folders.refresh(rescan=True)
+    monkeypatch.setattr(folders, "_squash", None)          # a new process
+    monkeypatch.setattr(folders, "_squash_loaded", False)
+    monkeypatch.setattr(folders, "_write_test", lambda p: None)   # no probe this time
+    assert folders.quick_writable(os.path.join(os.path.dirname(
+        folders._root_settings()["shows"]), "tv", "NFL Football (2002)")) is True
+
+
+def test_root_that_is_not_squashed_is_believed_and_remembered(nfs_root, monkeypatch):
+    nfs_root.update(uid=0, gid=0)
+    monkeypatch.setattr(os, "access", lambda *a: True)
+    folders.refresh(rescan=True)
+    assert folders._squash == {"none": True}
+    monkeypatch.setattr(folders, "_squash", None)
+    monkeypatch.setattr(folders, "_squash_loaded", False)
+    assert folders._squash_state() == {"none": True}
+
+
+def test_the_probe_runs_even_when_the_library_folder_is_wide_open(nfs_root, monkeypatch):
+    os.chmod(os.path.join(os.path.dirname(folders._root_settings()["shows"]), "tv"), 0o777)
+    asked = []
+    real = folders._write_test
+    monkeypatch.setattr(folders, "_write_test", lambda p: (asked.append(p), real(p))[1])
+    folders.refresh(rescan=True)
+    assert asked
+
+
+def test_the_notice_does_not_flip_between_passes(nfs_root):
+    for _ in range(4):
+        folders.refresh(rescan=True)
+        assert _notice() is None
+        folders.refresh()
+        assert _notice() is None
+
+
+def test_a_folder_that_passed_the_real_test_is_not_flagged_by_stat_the_same_day(
+        tmp_path, monkeypatch):
+    d = tmp_path / "ok"
+    d.mkdir()
+    assert folders.writable(str(d)) is True
+    monkeypatch.setattr(os, "access", lambda *a: False)
+    assert folders.quick_writable(str(d)) is True
+    folders._passed[str(d)] = time.time() - 2 * 86400     # a day later it is looked at again
+    assert folders.quick_writable(str(d)) is False
+
+
+# ---- threads and the disk ----
+
+def test_a_refused_thread_does_not_leave_the_pass_marked_as_running(lib, monkeypatch):
+    stop = threading.Event()
+    busy = [threading.Thread(target=stop.wait, daemon=True) for _ in range(8)]
+    for t in busy:
+        t.start()
+    monkeypatch.setattr(folders, "_threads", list(busy))
+    assert folders._spawn(lambda: None) is False
+    folders.rescan_soon()
+    assert folders._running is False
+    stop.set()
+    for t in busy:
+        t.join()
+    monkeypatch.setattr(folders, "_threads", [])
+    folders.rescan_soon()
+    folders.settle()
+    assert json.loads(db.get_setting("folders_scan"))["at"] > 0
+
+
+def test_the_user_advice_is_remembered_and_publishing_never_reads_the_disk(lib, monkeypatch):
+    monkeypatch.setattr(folders, "_owner", lambda p: (99, 100))
+    monkeypatch.setattr(folders, "_me", lambda: (0, 0))
+    folders.refresh(rescan=True)
+
+    def boom(p):
+        raise AssertionError("the disk was read to publish")
+    monkeypatch.setattr(folders, "_owner", boom)
+    monkeypatch.setattr(os, "scandir", boom)
+    folders.publish()
+    assert "PUID=99" in folders.user_advice()
+
+
+def test_the_user_advice_looks_at_a_few_folders_not_the_whole_library(lib, monkeypatch):
+    for i in range(120):
+        os.makedirs(os.path.join(lib, "tv", f"Show {i:03d}"))
+    seen = []
+    monkeypatch.setattr(folders, "_owner", lambda p: (seen.append(p), (99, 100))[1])
+    monkeypatch.setattr(folders, "_me", lambda: (0, 0))
+    assert "PUID=99" in folders.user_advice()
+    assert len(seen) <= 50
+
+
+def test_an_answer_that_never_came_is_unknown_not_fine(tuner, lib, squash, monkeypatch):
+    squash.add(os.path.join(lib, "tv", "NFL Football (2002)"))
+    rec_id = _book_nfl(lib)
+    assert _notice()
+    monkeypatch.setattr(folders, "_timed", lambda fn, seconds: None)
+    folders.check_recording(rec_id)
+    assert _notice(), "a disk that did not answer cleared a problem it had not checked"
+
+
+def test_a_brief_failure_to_see_the_library_keeps_the_last_result(lib, squash, monkeypatch):
+    squash.add(os.path.join(lib, "tv", "NFL Football (2002)"))
+    folders.refresh(rescan=True)
+    before = db.get_setting("folders_scan")
+    assert _notice()
+    monkeypatch.setattr(folders, "library_roots", lambda: [])
+    folders.refresh(rescan=True)
+    assert db.get_setting("folders_scan") == before
+    assert _notice()
+    # And it does not try again every five seconds.
+    started = []
+    monkeypatch.setattr(folders, "rescan_soon", lambda r=True: started.append(r))
+    folders.tick(int(time.time()) + 3 * 86400)
+    assert started == []
+
+
+def test_the_fix_is_on_its_own_line_with_nothing_after_it_to_copy(lib):
+    _plex_paths()
+    fix = folders.fix_command([os.path.join(lib, "tv", "A")])
+    assert not fix.endswith(".")
+    assert fix.splitlines()[-1].startswith("chmod")
+
+
+# ---- retry says the real reason ----
+
+def test_retry_now_says_why_when_the_handover_is_held_back(tuner, lib, client, monkeypatch):
+    rid = _failed(tuner, lib)
+    db.set_setting("recorder_shows_section", "")
+    got = client.post(f"/api/tv/recordings/{rid}/retry").json()
+    assert got["outcome"] == "held"
+    assert "No Plex library is chosen" in got["message"]
+    assert "Another recording" not in got["message"]
+
+
+def test_the_handover_keeps_no_unused_current():
+    assert not hasattr(handover, "_current")
+
+
+# ---- entrypoint details ----
+
+def test_only_real_devices_lend_their_group(tmp_path):
+    out = _entry(tmp_path, {"PUID": "99", "PGID": "100"}, dri=("renderD128",))
+    gpu = tmp_path / "dri"
+    (gpu / "by-path").mkdir()                 # a folder, not a device
+    (gpu / "notes").write_text("")            # nor a file
+    import subprocess
+    env = {"PATH": f"{tmp_path / 'bin'}:/usr/bin:/bin", "CE_OWNED_DIRS": str(tmp_path / "data"),
+           "CE_DRI_DIR": str(gpu), "PUID": "99", "PGID": "100"}
+    got = subprocess.run(["sh", ENTRY, "echo", "x"], capture_output=True, text=True, env=env)
+    # The same groups as with the device alone: the folder and the file added none.
+    assert got.stdout == out.stdout.replace("started", "x")
+    mine = os.stat(gpu / "notes").st_gid
+    if mine not in (100, os.stat("/dev/null").st_gid):
+        assert f",{mine}" not in got.stdout
+
+
+def test_chown_does_not_follow_a_symlink_and_a_dangling_one_is_no_warning(tmp_path):
+    import subprocess
+    bin_ = tmp_path / "bin"
+    bin_.mkdir()
+    (bin_ / "id").write_text("#!/bin/sh\necho 0\n")
+    (bin_ / "setpriv").write_text('#!/bin/sh\necho "setpriv $*"\n')
+    # Like the real thing: following a dangling link is an error, -h is not.
+    (bin_ / "chown").write_text('#!/bin/sh\ncase "$1" in -h) echo "chown $*"; exit 0;; esac\n'
+                                'echo "no such file" >&2; exit 1\n')
+    for f in bin_.iterdir():
+        f.chmod(0o755)
+    data = tmp_path / "data"
+    data.mkdir()
+    os.symlink(tmp_path / "nowhere", data / "dangling")
+    got = subprocess.run(
+        ["sh", ENTRY, "echo", "started"], capture_output=True, text=True,
+        env={"PATH": f"{bin_}:/usr/bin:/bin", "CE_OWNED_DIRS": str(data),
+             "CE_DRI_DIR": str(tmp_path / "none"), "PUID": "99", "PGID": "100"})
+    assert "chown -h 99:100" in got.stdout
+    assert "could not give" not in got.stderr

@@ -29,6 +29,10 @@
 
 ### Notes
 
+- Over NFS, root is read as the user the NAS really squashes it to: one test
+  file says who it is made as, and that is remembered across restarts. A folder
+  that took a real write is not flagged again the same day, so the notice does
+  not flip between passes.
 - The library scan only reads owner and mode, and runs on its own thread with
   a time budget. The real write test is only for the folder a recording goes
   into.
