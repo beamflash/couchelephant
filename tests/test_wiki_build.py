@@ -172,3 +172,44 @@ def test_front_matter_in_a_page_is_replaced(tmp_path):
     wb.prepare(wiki, tmp_path / "work")
     text = (tmp_path / "work" / "docs" / "index.md").read_text()
     assert text.count("---\n") == 2 and "title: x" not in text
+
+
+def test_symlinks_are_skipped(tmp_path):
+    outside = tmp_path / "secret.md"
+    outside.write_text("# Secret\n")
+    (tmp_path / "secret.png").write_bytes(b"x")
+    wiki = tmp_path / "wiki"
+    wiki.mkdir()
+    make_wiki(wiki, BASE)
+    (wiki / "Leak.md").symlink_to(outside)
+    (wiki / "leak.png").symlink_to(tmp_path / "secret.png")
+    (wiki / "_Sidebar.md").symlink_to(outside)
+    wb.prepare(wiki, tmp_path / "work")
+    docs = tmp_path / "work" / "docs"
+    assert not (docs / "leak.md").exists()
+    assert not (docs / "leak.png").exists()
+    assert "secret" not in (tmp_path / "work" / "mkdocs.yml").read_text().lower()
+
+
+def test_is_plain_file_refuses_a_path_outside(tmp_path):
+    wiki = tmp_path / "wiki"
+    wiki.mkdir()
+    (tmp_path / "x.md").write_text("x")
+    assert not wb.is_plain_file(tmp_path / "x.md", wiki)
+    (wiki / "y.md").write_text("y")
+    assert wb.is_plain_file(wiki / "y.md", wiki)
+
+
+@pytest.mark.parametrize("name", ['Say "hi"', "What#1", "Why?", "back\\slash", "a b"])
+def test_odd_names_stay_safe(tmp_path, name):
+    import json
+    wiki = tmp_path / "wiki"
+    wiki.mkdir()
+    make_wiki(wiki, {**BASE, f"{name}.md": "# T\n", "_Sidebar.md": f"- [[Home]]\n- [[{name}]]\n"})
+    wb.prepare(wiki, tmp_path / "work")
+    page = next(p for p in wb.read_pages(wiki) if p.name == name)
+    url = page.edit_url
+    assert url.endswith("/_edit") and not any(c in url[len(wb.WIKI_URL):-6] for c in '"#?\\ ')
+    text = (tmp_path / "work" / "docs" / page.out).read_text()
+    assert text.split("\n")[1] == "edit_url: " + json.dumps(url)
+    assert f"{json.dumps(name)}: {page.out}" in (tmp_path / "work" / "mkdocs.yml").read_text()

@@ -18,11 +18,13 @@ What it changes:
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import quote
 
 WIKI_URL = "https://github.com/beamflash/couchelephant/wiki"
 SITE_URL = "https://couchelephant.app/wiki/"
@@ -61,13 +63,25 @@ class Page:
 
     @property
     def edit_url(self) -> str:
-        return f"{WIKI_URL}/{self.name}/_edit"
+        return f"{WIKI_URL}/{quote(self.name, safe='')}/_edit"
+
+
+def is_plain_file(f: Path, wiki: Path) -> bool:
+    """A real file inside the wiki folder. A link could point anywhere."""
+    if f.is_symlink() or not f.is_file():
+        return False
+    try:
+        f.resolve().relative_to(wiki.resolve())
+    except ValueError:
+        return False
+    return True
 
 
 def read_pages(wiki: Path) -> list[Page]:
     pages = []
     for p in sorted(wiki.iterdir()):
-        if p.suffix.lower() in MD_SUFFIXES and p.stem.lower() not in SPECIAL:
+        if (p.suffix.lower() in MD_SUFFIXES and p.stem.lower() not in SPECIAL
+                and is_plain_file(p, wiki)):
             pages.append(Page(p))
     if not any(p.out == "index.md" for p in pages):
         raise BuildError("The wiki has no Home page.")
@@ -168,7 +182,8 @@ def on_page_context(context, page, config, nav):
 
 
 def _front_matter(page: Page) -> str:
-    return f'---\nedit_url: "{page.edit_url}"\n---\n\n'
+    # JSON quoting is valid YAML, so no character in the address can break it.
+    return f"---\nedit_url: {json.dumps(page.edit_url)}\n---\n\n"
 
 
 def strip_front_matter(text: str) -> str:
@@ -254,7 +269,7 @@ def _yaml(v, indent=0):
     lines = []
     for n in v:
         for label, val in n.items():
-            q = '"' + label.replace('"', '\\"') + '"'
+            q = json.dumps(label)
             if isinstance(val, list):
                 lines.append(f"{pad}- {q}:")
                 lines += _yaml(val, indent + 1)
@@ -323,7 +338,8 @@ def prepare(wiki: Path, work: Path, logo: Path | None = None):
 
     footer = ""
     for f in wiki.iterdir():
-        if f.stem.lower() == "_footer" and f.suffix.lower() in MD_SUFFIXES:
+        if (f.stem.lower() == "_footer" and f.suffix.lower() in MD_SUFFIXES
+                and is_plain_file(f, wiki)):
             footer = convert_links(f.read_text(encoding="utf-8"), pages, warnings, f.name)
 
     for p in pages:
@@ -336,7 +352,7 @@ def prepare(wiki: Path, work: Path, logo: Path | None = None):
     # Pictures and files the pages use.
     for f in wiki.rglob("*"):
         rel = f.relative_to(wiki)
-        if f.is_dir() or ".git" in rel.parts:
+        if ".git" in rel.parts or not is_plain_file(f, wiki):
             continue
         if f.suffix.lower() in MD_SUFFIXES or f.name.startswith("_"):
             continue
@@ -352,7 +368,8 @@ def prepare(wiki: Path, work: Path, logo: Path | None = None):
 
     sidebar = ""
     for f in wiki.iterdir():
-        if f.stem.lower() == "_sidebar" and f.suffix.lower() in MD_SUFFIXES:
+        if (f.stem.lower() == "_sidebar" and f.suffix.lower() in MD_SUFFIXES
+                and is_plain_file(f, wiki)):
             sidebar = f.read_text(encoding="utf-8")
     nav = build_nav(sidebar, pages, warnings)
     # A page the sidebar forgot would still build, but nobody could find it.
