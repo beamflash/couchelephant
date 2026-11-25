@@ -35,6 +35,13 @@ CREATE TABLE IF NOT EXISTS channels (
     updated_at INTEGER
 );
 
+-- The channels the household starred. One list for every device, so a star
+-- on the web shows on the Apple TV.
+CREATE TABLE IF NOT EXISTS favorite_channels (
+    vcn      TEXT PRIMARY KEY,
+    added_at INTEGER
+);
+
 -- One row per programme. Sports games are episodes of a parent like
 -- "NFL Football", so grandparent_title is the league and title is the matchup.
 CREATE TABLE IF NOT EXISTS programs (

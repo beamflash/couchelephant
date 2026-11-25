@@ -14,10 +14,19 @@
   {% endif %}
 </div>
 
+{# The tabs are named filters on the same page, and stay on a search. #}
+<div class="daybar tabbar" id="gtabs" role="tablist">
+  {% for key, label in [('', 'All'), ('favorites', 'Favorites'), ('news', 'News'), ('sports', 'Sports')] %}
+    <a href="/guide?{% if key %}tab={{ key }}{% endif %}{% if q %}{{ '&' if key else '' }}q={{ q|urlencode }}{% endif %}"
+       role="tab" id="tab-{{ key or 'all' }}" class="{{ 'on' if tab == key }}"
+       aria-selected="{{ 'true' if tab == key else 'false' }}">{{ label }}</a>
+  {% endfor %}
+</div>
+
 {% if not q %}
 <div class="daybar">
   {% for d in days %}
-    <a href="/guide?day={{ d.key }}{% if channel %}&channel={{ channel }}{% endif %}{% if sports %}&sports=1{% endif %}"
+    <a href="/guide?day={{ d.key }}{% if channel %}&channel={{ channel }}{% endif %}{% if tab %}&tab={{ tab }}{% endif %}"
        class="{{ 'on' if d.key == day }}"
        {% if not loop.first %}data-ts="{{ d.ts }}" data-fmt="dayshort"{% endif %}
        >{{ d.label }}</a>
@@ -28,6 +37,7 @@
 {# One form. Search and the filter panel narrow the same result set. #}
 <form method="get" action="/guide" class="row filterbar" id="sb">
   {% if not q %}<input type="hidden" name="day" value="{{ day }}">{% endif %}
+  {% if tab %}<input type="hidden" name="tab" value="{{ tab }}">{% endif %}
   <input type="hidden" name="f" id="f_inc" value="{{ f }}">
   <input type="hidden" name="x" id="f_exc" value="{{ x }}">
 
@@ -85,6 +95,27 @@
   <div class="empty">Nothing in the guide matches "{{ q }}".</div>
 {% endif %}
 </div>
+{% if recs %}
+<h2 class="recheading" id="recresults">Recordings</h2>
+<div class="card" style="padding:0">
+  <table>
+    {% for r in recs %}
+    <tr>
+      <td class="dim" style="white-space:nowrap"><time data-ts="{{ r.begins_at }}" data-fmt="when">{{ r.begins_at|fmt }}</time></td>
+      <td><a href="/recordings"><b>{{ r.title }}</b></a>
+        {% if r.sub %}<div class="tiny dim">{{ r.sub }}</div>{% endif %}</td>
+      <td class="tiny dim">{{ r.vcn or '' }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+{% elif tab == 'favorites' and not has_favorites %}
+<div class="card empty" id="nofavorites">
+  <b>No favorite channels yet.</b><br>
+  Star a channel to add it here. On the All tab, press the star next to a
+  channel in the guide.
+</div>
 {% else %}
 {# Grid guide: channels down, time across. Both axes load more as you reach
    the edge, and stop when the data runs out. #}
@@ -94,7 +125,7 @@
   <span><i class="ce" style="opacity:.45"></i> Live broadcast</span>
 </div>
 <div class="gridwrap" id="gw" data-day="{{ day }}" data-overlay="{{ 1 if overlay else 0 }}"
-     data-sports="{{ 1 if sports else 0 }}" data-channel="{{ channel }}">
+     data-tab="{{ tab }}" data-channel="{{ channel }}">
   <div class="gridinner" id="gi">
     <div class="ghead" id="ghead">
       <div class="gcorner">Channel</div>
@@ -256,7 +287,7 @@
       CH_PAGE = 10,            // ten channels at a time
       ROW_H = cssNum('--rowh', 62);
 
-  var sports  = wrap.dataset.sports === '1',
+  var tab     = wrap.dataset.tab || '',
       channel = wrap.dataset.channel || '',
       day     = wrap.dataset.day || '';
 
@@ -312,6 +343,35 @@
         if (e.key === 'Enter') CE.Player.watch(c.vcn);
       });
     }
+    // A star keeps the channel in Favorites, for every device in the house.
+    var star = document.createElement('button');
+    star.type = 'button';
+    star.className = 'gstar' + (c.favorite ? ' on' : '');
+    star.setAttribute('aria-label', (c.favorite ? 'Remove ' : 'Add ') + c.vcn + ' ' +
+                      (c.call_sign || '') + (c.favorite ? ' from favorites' : ' to favorites'));
+    star.title = c.favorite ? 'Remove from favorites' : 'Add to favorites';
+    star.textContent = c.favorite ? '\u2605' : '\u2606';
+    star.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var on = !star.classList.contains('on');
+      fetch('/api/tv/favorites/' + (on ? 'add' : 'remove'), {
+        method: 'POST', body: new URLSearchParams({vcn: c.vcn})
+      }).then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        c.favorite = on;
+        star.classList.toggle('on', on);
+        star.textContent = on ? '\u2605' : '\u2606';
+        star.title = on ? 'Remove from favorites' : 'Add to favorites';
+        star.setAttribute('aria-label', (on ? 'Remove ' : 'Add ') + c.vcn + ' ' +
+                          (c.call_sign || '') + (on ? ' from favorites' : ' to favorites'));
+        // Taking a star off on the Favorites tab takes the channel off it.
+        if (!on && tab === 'favorites') location.reload();
+      }).catch(function (err) {
+        status.textContent = 'Could not save that favorite. ' + err.message;
+        status.style.display = 'block';
+      });
+    });
+    label.appendChild(star);
     var lane = document.createElement('div');
     lane.className = 'glane';
     row.appendChild(label); row.appendChild(lane); rowsEl.appendChild(row);
@@ -371,7 +431,7 @@
 
   function fetchWindow(s, e, off, limit) {
     var u = '/api/grid?start=' + s + '&end=' + e + '&choffset=' + off + '&chlimit=' + limit +
-            (sports ? '&sports=1' : '') + (channel ? '&channel=' + encodeURIComponent(channel) : '');
+            (tab ? '&tab=' + encodeURIComponent(tab) : '') + (channel ? '&channel=' + encodeURIComponent(channel) : '');
     return fetch(u).then(function (r) { return r.json(); });
   }
 

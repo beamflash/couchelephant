@@ -3,15 +3,6 @@
 Things agreed for a future build, not yet started. Newest at the bottom.
 When one is built, move it into `CHANGELOG.md` and delete it here.
 
-## Feature: guide search
-
-Search the guide by channel (for example "Fox"), title and description.
-Apple TV takes Siri dictation. Maybe recordings too. Brainstorm first.
-
-## Feature: guide tabs
-
-Tabs above the guide: All, Favorites, News, Sports. Brainstorm first.
-
 ## Feature: warn before a Plex library folder blocks a handover
 
 Found 2026-11-23. Plex made `tv/NFL Football (2002)` as its own user with

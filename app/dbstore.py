@@ -79,6 +79,13 @@ STORES = {
         "where": "language_override IS NOT NULL",
         "label": "Channel languages",
     },
+    "favorite_channels": {
+        # A decision of the household's, kept by channel number. The channel
+        # itself is guide data and comes back with the next sync.
+        "table": "favorite_channels", "key": ("vcn",), "pk": ("vcn",), "db": "main",
+        "cols": ("vcn", "added_at"),
+        "label": "Favorite channels",
+    },
     "destinations": {
         # `uid`, not `id` and not `name`. See rule 2. A person may well have two
         # destinations both called "Discord".

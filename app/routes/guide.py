@@ -19,7 +19,7 @@ PAGE_SIZE = 80
 
 
 def _airings_query(day: str, channel: str, sports: int, q: str, offset: int, limit: int,
-                   f: str = "", x: str = ""):
+                   f: str = "", x: str = "", tab: str = ""):
     """Rows for the guide, whether that is one day or a search.
 
     Ordering ends with a.id so paging is deterministic. Without a unique tie
@@ -27,15 +27,22 @@ def _airings_query(day: str, channel: str, sports: int, q: str, offset: int, lim
     """
     now = int(time.time())
     sql = ["""SELECT a.*, p.title, p.grandparent_title, p.summary, p.teams, p.section
-              FROM airings a JOIN programs p ON p.guid = a.program_guid"""]
+              FROM airings a JOIN programs p ON p.guid = a.program_guid
+              LEFT JOIN channels c ON c.vcn = a.channel_vcn"""]
     args = []
     if q.strip():
         like = f"%{smartfilter.like(q.strip()).lower()}%"
+        # The channel is matched by call sign, network, its name without the
+        # number, and the number whole, so "4.1" does not also find 14.1.
         sql.append("""WHERE (ulower(p.title) LIKE ? ESCAPE '\\'
                             OR ulower(p.grandparent_title) LIKE ? ESCAPE '\\'
-                            OR ulower(p.summary) LIKE ? ESCAPE '\\')
+                            OR ulower(p.summary) LIKE ? ESCAPE '\\'
+                            OR ulower(c.call_sign) LIKE ? ESCAPE '\\'
+                            OR ulower(c.network) LIKE ? ESCAPE '\\'
+                            OR ulower(SUBSTR(c.title, INSTR(c.title, ' ') + 1)) LIKE ? ESCAPE '\\'
+                            OR a.channel_vcn = ?)
                         AND a.ends_at > ?""")
-        args += [like, like, like, now]
+        args += [like] * 6 + [q.strip(), now]
         order = "ORDER BY a.begins_at, CAST(a.channel_vcn AS REAL), a.id"
     else:
         start = now
@@ -53,7 +60,7 @@ def _airings_query(day: str, channel: str, sports: int, q: str, offset: int, lim
         args.append(channel)
     if sports:
         sql.append("AND p.section = 'sports'")
-    frags, fargs = filters.build(filters.parse(f), filters.parse(x))
+    frags, fargs = filters.build(filters.parse(f) + filters.tab_tokens(tab), filters.parse(x))
     sql += frags
     args += fargs
     sql.append(f"{order} LIMIT ? OFFSET ?")
@@ -61,9 +68,39 @@ def _airings_query(day: str, channel: str, sports: int, q: str, offset: int, lim
     return db.query(" ".join(sql), tuple(args))
 
 
+def search_recordings(q: str, limit: int = 12):
+    """Recordings whose title or show matches, newest first. Title only: the
+    description of a recording is not kept."""
+    if not q.strip():
+        return []
+    like = f"%{smartfilter.like(q.strip()).lower()}%"
+    return db.query(
+        """SELECT * FROM recordings
+           WHERE kind = 'recording' AND state IN ('recording', 'finished', 'moving', 'in_plex')
+             AND (ulower(title) LIKE ? ESCAPE '\\' OR ulower(show_title) LIKE ? ESCAPE '\\')
+           ORDER BY COALESCE(begins_at, 0) DESC, id DESC LIMIT ?""", (like, like, limit))
+
+
+def favorite_vcns() -> set:
+    return {r["vcn"] for r in db.query("SELECT vcn FROM favorite_channels")}
+
+
+def _tab_channels(tab: str):
+    """SQL limiting the channel list to what a tab is about, and its args."""
+    tokens = filters.tab_tokens(tab)
+    if not tokens:
+        return "", []
+    if tab.lower() == "favorites":
+        return "AND vcn IN (SELECT vcn FROM favorite_channels)", []
+    frags, fargs = filters.build(tokens, [])
+    return ("AND vcn IN (SELECT a.channel_vcn FROM airings a JOIN programs p "
+            "ON p.guid = a.program_guid WHERE a.ends_at > ? " + " ".join(frags) + ")",
+            [int(time.time())] + fargs)
+
+
 @router.get("/api/grid")
 def api_grid(start: int, end: int, choffset: int = 0, chlimit: int = 12,
-             sports: int = 0, channel: str = "", f: str = "", x: str = ""):
+             sports: int = 0, channel: str = "", f: str = "", x: str = "", tab: str = ""):
     """A window of the guide grid: some channels, over some span of time.
 
     The client asks for more channels when it scrolls down and for more time
@@ -80,6 +117,10 @@ def api_grid(start: int, end: int, choffset: int = 0, chlimit: int = 12,
         csql.append("""AND vcn IN (SELECT a.channel_vcn FROM airings a
                                    JOIN programs p ON p.guid = a.program_guid
                                    WHERE p.section = 'sports')""")
+    tsql, targs = _tab_channels(tab)
+    if tsql:
+        csql.append(tsql)
+        cargs += targs
     chosen = [t.split(":", 1)[1] for t in filters.parse(f) if t.startswith("channel:")]
     if chosen:
         csql.append("AND vcn IN (" + ",".join("?" for _ in chosen) + ")")
@@ -95,8 +136,10 @@ def api_grid(start: int, end: int, choffset: int = 0, chlimit: int = 12,
     more_channels = len(crows) > chlimit
     crows = crows[:chlimit]
     vcns = [r["vcn"] for r in crows]
+    stars = favorite_vcns()
     channels = [{"vcn": r["vcn"], "call_sign": r["call_sign"] or "",
-                 "logo": bool(r["logo_path"])} for r in crows]
+                 "logo": bool(r["logo_path"]), "favorite": r["vcn"] in stars}
+                for r in crows]
 
     ours = {r["airing_id"] for r in db.query("SELECT airing_id FROM our_grabs")}
     # And the ones our own recorder holds, which Plex knows nothing about.
@@ -109,7 +152,7 @@ def api_grid(start: int, end: int, choffset: int = 0, chlimit: int = 12,
         "SELECT channel_vcn, begins_at FROM plex_grabs "
         "WHERE status IN ('scheduled','inprogress')")}
 
-    frags, fargs = filters.build(filters.parse(f), filters.parse(x))
+    frags, fargs = filters.build(filters.parse(f) + filters.tab_tokens(tab), filters.parse(x))
     airings = []
     if vcns:
         marks = ",".join("?" for _ in vcns)
@@ -278,9 +321,9 @@ def api_program(airing_id: str):
 
 @router.get("/partial/airings", response_class=HTMLResponse)
 def airings_partial(request: Request, day: str = "", channel: str = "", sports: int = 0,
-                    q: str = "", offset: int = 0, f: str = "", x: str = ""):
+                    q: str = "", offset: int = 0, f: str = "", x: str = "", tab: str = ""):
     """Just the rows, for infinite scroll. Empty response means the end."""
-    rows = _airings_query(day, channel, sports, q, offset, PAGE_SIZE, f, x)
+    rows = _airings_query(day, channel, sports, q, offset, PAGE_SIZE, f, x, tab)
     if not rows:
         return HTMLResponse("")
     return templates.TemplateResponse(
@@ -289,21 +332,21 @@ def airings_partial(request: Request, day: str = "", channel: str = "", sports: 
 
 @router.get("/", response_class=HTMLResponse)
 def front(request: Request, day: str = "", channel: str = "", sports: int = 0,
-          q: str = "", f: str = "", x: str = ""):
+          q: str = "", f: str = "", x: str = "", tab: str = ""):
     """The address with nothing after it opens the first tab.
 
     That is Home where CouchElephant DVR is on, and the guide where it is not.
     A link made when the guide lived here still carries its search or its day,
     and still gets the guide.
     """
-    if recorder.available() and not (day or channel or sports or q or f or x):
+    if recorder.available() and not (day or channel or sports or q or f or x or tab):
         return RedirectResponse("/home", status_code=303)
-    return guide(request, day, channel, sports, q, f, x)
+    return guide(request, day, channel, sports, q, f, x, tab)
 
 
 @router.get("/guide", response_class=HTMLResponse)
 def guide(request: Request, day: str = "", channel: str = "", sports: int = 0,
-          q: str = "", f: str = "", x: str = "", overlay: int = 0):
+          q: str = "", f: str = "", x: str = "", tab: str = "", overlay: int = 0):
     """Guide and search are the same page.
 
     A query switches the view from one day's grid to matches across the whole
@@ -311,7 +354,14 @@ def guide(request: Request, day: str = "", channel: str = "", sports: int = 0,
     tabs made you navigate to find out what is on.
     """
     now = int(time.time())
-    rows = _airings_query(day, channel, sports, q, 0, PAGE_SIZE, f, x)
+    tab = tab.lower() if tab.lower() in filters.TABS else ("sports" if sports else "")
+    rows = _airings_query(day, channel, sports, q, 0, PAGE_SIZE, f, x, tab)
+    # Recordings come after the airings, a short list, and only on a search.
+    recs = [{"id": r["id"], "title": r["show_title"] or r["title"] or "",
+             "sub": r["title"] if r["show_title"] and r["title"] != r["show_title"] else "",
+             "vcn": r["channel_vcn"], "begins_at": r["begins_at"]}
+            for r in search_recordings(q)] if q.strip() else []
+    stars = favorite_vcns()
 
     days = []
     if not q.strip():
@@ -326,7 +376,8 @@ def guide(request: Request, day: str = "", channel: str = "", sports: int = 0,
 
     return page(request, "guide.html", rows=rows, days=days,
                 day=(day or (days[0]["key"] if days else "")),
-                channel=channel, sports=sports,
+                channel=channel, sports=sports, tab=tab, recs=recs,
+                has_favorites=bool(stars),
                 q=q, logos=_logo_map(), f=f, x=x, overlay=bool(overlay) and not q,
                 nfilters=len(filters.parse(f)) + len(filters.parse(x)))
 

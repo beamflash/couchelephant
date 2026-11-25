@@ -16,8 +16,23 @@ FLAGS = [
     ("movie", "Movies", "p.section = 'movies'"),
     ("sport", "Sport", "p.section = 'sports'"),
     ("show", "TV", "p.section = 'shows'"),
+    ("favorite", "Favorite channels",
+     "a.channel_vcn IN (SELECT vcn FROM favorite_channels)"),
 ]
 FLAG_SQL = {k: sql for k, _, sql in FLAGS}
+
+
+# The guide's tabs, each said in the filter tokens above, so a tab is only a
+# named filter. "All" is no tokens. The genre string is what Plex sends.
+TABS = {
+    "favorites": ["favorite"],
+    "news": ["genre:News"],
+    "sports": ["sport"],
+}
+
+
+def tab_tokens(tab: str | None) -> list[str]:
+    return list(TABS.get((tab or "").lower(), []))
 
 
 def _clause(token):

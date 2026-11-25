@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Guide search finds channels.** Searching the guide for "Fox", a call sign
+  or "4.1" now finds what is on that channel, as well as titles, shows and
+  descriptions. Matching recordings are listed under the results in a short
+  Recordings section, on the web and in the Apple apps.
+- **Guide tabs: All, Favorites, News, Sports.** On the web guide and in the
+  iPhone, iPad and Apple TV apps. Favorites are channels you star, one list
+  for the whole house: a star beside the channel on the web, and a long press
+  on a channel in the apps. An empty Favorites tab says how to add one. The
+  server has `GET /api/tv/search`, `GET /api/tv/favorites` with `add` and
+  `remove`, and a `tab` on `/api/grid` and `/api/tv/guide`.
+
 ## 1.5.37 - 2026-11-23
 
 ### Changed
