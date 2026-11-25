@@ -21,3 +21,8 @@ services:
       # The container's clock. Guide times are stored as UTC and shown in the
       # timezone you pick in Settings, so this only affects the log.
       - TZ=UTC
+      # Run as the user Plex runs as, so CouchElephant can write the folders
+      # Plex makes in your library. On Unraid that is usually 99 and 100.
+      # Leave both out to run as root, as before.
+      # - PUID=99
+      # - PGID=100
