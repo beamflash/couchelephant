@@ -4,7 +4,7 @@ import os
 import time
 import urllib.parse
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from .. import db, filters, passes, recorder, smartfilter
@@ -16,6 +16,8 @@ router = APIRouter()
 # ---------- guide ----------
 
 PAGE_SIZE = 80
+MAX_VCNS = 500          # channels one grid request may name or ask for
+MAX_VCN_CHARS = 20
 
 
 def _airings_query(day: str, channel: str, sports: int, q: str, offset: int, limit: int,
@@ -86,8 +88,9 @@ def search_recordings(q: str, limit: int = 12, tab: str = ""):
     elif tab == "sports":
         where = "AND section = 'sports'"
     elif tab == "news":
-        where = ("AND program_guid IN (SELECT guid FROM programs "
-                 "WHERE genres LIKE '%\"News\"%')")
+        # The recording's own copy first; the guide's only where it has none.
+        where = ("AND COALESCE(NULLIF(genres, ''), (SELECT p.genres FROM programs p "
+                 "WHERE p.guid = recordings.program_guid)) LIKE '%\"News\"%'")
     return db.query(
         f"""SELECT * FROM recordings
             WHERE kind = 'recording' AND state IN ('recording', 'finished', 'moving', 'in_plex')
@@ -106,15 +109,17 @@ def _tab_channels(tab: str, since: int):
     Chosen once for the whole guide from `since` onward, not for the window on
     screen: the page asks for more channels and for more time, and a set that
     moved with the window skipped, repeated and emptied rows. A channel with
-    something matching anywhere in the loaded guide is in, in vcn order.
+    something matching in the day from `since` is in, in vcn order. A channel
+    whose only match is days away would show as an empty row, so it is out.
     """
     tokens = filters.tab_tokens(tab)
     if not tokens:
         return "", []
     frags, fargs = filters.build(tokens, [])
     return ("AND vcn IN (SELECT a.channel_vcn FROM airings a JOIN programs p "
-            "ON p.guid = a.program_guid WHERE a.ends_at > ? " + " ".join(frags) + ")",
-            [since] + fargs)
+            "ON p.guid = a.program_guid WHERE a.ends_at > ? AND a.begins_at < ? "
+            + " ".join(frags) + ")",
+            [since, since + 86400] + fargs)
 
 
 @router.get("/api/grid")
@@ -127,6 +132,10 @@ def api_grid(start: int, end: int, choffset: int = 0, chlimit: int = 12,
     when it scrolls right, so both axes page independently against the same
     endpoint.
     """
+    shown = [v for v in vcns.split(",") if v]
+    if len(shown) > MAX_VCNS or any(len(v) > MAX_VCN_CHARS for v in shown) \
+            or chlimit > MAX_VCNS:
+        raise HTTPException(400, "too many channels asked for")
     csql = ["SELECT vcn, call_sign, logo_path FROM channels WHERE vcn IS NOT NULL"]
     cargs = []
     if channel:
@@ -139,7 +148,6 @@ def api_grid(start: int, end: int, choffset: int = 0, chlimit: int = 12,
                                    WHERE p.section = 'sports')""")
     # More time for the rows already on screen names them in `vcns`: only
     # those come back, so the set cannot change under the page.
-    shown = [v for v in vcns.split(",") if v]
     if shown:
         csql.append("AND vcn IN (" + ",".join("?" for _ in shown) + ")")
         cargs += shown
@@ -157,7 +165,7 @@ def api_grid(start: int, end: int, choffset: int = 0, chlimit: int = 12,
     if dropped:
         csql.append("AND vcn NOT IN (" + ",".join("?" for _ in dropped) + ")")
         cargs += dropped
-    csql.append("ORDER BY CAST(vcn AS REAL) LIMIT ? OFFSET ?")
+    csql.append("ORDER BY CAST(vcn AS REAL), vcn LIMIT ? OFFSET ?")
     cargs += [chlimit + 1, choffset]
     crows = db.query(" ".join(csql), tuple(cargs))
 
@@ -392,7 +400,8 @@ def guide(request: Request, day: str = "", channel: str = "", sports: int = 0,
     stars = favorite_vcns()
 
     # The tabs keep the day, the search and the filters.
-    keep = {k: v for k, v in (("q", q), ("day", day), ("f", f), ("x", x)) if v}
+    keep = {k: v for k, v in (("q", q), ("day", day), ("channel", channel),
+                              ("f", f), ("x", x)) if v}
     tab_links = [(key, label, "/guide?" + urllib.parse.urlencode(
         ({"tab": key} if key else {}) | keep))
         for key, label in (("", "All"), ("favorites", "Favorites"),

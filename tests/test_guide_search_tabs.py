@@ -301,3 +301,50 @@ def test_a_form_post_decodes_an_escaped_plus_and_ampersand(client):
                     headers={"Content-Type": "application/x-www-form-urlencoded"})
     assert r.status_code == 200, r.text
     assert [c["number"] for c in r.json()["channels"]] == ["1+2&3"]
+
+
+def test_channels_sharing_a_number_page_in_a_fixed_order(client):
+    """Two channels with the same number would swap places between pages
+    without a tiebreaker."""
+    now = int(time.time())
+    with db.tx() as c:
+        for vcn in ("5", "5.0", "5.00", "6"):
+            c.execute("INSERT INTO channels (vcn, call_sign, title) VALUES (?,?,?)",
+                      (vcn, "C" + vcn, vcn))
+    pages = []
+    for off in range(4):
+        got, _, _ = _grid(client, start=now, end=now + 3600, chlimit=1, choffset=off)
+        pages += got
+    assert pages == ["5", "5.0", "5.00", "6"]
+
+
+def test_the_grid_refuses_an_oversized_request(client):
+    now = int(time.time())
+    q = {"start": now, "end": now + 3600}
+    assert client.get("/api/grid", params=dict(q, chlimit=501)).status_code == 400
+    many = ",".join(str(n) for n in range(501))
+    assert client.get("/api/grid", params=dict(q, vcns=many)).status_code == 400
+    assert client.get("/api/grid", params=dict(q, vcns="1" * 21)).status_code == 400
+    assert client.get("/api/grid", params=dict(q, chlimit=500)).status_code == 200
+    assert client.get("/api/grid", params=dict(q, vcns="1" * 20)).status_code == 200
+
+
+def test_a_tab_leaves_out_a_channel_whose_only_match_is_days_away(client):
+    now = int(time.time())
+    _news_channels(now)
+    with db.tx() as c:
+        c.execute("""INSERT INTO airings (id, program_guid, channel_vcn, channel_call_sign,
+                                          channel_title, begins_at, ends_at)
+                     VALUES ('far','nn','9.1','C','9.1',?,?)""",
+                  (now + 3 * 86400, now + 3 * 86400 + 1800))
+        c.execute("INSERT INTO channels (vcn, call_sign, title) VALUES ('9.1','C','9.1')")
+    got, _, _ = _grid(client, start=now - 900, end=now + 3600, tab="news",
+                      since=now - 900, chlimit=10)
+    assert got == ["2.1", "5.1", "7.1"]
+
+
+def test_the_tab_links_keep_the_channel(client):
+    _seed()
+    page = client.get("/guide", params={"channel": "4.1"}).text
+    assert "tab=news&amp;channel=4.1" in page or "channel=4.1&amp;tab=news" in page \
+        or "tab=news&channel=4.1" in page
