@@ -24,9 +24,10 @@
   jump: the resume went to 0:00 and Skip ad did nothing. On-demand playback
   (see Changed) fixes that at the root. As a safety net every jump (resume,
   Skip ad, the lock screen scrubber, a reload) waits until the player is ready
-  and the place exists and says "Jumping to 2:47:25..." meanwhile. Leaving
-  during that wait no longer saves 0:00 as the place, and Skip ad stays on
-  offer while a jump waits.
+  and the place exists and says "Jumping to 2:47:25..." meanwhile. A resume
+  now opens at its place from the first moment, and until it has landed the
+  app does not report its position, so leaving during the wait no longer
+  saves 0:00 as the place. Skip ad stays on offer while a jump waits.
 - **A game's team intro was offered as an ad.** A sports recording's "break"
   that starts at second 0 (the pregame intro) is no longer sent to players.
 
