@@ -647,6 +647,14 @@ MIGRATIONS = [
     # The resume position Plex last took. CE keeps playing a recording after
     # the handover, and each change is sent to Plex when the player stops.
     ("recordings", "plex_position", "REAL"),
+    # What a recording needs to be shown, kept on the row because the guide
+    # forgets a programme once it has aired. See app/recart.py.
+    ("recordings", "art", "TEXT"),
+    ("recordings", "thumb", "TEXT"),
+    ("recordings", "content_rating", "TEXT"),
+    ("recordings", "teams", "TEXT"),
+    ("recordings", "art_tried_at", "INTEGER"),
+    ("recordings", "art_fails", "INTEGER DEFAULT 0"),
     ("recordings", "ads_final", "INTEGER DEFAULT 0"),
     ("recordings", "ads_fails", "INTEGER DEFAULT 0"),
     ("recordings", "ads_tried_at", "INTEGER"),
@@ -680,6 +688,8 @@ def init() -> None:
     for k, v in DEFAULTS.items():
         conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
     _backfill_uids(conn)
+    from . import recart
+    recart.migrate(conn)
     _strip_recurring_only_prefs(conn)
     _recorder_default_to_auto(conn)
     _reslot_airing_ids(conn)

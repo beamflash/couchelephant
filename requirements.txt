@@ -2,6 +2,8 @@ fastapi==0.115.6
 uvicorn[standard]==0.34.0
 httpx==0.28.1
 jinja2==3.1.5
+# Draws the title card shown for a recording that has no picture.
+Pillow==11.0.0
 python-multipart==0.0.20
 pyjwt[crypto]==2.10.1
 # Windows has no system time zone data; the frozen builds need this copy.
