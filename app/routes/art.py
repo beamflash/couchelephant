@@ -28,9 +28,12 @@ MAX_IMAGE = 5 * 1024 * 1024
 CACHE_BYTES = 64 * 1024 * 1024
 MISS_SECONDS = 600           # a picture that failed is not asked for again for this long
 MAX_MISSES = 1024
+DOWNLOAD_SECONDS = 15.0      # most one picture download may take, start to end
 WAIT = 8.0                   # most a caller waits on someone else's fetch, or for a slot
 ALLOWED = ("image/jpeg", "image/png", "image/webp")      # never svg: it can carry script
 HEADERS = {"X-Content-Type-Options": "nosniff", "Cache-Control": "private, max-age=3600"}
+# A title card stands in until the real picture is found, so it is not kept long.
+CARD_HEADERS = {"X-Content-Type-Options": "nosniff", "Cache-Control": "private, max-age=300"}
 
 _cache: OrderedDict[str, tuple[bytes, str]] = OrderedDict()
 _bytes = [0]
@@ -122,7 +125,12 @@ def _get(key, fetch):
 def _download(url, headers=None):
     """One image, never following a redirect, never past the cap, never of a
     type that is not on the list. A missing type is a refusal."""
-    with httpx.stream("GET", url, timeout=10, headers=headers or {}) as r:
+    # httpx's timeout restarts on every read, so a server that drips a byte
+    # at a time would hold the slot for hours: a whole-download deadline too.
+    # Identity encoding, so a small gzip body cannot unpack past the cap.
+    deadline = time.monotonic() + DOWNLOAD_SECONDS
+    with httpx.stream("GET", url, timeout=10,
+                      headers={**(headers or {}), "Accept-Encoding": "identity"}) as r:
         r.raise_for_status()
         kind = (r.headers.get("content-type") or "").split(";")[0].strip().lower()
         if kind not in ALLOWED:
@@ -133,7 +141,7 @@ def _download(url, headers=None):
         body = bytearray()
         for chunk in r.iter_bytes():
             body += chunk
-            if len(body) > MAX_IMAGE:
+            if len(body) > MAX_IMAGE or time.monotonic() > deadline:
                 return None
     return (bytes(body), kind) if body else None
 
@@ -172,4 +180,4 @@ def art(key: str):
     words = _words(key)
     if not words:
         return Response(status_code=404)
-    return Response(recart.render(*words), media_type="image/png", headers=HEADERS)
+    return Response(recart.render(*words), media_type="image/png", headers=CARD_HEADERS)

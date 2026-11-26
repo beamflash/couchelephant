@@ -128,7 +128,9 @@ def _public(url) -> str:
         port = parts.port
     except ValueError:
         return ""
-    if parts.username or parts.password or port not in (None, 443) or not host:
+    # A percent sign in a host is an escape some clients decode (127.0.0.%31).
+    if (parts.username or parts.password or port not in (None, 443) or not host
+            or "%" in host):
         return ""
     try:
         ipaddress.ip_address(host)
@@ -348,6 +350,10 @@ def start(interval: float = 60) -> None:
     global _thread
     if _thread and _thread.is_alive() and not _stop.is_set():
         return
+    if _thread and _thread.is_alive():
+        # Stopped but not yet awake: let it finish, or clearing the flag would
+        # leave two threads fetching side by side.
+        _thread.join(timeout=30)
     _stop.clear()
     _thread = threading.Thread(target=_run, args=(interval,), daemon=True, name="ce-recart")
     _thread.start()

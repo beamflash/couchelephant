@@ -750,3 +750,35 @@ def test_start_runs_a_fresh_thread_when_the_old_one_died(monkeypatch):
         assert not recart._stop.is_set()
     finally:
         recart.stop()
+
+
+def test_a_dripping_download_stops_at_the_deadline(monkeypatch):
+    # A server that sends a byte at a time must not hold a fetch slot for long.
+    import itertools
+
+    from app.routes import art
+
+    class Slow:
+        headers = {"content-type": "image/png"}
+        def raise_for_status(self): pass
+        def iter_bytes(self):
+            for _ in itertools.count():
+                yield b"x"
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    clock = iter(range(0, 10_000))
+    monkeypatch.setattr(art.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(art.httpx, "stream", lambda *a, **k: Slow())
+    assert art._download("https://img.example.com/a.png") is None
+
+
+def test_a_percent_sign_in_the_host_is_not_kept():
+    from app import recart
+    assert recart._public("https://127.0.0.%31/x.jpg") == ""
+    assert recart._public("https://metadata-static.plex.tv/a.jpg")
+
+
+def test_a_title_card_is_not_cached_for_long():
+    from app.routes import art
+    assert "max-age=300" in art.CARD_HEADERS["Cache-Control"]
