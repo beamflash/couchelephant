@@ -2,6 +2,8 @@
 and never the only copy, because the guide forgets a programme once it has aired."""
 import time
 
+import pytest
+
 from app import auth, db, recart, recorder
 from tests.test_recorder import _airing
 
@@ -156,12 +158,6 @@ def test_a_picture_for_nobody_is_a_404(client):
     assert client.get("/api/tv/art/nobody").status_code == 404
 
 
-def test_a_kept_public_picture_is_sent_on_as_a_redirect(client):
-    _finished("u1", art=ART)
-    r = client.get("/api/tv/art/u1", follow_redirects=False)
-    assert r.status_code == 302 and r.headers["location"] == ART
-
-
 def test_the_library_picture_is_fetched_here_with_the_token_in_a_header(client, monkeypatch):
     from app.routes import art as art_route
     seen = []
@@ -199,8 +195,7 @@ def test_the_library_picture_is_fetched_here_with_the_token_in_a_header(client, 
     monkeypatch.setattr(art_route.httpx, "stream", fake_stream)
     db.set_setting("plex_url", "http://plex.test:32400")
     db.set_setting("plex_token", "SECRET")
-    art_route._cache.clear()
-    art_route._missed.clear()
+    art_route._reset()
     _finished("u1", guid=None)
     r = client.get("/api/tv/art/u1")
     assert r.status_code == 200 and r.content == b"JPEGDATA"
@@ -219,8 +214,7 @@ def test_a_failed_library_picture_falls_back_to_the_card_and_is_not_retried(clie
     monkeypatch.setattr(art_route.httpx, "get", boom)
     db.set_setting("plex_url", "http://plex.test:32400")
     db.set_setting("plex_token", "t")
-    art_route._cache.clear()
-    art_route._missed.clear()
+    art_route._reset()
     _finished("u1", guid=None)
     for _ in range(3):
         assert client.get("/api/tv/art/u1").headers["content-type"] == "image/png"
@@ -580,3 +574,179 @@ def test_a_booking_made_now_keeps_the_show_and_section():
                      "begins_at": 5}, "pass", "sub", pass_id=1)
     row = db.one("SELECT show_title, section FROM our_grabs WHERE airing_id = 'a2'")
     assert row and row["show_title"] == "Murder, She Wrote" and row["section"] == "sports"
+
+
+# ---------- the picture route: proxying, caps, no redirect ----------
+
+class _Resp:
+    def __init__(self, body=b"IMG", kind="image/jpeg", status=200, length=None):
+        self.body, self.status_code = body, status
+        self.headers = {} if kind is None else {"content-type": kind}
+        if length is not None:
+            self.headers["content-length"] = str(length)
+
+    def raise_for_status(self):
+        if self.status_code >= 300:
+            raise RuntimeError("status")
+
+    def iter_bytes(self):
+        step = 64 * 1024
+        for i in range(0, len(self.body), step):
+            yield self.body[i:i + step]
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+@pytest.fixture
+def art_route(monkeypatch):
+    from app.routes import art as mod
+    mod._reset()
+    return mod
+
+
+def _serve(monkeypatch, art_route, resp, calls=None):
+    def fake_stream(method, url, **kw):
+        if calls is not None:
+            calls.append(url)
+        return resp() if callable(resp) else resp
+    monkeypatch.setattr(art_route.httpx, "stream", fake_stream)
+
+
+def test_a_kept_public_picture_is_proxied_with_a_200_never_redirected(client, art_route,
+                                                                      monkeypatch):
+    _finished("u1", art=ART, guid=None)
+    calls = []
+    _serve(monkeypatch, art_route, _Resp(b"PICTURE", "image/png"), calls)
+    r = client.get("/api/tv/art/u1", follow_redirects=False)
+    assert r.status_code == 200 and r.content == b"PICTURE"
+    assert r.headers["content-type"] == "image/png"
+    assert r.headers["x-content-type-options"] == "nosniff"
+    assert calls == [ART]
+
+
+def test_a_picture_over_the_cap_is_not_served(client, art_route, monkeypatch):
+    _finished("u1", art=ART, guid=None)
+    _serve(monkeypatch, art_route, _Resp(b"x" * (art_route.MAX_IMAGE + 10)))
+    r = client.get("/api/tv/art/u1", follow_redirects=False)
+    assert r.status_code == 200 and r.headers["content-type"] == "image/png"   # the card
+
+
+def test_a_declared_length_over_the_cap_is_refused_before_reading(client, art_route, monkeypatch):
+    _finished("u1", art=ART, guid=None)
+    _serve(monkeypatch, art_route, _Resp(b"x", length=art_route.MAX_IMAGE + 1))
+    assert client.get("/api/tv/art/u1").headers["content-type"] == "image/png"
+
+
+@pytest.mark.parametrize("kind", ["image/svg+xml", "text/html", "application/octet-stream",
+                                  "image/gif", None])
+def test_only_jpeg_png_and_webp_are_proxied(client, art_route, monkeypatch, kind):
+    _finished("u1", art=ART, guid=None)
+    _serve(monkeypatch, art_route, _Resp(b"<svg/>", kind))
+    r = client.get("/api/tv/art/u1")
+    assert r.headers["content-type"] == "image/png" and r.content[:4] == b"\x89PNG"
+
+
+@pytest.mark.parametrize("url", [
+    "http://metadata-static.plex.tv/a.jpg", "https://127.0.0.1/a.jpg", "https://10.0.0.5/a.jpg",
+    "https://192.168.1.2/a.jpg", "https://169.254.169.254/latest", "https://localhost/a.jpg",
+    "https://printer.local/a.jpg", "https://[::1]/a.jpg", "https://2130706433/a.jpg",
+    "https://intranet/a.jpg", "https://user@x.example/a.jpg", "ftp://x.example/a.jpg",
+])
+def test_an_address_that_is_not_a_public_https_one_is_never_kept(url):
+    assert recart._public(url) == ""
+
+
+def test_a_public_https_address_is_kept():
+    assert recart._public(ART) == ART
+
+
+def test_a_private_address_in_a_stored_row_is_never_fetched_or_handed_out(client, art_route,
+                                                                          monkeypatch):
+    _finished("u1", art="http://10.0.0.5/a.jpg", thumb="https://localhost/b.jpg", guid=None)
+    calls = []
+    _serve(monkeypatch, art_route, _Resp(), calls)
+    r = client.get("/api/tv/art/u1", follow_redirects=False)
+    assert calls == [] and r.headers["content-type"] == "image/png"
+    assert client.get("/api/tv/home").json()["recent"][0]["art"] == "http://testserver/api/tv/art/u1"
+
+
+def test_raw_guide_art_is_checked_before_a_client_gets_it(client):
+    _finished("u1", guid="plex://episode/abc")
+    _program("plex://episode/abc", art="http://10.0.0.5/a.jpg", thumb="")
+    art = client.get("/api/tv/home").json()["recent"][0]["art"]
+    assert art == "http://testserver/api/tv/art/u1"
+
+
+def test_the_route_never_redirects(client, art_route, monkeypatch):
+    _finished("u1", art=ART, guid=None)
+    for resp in (_Resp(b"A", "image/jpeg"), _Resp(b"", "image/jpeg", status=302), _Resp(b"A", None)):
+        art_route._reset()
+        _serve(monkeypatch, art_route, resp)
+        assert client.get("/api/tv/art/u1", follow_redirects=False).status_code == 200
+
+
+def test_one_upstream_fetch_serves_everyone_asking_at_once(art_route):
+    import threading
+    gate, calls, out = threading.Event(), [], []
+
+    def fetch():
+        calls.append(1)
+        gate.wait(5)
+        return (b"X", "image/png")
+    threads = [threading.Thread(target=lambda: out.append(art_route._get("k", fetch)))
+               for _ in range(6)]
+    for t in threads:
+        t.start()
+    time.sleep(0.3)
+    gate.set()
+    for t in threads:
+        t.join(5)
+    assert len(calls) == 1 and out == [(b"X", "image/png")] * 6
+
+
+def test_a_slow_upstream_costs_a_waiting_caller_only_a_short_wait(art_route, monkeypatch):
+    import threading
+    monkeypatch.setattr(art_route, "WAIT", 0.2)
+    gate = threading.Event()
+    leader = threading.Thread(target=lambda: art_route._get("k", lambda: (gate.wait(5), None)[1]))
+    leader.start()
+    time.sleep(0.1)
+    t0 = time.monotonic()
+    assert art_route._get("k", lambda: (b"never", "image/png")) is None
+    assert time.monotonic() - t0 < 2
+    gate.set()
+    leader.join(5)
+
+
+def test_the_picture_cache_stays_inside_its_byte_budget(art_route, monkeypatch):
+    monkeypatch.setattr(art_route, "CACHE_BYTES", 1000)
+    for i in range(20):
+        art_route._get(f"k{i}", lambda: (b"x" * 300, "image/png"))
+    assert art_route._bytes[0] <= 1000
+    assert sum(len(v[0]) for v in art_route._cache.values()) == art_route._bytes[0]
+
+
+def test_old_misses_are_forgotten(art_route):
+    art_route._missed.update({f"k{i}": 1.0 for i in range(10)})
+    art_route._get("fresh", lambda: None)
+    assert "k0" not in art_route._missed and "fresh" in art_route._missed
+
+
+def test_start_runs_a_fresh_thread_when_the_old_one_died(monkeypatch):
+    import threading
+    monkeypatch.setattr(recart, "tick", lambda: None)
+    dead = threading.Thread(target=lambda: None)
+    dead.start()
+    dead.join()
+    recart._thread = dead
+    recart._stop.set()
+    recart.start(interval=0.05)
+    try:
+        assert recart._thread is not dead and recart._thread.is_alive()
+        assert not recart._stop.is_set()
+    finally:
+        recart.stop()

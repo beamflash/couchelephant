@@ -378,13 +378,13 @@ def _art(program_guid):
     if not program_guid:
         return ""
     p = db.one("SELECT thumb, art FROM programs WHERE guid = ?", (program_guid,))
-    return (p["art"] or p["thumb"] or "") if p else ""
+    return recart.best(p["art"], p["thumb"]) if p else ""
 
 
 def _art_of(request, rec):
     """The picture for a recording: its own copy first, the guide second, and
     last a title card, so a tile is never blank."""
-    return (rec["art"] or rec["thumb"] or _art(rec["program_guid"])
+    return (recart.best(rec["art"], rec["thumb"]) or _art(rec["program_guid"])
             or (_art_on_now(rec["channel_vcn"]) if rec["kind"] == "live" else "")
             or recart.art_url(_base(request), rec["uid"]))
 
@@ -396,7 +396,7 @@ def _art_on_now(vcn):
     p = db.one("""SELECT p.art, p.thumb FROM airings a JOIN programs p ON p.guid = a.program_guid
                   WHERE a.channel_vcn = ? AND a.begins_at <= ? AND a.ends_at > ?
                   ORDER BY a.begins_at DESC LIMIT 1""", (vcn, now, now))
-    return (p["art"] or p["thumb"] or "") if p else ""
+    return recart.best(p["art"], p["thumb"]) if p else ""
 
 
 def _channel_name(vcn):
@@ -565,7 +565,7 @@ def _on_now(request, now):
         big, small = _names(r["grandparent_title"], r["title"], r["section"] == "sports")
         out.append({"channel": _channel(request, vcn, r["channel_title"]),
                     "title": big, "subtitle": small,
-                    "art": r["art"] or r["thumb"] or "",
+                    "art": recart.best(r["art"], r["thumb"]),
                     "begins_at": r["begins_at"], "ends_at": r["ends_at"]})
     return out
 
@@ -799,7 +799,7 @@ def tv_program(request: Request, airing_id: str):
     series = a["grandparent_title"] or ""
     return {"ok": True, "program": {
         "id": a["id"], "title": big, "subtitle": small,
-        "summary": a["summary"] or "", "art": a["art"] or a["thumb"] or "",
+        "summary": a["summary"] or "", "art": recart.best(a["art"], a["thumb"]),
         "channel": _channel(request, a["channel_vcn"], a["channel_title"]),
         "begins_at": a["begins_at"], "ends_at": a["ends_at"],
         "on_now": a["begins_at"] <= now < a["ends_at"],

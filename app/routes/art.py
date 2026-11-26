@@ -1,28 +1,51 @@
 """A recording's picture, for a client that holds the key.
 
-Behind the same sign-in as every other /api/tv call. It answers with, in
-order: the public picture the recording kept (as a redirect), the Plex
-library's own picture fetched here with the token in a header (the token never
-leaves this server), or a drawn title card, so there is always an image.
+Behind the same sign-in as every other /api/tv call. It answers with an image
+and never a redirect (the apps refuse to follow one to another host): the kept
+public picture fetched here, or the Plex library's own picture fetched here with
+the token in a header (the token never leaves this server), or a drawn title
+card, so there is always an image.
+
+Fetches are bounded: one upstream fetch per picture however many ask, a few
+at a time overall, a short wait for anyone who has to share one, a size cap, an
+allow-list of image types, and a cache with a byte budget.
 """
+import logging
 import threading
 import time
 from collections import OrderedDict
 
 import httpx
 from fastapi import APIRouter
-from fastapi.responses import RedirectResponse, Response
+from fastapi.responses import Response
 
 from .. import db, recart
 
 router = APIRouter()
+log = logging.getLogger("couchelephant.art")
 
 MAX_IMAGE = 5 * 1024 * 1024
-CACHE_ENTRIES = 64
-MISS_SECONDS = 600                # a library picture that failed is not asked again for this long
+CACHE_BYTES = 64 * 1024 * 1024
+MISS_SECONDS = 600           # a picture that failed is not asked for again for this long
+MAX_MISSES = 1024
+WAIT = 8.0                   # most a caller waits on someone else's fetch, or for a slot
+ALLOWED = ("image/jpeg", "image/png", "image/webp")      # never svg: it can carry script
+HEADERS = {"X-Content-Type-Options": "nosniff", "Cache-Control": "private, max-age=3600"}
+
 _cache: OrderedDict[str, tuple[bytes, str]] = OrderedDict()
+_bytes = [0]
 _missed: dict[str, float] = {}
+_inflight: dict[str, threading.Event] = {}
 _lock = threading.Lock()
+_gate = threading.Semaphore(4)
+
+
+def _reset() -> None:
+    with _lock:
+        _cache.clear()
+        _missed.clear()
+        _inflight.clear()
+        _bytes[0] = 0
 
 
 def _words(key):
@@ -40,62 +63,113 @@ def _words(key):
     return None
 
 
+def _store(key, got) -> None:
+    """Keep a result, or remember a miss. Called with the lock held."""
+    now = time.time()
+    if got is None:
+        for k in [k for k, t in _missed.items() if t <= now]:
+            del _missed[k]
+        while len(_missed) >= MAX_MISSES:
+            _missed.pop(next(iter(_missed)))
+        _missed[key] = now + MISS_SECONDS
+        return
+    if len(got[0]) > CACHE_BYTES:
+        return
+    if key in _cache:
+        _bytes[0] -= len(_cache.pop(key)[0])
+    _cache[key] = got
+    _bytes[0] += len(got[0])
+    while _bytes[0] > CACHE_BYTES and _cache:
+        _bytes[0] -= len(_cache.popitem(last=False)[1][0])
+
+
+def _get(key, fetch):
+    """The picture for `key`, from the cache, or by `fetch()`, once for
+    everyone asking. None means there is none to be had right now."""
+    with _lock:
+        if key in _cache:
+            _cache.move_to_end(key)
+            return _cache[key]
+        if _missed.get(key, 0) > time.time():
+            return None
+        waiting = _inflight.get(key)
+        if waiting is None:
+            _inflight[key] = done = threading.Event()
+    if waiting is not None:                      # someone is already fetching it
+        waiting.wait(WAIT)
+        with _lock:
+            return _cache.get(key)
+    got, tried = None, False
+    try:
+        if _gate.acquire(timeout=WAIT):
+            tried = True
+            try:
+                got = fetch()
+            finally:
+                _gate.release()
+    except Exception as e:
+        log.info("picture fetch failed: %s", type(e).__name__)
+        got = None
+    finally:
+        with _lock:
+            if tried:
+                _store(key, got)
+            _inflight.pop(key, None)
+        done.set()
+    return got
+
+
+def _download(url, headers=None):
+    """One image, never following a redirect, never past the cap, never of a
+    type that is not on the list. A missing type is a refusal."""
+    with httpx.stream("GET", url, timeout=10, headers=headers or {}) as r:
+        r.raise_for_status()
+        kind = (r.headers.get("content-type") or "").split(";")[0].strip().lower()
+        if kind not in ALLOWED:
+            return None
+        declared = r.headers.get("content-length")
+        if declared and declared.isdigit() and int(declared) > MAX_IMAGE:
+            return None
+        body = bytearray()
+        for chunk in r.iter_bytes():
+            body += chunk
+            if len(body) > MAX_IMAGE:
+                return None
+    return (bytes(body), kind) if body else None
+
+
 def _library_picture(rec):
-    """The library item's picture, fetched with the token in a header."""
     key = rec["plex_rating_key"]
     base, token = db.get_setting("plex_url"), db.get_setting("plex_token")
     if not (key and base and token):
         return None
-    with _lock:
-        if _missed.get(key, 0) > time.time():
-            return None
-        if key in _cache:
-            _cache.move_to_end(key)
-            return _cache[key]
-    got = None
-    try:
+    base = base.rstrip("/")
+
+    def fetch():
         h = {"X-Plex-Token": token}
-        meta = httpx.get(f"{base.rstrip('/')}/library/metadata/{key}", timeout=10,
+        meta = httpx.get(f"{base}/library/metadata/{key}", timeout=10,
                          headers={**h, "Accept": "application/json"})
         meta.raise_for_status()
         item = (meta.json().get("MediaContainer", {}).get("Metadata") or [{}])[0]
         path = item.get("thumb") or item.get("grandparentThumb") or item.get("art") or ""
-        if path.startswith("/"):                 # only this server's own paths
-            with httpx.stream("GET", base.rstrip("/") + path, timeout=10, headers=h) as r:
-                r.raise_for_status()
-                kind = r.headers.get("content-type", "image/jpeg").split(";")[0]
-                body = b""
-                for chunk in r.iter_bytes():
-                    body += chunk
-                    if len(body) > MAX_IMAGE:
-                        raise ValueError("picture too large")
-            if kind.startswith("image/") and body:
-                got = (body, kind)
-    except Exception:
-        got = None
-    with _lock:
-        if got:
-            _cache[key] = got
-            while len(_cache) > CACHE_ENTRIES:
-                _cache.popitem(last=False)
-        else:
-            _missed[key] = time.time() + MISS_SECONDS
-    return got
+        # Only this server's own paths, so the token never goes anywhere else.
+        return _download(base + path, h) if path.startswith("/") else None
+    return _get("lib:" + key, fetch)
+
+
+def _kept_picture(url):
+    return _get("pub:" + url, lambda: _download(url))
 
 
 @router.get("/api/tv/art/{key}")
 def art(key: str):
     rec = db.one("SELECT * FROM recordings WHERE uid = ?", (key,))
     if rec:
-        kept = recart._public(rec["art"] or rec["thumb"])
-        if kept:
-            return RedirectResponse(kept, status_code=302)
-        pic = _library_picture(rec)
+        kept = recart.best(rec["art"], rec["thumb"])
+        pic = (kept and _kept_picture(kept)) or _library_picture(rec)
         if pic:
-            return Response(pic[0], media_type=pic[1],
-                            headers={"Cache-Control": "private, max-age=3600"})
+            return Response(pic[0], media_type=pic[1], headers=HEADERS)
     words = _words(key)
     if not words:
         return Response(status_code=404)
-    return Response(recart.render(*words), media_type="image/png",
-                    headers={"Cache-Control": "private, max-age=3600"})
+    return Response(recart.render(*words), media_type="image/png", headers=HEADERS)

@@ -13,12 +13,14 @@
 - Recordings made before this are filled in once at start from whatever the
   guide still has. For the rest, CouchElephant asks Plex in the background for
   the public picture address, a couple a minute at most, and remembers a miss
-  so it does not ask again every minute. An address that carries a Plex token
-  is never kept or handed to a client.
+  so it does not ask again every minute. An address is kept and handed out only if it is
+  https on a public host name: no IP addresses, localhost or local names.
 - When no public picture exists, a recording's picture is asked for at
   `/api/tv/art/{id}`, behind the same sign-in as the rest of the TV API. It
-  sends the kept public picture on, or fetches the Plex library's own picture
-  here with the token kept on the server, or draws a title card with the name
+  fetches the kept public picture here (never a redirect, 5 MB cap,
+  JPEG, PNG or WebP only), or fetches the Plex library's own picture
+  here with the token kept on the server (one fetch per picture however many
+  ask, a few at a time, a 64 MB cache), or draws a title card with the name
   on the CouchElephant background. There is no unauthenticated picture address.
 - The background work for pictures and titles runs on its own thread with a
   10 second limit on every call to Plex and a time budget per pass, so a slow

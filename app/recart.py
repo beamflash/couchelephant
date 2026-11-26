@@ -105,16 +105,47 @@ def refresh_from_guide() -> None:
 
 # ---------- fetching it again ----------
 
+_LOCAL_SUFFIXES = (".local", ".localhost", ".internal", ".lan", ".home", ".home.arpa",
+                   ".corp", ".intranet", ".private")
+
+
 def _public(url) -> str:
-    """An address a client may be handed: absolute, https, and carrying no
-    credential. Anything else is dropped, never kept."""
+    """An address a client may be handed, or have this server fetch: https
+    only, a real public host name (no IP literal of any kind, no localhost, no
+    local-network name), no credential, no odd port. The host is judged as
+    written; nothing is resolved. Anything else is dropped, never kept."""
+    import ipaddress
+    from urllib.parse import urlsplit
     u = (url or "").strip()
-    if len(u) > MAX_URL or not u.startswith(("https://", "http://")):
+    if len(u) > MAX_URL or not u.lower().startswith("https://"):
         return ""
     low = u.lower()
-    if "token" in low or "x-plex" in low or "@" in u.split("//", 1)[1].split("/", 1)[0]:
+    if "token" in low or "x-plex" in low:
+        return ""
+    try:
+        parts = urlsplit(u)
+        host = (parts.hostname or "").rstrip(".").lower()
+        port = parts.port
+    except ValueError:
+        return ""
+    if parts.username or parts.password or port not in (None, 443) or not host:
+        return ""
+    try:
+        ipaddress.ip_address(host)
+        return ""                                # an IP literal, whatever its range
+    except ValueError:
+        pass
+    labels = host.split(".")
+    if (len(labels) < 2 or host == "localhost" or host.endswith(_LOCAL_SUFFIXES)
+            or labels[-1].isdigit() or any(not label for label in labels)
+            or labels[-1].startswith("0x")):
         return ""
     return u
+
+
+def best(*urls) -> str:
+    """The first of these that is fit to hand out."""
+    return next((u for u in (_public(x) for x in urls) if u), "")
 
 
 def discover(guid: str, token: str) -> dict:
@@ -310,9 +341,12 @@ def _run(interval) -> None:
         _stop.wait(interval)
 
 
-def start(interval: float = 60, first_wait: bool = True) -> None:
+def start(interval: float = 60) -> None:
+    """Start the thread, or start a fresh one if the old one has died. How long
+    a pass can run is bounded by the 10 second timeout on every call and the
+    pass's own time budget, so a hung fetch ends rather than holding the thread."""
     global _thread
-    if _thread and _thread.is_alive():
+    if _thread and _thread.is_alive() and not _stop.is_set():
         return
     _stop.clear()
     _thread = threading.Thread(target=_run, args=(interval,), daemon=True, name="ce-recart")
