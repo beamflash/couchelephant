@@ -101,6 +101,7 @@ FAULTS = [
     (health.BOOKING_REPAIR_FAILED, "A booking could not be repaired"),
     (health.EXPECTATION_MISSED, "The guide passed a date without the series"),
     (health.FOLDER_BLOCKED, "A Plex library folder blocks a recording"),
+    (health.RECORDING_ART, "A recording could not be given its details"),
 ]
 
 PASS_BOOKED = "pass_booked"
@@ -232,6 +233,22 @@ def split_events(events) -> list[str]:
     return [e for e in (events or "").split(",") if e]
 
 
+def add_art_event() -> None:
+    """Once, the same way for the recording-details fault: a destination that
+    heard every other fault hears this one too."""
+    if db.get_setting("mig_art_event"):
+        return
+    others = {c for c, _ in FAULTS} - {health.RECORDING_ART}
+    for d in db.query("SELECT id, events FROM destinations"):
+        have = set(split_events(d["events"]))
+        if others <= have and health.RECORDING_ART not in have:
+            with db.tx() as c:
+                c.execute("UPDATE destinations SET events = ? WHERE id = ?",
+                          (",".join(split_events(d["events"]) + [health.RECORDING_ART]),
+                           d["id"]))
+    db.set_setting("mig_art_event", "1")
+
+
 def add_folder_event() -> None:
     """Once: a destination that was set to hear every fault is set to hear the
     folder one too. Destinations store their events as a list, so a fault
@@ -239,7 +256,7 @@ def add_folder_event() -> None:
     unticked chose a narrower list and is left as it is."""
     if db.get_setting("mig_folder_event"):
         return
-    others = {c for c, _ in FAULTS} - {health.FOLDER_BLOCKED}
+    others = {c for c, _ in FAULTS} - {health.FOLDER_BLOCKED, health.RECORDING_ART}
     for d in db.query("SELECT id, events FROM destinations"):
         have = set(split_events(d["events"]))
         if others <= have and health.FOLDER_BLOCKED not in have:

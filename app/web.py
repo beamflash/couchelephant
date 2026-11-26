@@ -322,6 +322,7 @@ async def _server_error(request: Request, exc: Exception):
 async def startup():
     db.init()
     notify.add_folder_event()
+    notify.add_art_event()
     # A test drives sync itself and asserts on the result. A loop waking up
     # underneath it rewrites the database mid-assertion, which is a flake that
     # takes an afternoon to explain.
