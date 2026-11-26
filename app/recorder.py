@@ -268,6 +268,11 @@ def convert_args(enc: str, out_dir: str, interlaced: bool = False, *,
         args += ["-vf", "bwdif=mode=send_frame:deint=interlaced",
                  "-c:v", "libx264", "-preset", "veryfast", "-crf", "21",
                  "-maxrate", "8M", "-bufsize", "16M", "-pix_fmt", "yuv420p"]
+    if src:
+        # Picture times at the same fine grid in every run: left alone the
+        # encoder's clock is the frame rate's, and a 29.97 picture rounds
+        # differently depending on where the run began.
+        args += ["-enc_time_base:v", "1/90000"]
     args += ["-force_key_frames", keyframes,
              "-c:a", "aac", "-ac", "2", "-b:a", "160k"]
     if src:

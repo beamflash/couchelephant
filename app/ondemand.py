@@ -21,6 +21,7 @@ Every run puts segment N at the same time stamps (-ss with
 The segments are kept in rec_dir/od, apart from the viewing copy.
 """
 import ctypes
+import itertools
 import logging
 import os
 import queue
@@ -57,8 +58,9 @@ LOG_CAP = 200_000
 
 _SEGMENT = re.compile(r"seg[0-9]{5}\.ts")
 _CHIP = re.compile(r"vaapi|/dev/dri|hwupload|libva|device creation", re.I)
-# After a chip failure the chip is tried again after this long.
-CHIP_RETRY = 600
+# What is written in od/encoder with the encoder's name. Raised when the way
+# segments are made changes, so folders made the old way are cleared.
+ENC_VERSION = 2
 # A source whose first picture starts this long after the file does.
 TS_ROOM = recorder.TS_ROOM
 
@@ -132,7 +134,10 @@ def start_offset(rec, src: str) -> float:
         v0 = max(0.0, get("-select_streams", "v:0", "-show_entries", "stream=start_time",
                           "-of", "default=nw=1:nk=1")
                  - get("-show_entries", "format=start_time", "-of", "default=nw=1:nk=1"))
-    except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+    except (ValueError, IndexError):
+        # "N/A": the file does not say. Settled as 0, and not asked again.
+        v0 = 0.0
+    except (OSError, subprocess.SubprocessError):
         return 0.0
     os.makedirs(od_dir(rec["uid"]), exist_ok=True)
     with open(mark, "w") as f:
@@ -163,10 +168,13 @@ def playlist(rec, start0: bool = False, at: float | None = None) -> str | None:
 # ---------- runs ----------
 
 class _Run:
-    def __init__(self, uid, proc, start, enc, slot, log_path, log_from):
+    def __init__(self, uid, proc, start, enc, slot, log_path, log_from, seq=0, src=""):
         self.uid, self.proc, self.start, self.enc = uid, proc, start, enc
         self.slot, self.log_path, self.log_from = slot, log_path, log_from
-        self.playlist = f"ff-{slot}.m3u8"
+        self.src = src
+        # Its own playlist, named for this run alone: a stopped run's slot is
+        # reused at once, and two ffmpegs must never write one file.
+        self.playlist = f"ff-{seq}.m3u8"
         self.spawned = time.time()
         self.last_ask = self.spawned
         self.asks: list[tuple[float, int]] = []
@@ -226,7 +234,9 @@ _guard = threading.Lock()
 _failed: dict[str, tuple[float, str]] = {}
 _laced: dict[str, bool] = {}
 _down = False
-_chip_off_at = 0.0
+_seq = itertools.count(1)
+# Sources the graphics chip failed on: they are made in software from then on.
+_chip_bad: set[str] = set()
 _watcher: threading.Thread | None = None
 
 
@@ -249,6 +259,7 @@ def allow():
     global _down
     _down = False
     _failed.clear()
+    _chip_bad.clear()
 
 
 try:
@@ -307,6 +318,14 @@ def _kill(run: _Run):
             run.proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
             pass
+    _forget_playlist(run)
+
+
+def _forget_playlist(run: _Run):
+    try:
+        os.remove(os.path.join(od_dir(run.uid), run.playlist))
+    except OSError:
+        pass
 
 
 def _laced_of(src: str) -> bool:
@@ -332,57 +351,73 @@ def _spawn(rec, n: int, enc: str, laced: bool, src: str, v0: float) -> _Run:
     used = {r.slot for r in _runs.get(uid, []) if not r.dead}
     slot = next(i for i in range(MAX_RUNS + 2) if i not in used)
     path = _open_log(uid, slot)
-    try:
-        os.remove(os.path.join(od_dir(uid), f"ff-{slot}.m3u8"))
-    except OSError:
-        pass
+    seq = next(_seq)
     with open(path, "ab") as logf:
         logf.write(f"--- start at segment {n} ---\n".encode())
         logf.flush()
         log_from = logf.tell()
         proc = _popen(recorder.convert_args(enc, od_dir(uid), laced, src=src, start_seg=n, v0=v0,
-                                            playlist=f"ff-{slot}.m3u8"),
+                                            playlist=f"ff-{seq}.m3u8"),
                       stdin=subprocess.DEVNULL, stdout=logf, stderr=logf)
-    run = _Run(uid, proc, n, enc, slot, path, log_from)
+    run = _Run(uid, proc, n, enc, slot, path, log_from, seq, src)
     _runs.setdefault(uid, []).append(run)
     _start_watcher()
     return run
 
 
-def _ensure_encoder(uid: str, enc: str):
-    """One encoder per recording's od/: when it changed (the graphics chip
-    failed and software took over) the other's segments are cleared. Its runs
-    are stopped first, and only then is anything deleted."""
-    mark = os.path.join(od_dir(uid), "encoder")
+def _marker(uid: str) -> str:
+    try:
+        with open(os.path.join(od_dir(uid), "encoder")) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
 
-    def was() -> str:
-        try:
-            with open(mark) as f:
-                return f.read().strip()
-        except OSError:
-            return ""
-    if was() == enc:
-        return
+
+def _has_segments(uid: str) -> bool:
+    try:
+        return any(_SEGMENT.fullmatch(n) for n in os.listdir(od_dir(uid)))
+    except OSError:
+        return False
+
+
+def _choose_encoder(uid: str, src: str) -> str:
+    """The encoder for this recording. It is one per recording: once its od/
+    has segments made by one, that one is kept (mixing two in one stream shows
+    as a jump at every join). A folder with no segments, or made the old way,
+    takes what the machine would use now. Only a chip failure on this very
+    source changes a recording that has segments."""
+    want = "software" if src in _chip_bad else recorder.encoder()
+    name, _, ver = _marker(uid).partition("/")
+    if name in ("vaapi", "software") and ver == str(ENC_VERSION) and _has_segments(uid):
+        if name == "vaapi" and src in _chip_bad:
+            _switch_encoder(uid, f"vaapi/{ENC_VERSION}", "software")
+            return "software"
+        return name
+    if _marker(uid) != f"{want}/{ENC_VERSION}":
+        _switch_encoder(uid, _marker(uid), want)
+    return want
+
+
+def _switch_encoder(uid: str, old: str, new: str):
+    """Stops the recording's runs, clears what they made and names the new
+    encoder, all under the recording's lock and only when the marker still says
+    `old` (a second request that read the same marker finds it changed and does
+    nothing)."""
     with _lock(uid):
-        old = was()
-        if old == enc:
+        if _marker(uid) != old:
             return
-        victims = _runs.pop(uid, []) if old else []
-        for r in victims:
+        for r in _runs.pop(uid, []):
             r.dead = True
-    for v in victims:
-        _kill(v)
-    with _lock(uid):
-        if old:
-            try:
-                for name in os.listdir(od_dir(uid)):
-                    if _SEGMENT.fullmatch(name):
-                        os.remove(os.path.join(od_dir(uid), name))
-            except OSError:
-                pass
+            _kill(r)
+        try:
+            for name in os.listdir(od_dir(uid)):
+                if _SEGMENT.fullmatch(name) or name.startswith("ff-"):
+                    os.remove(os.path.join(od_dir(uid), name))
+        except OSError:
+            pass
         os.makedirs(od_dir(uid), exist_ok=True)
-        with open(mark, "w") as f:
-            f.write(enc)
+        with open(os.path.join(od_dir(uid), "encoder"), "w") as f:
+            f.write(f"{new}/{ENC_VERSION}")
 
 
 def _cover(uid: str, n: int) -> _Run | None:
@@ -434,32 +469,36 @@ def _fail(uid: str, why: str):
 
 def _assign(t: Ticket) -> bool:
     """Gives the ticket the run that covers it, starting one if there is none.
-    False when nothing can be started."""
-    victims: list[_Run] = []
+    False when nothing can be started. A run that has to go for the new one
+    is stopped before it starts."""
     t.run = None
-    with _lock(t.uid):
-        run = _cover(t.uid, t.n)
-        if run is None:
-            if _down:
-                return False
-            live = [r for r in _runs.get(t.uid, []) if not r.dead]
-            while len(live) >= MAX_RUNS:
-                old = min(live, key=lambda r: r.last_ask)
-                live.remove(old)
-                old.dead = True
-                _runs[t.uid].remove(old)
-                victims.append(old)
-            try:
-                run = _spawn(t.rec, t.n, t.enc, t.laced, t.src, t.v0)
-            except OSError as e:
-                _fail(t.uid, f"ffmpeg did not start: {e}")
-                run = None
-        if run is not None:
-            _touch(run, t.n)
-            t.run = run
-    for v in victims:
-        _kill(v)
-    return t.run is not None
+    for _ in range(MAX_RUNS + 2):
+        victims: list[_Run] = []
+        with _lock(t.uid):
+            run = _cover(t.uid, t.n)
+            if run is None:
+                if _down:
+                    return False
+                live = [r for r in _runs.get(t.uid, []) if not r.dead]
+                while len(live) >= MAX_RUNS:
+                    old = min(live, key=lambda r: r.last_ask)
+                    live.remove(old)
+                    old.dead = True
+                    _runs[t.uid].remove(old)
+                    victims.append(old)
+                if not victims:
+                    try:
+                        run = _spawn(t.rec, t.n, t.enc, t.laced, t.src, t.v0)
+                    except OSError as e:
+                        _fail(t.uid, f"ffmpeg did not start: {e}")
+                        return False
+            if run is not None:
+                _touch(run, t.n)
+                t.run = run
+                return True
+        for v in victims:
+            _kill(v)
+    return False
 
 
 def begin(rec, name: str, wait: float | None = None) -> Ticket | None:
@@ -491,14 +530,8 @@ def begin(rec, name: str, wait: float | None = None) -> Ticket | None:
 
 def _prepare(t: Ticket):
     """The encoder for this ticket, and what must be known to use it."""
-    global _chip_off_at
-    if _chip_off_at and time.time() - _chip_off_at > CHIP_RETRY and recorder._vaapi is False:
-        # A failure of the chip is not for ever: it is tried again.
-        recorder._vaapi = None
-        _chip_off_at = 0.0
-    t.enc = recorder.encoder()
+    t.enc = _choose_encoder(t.uid, t.src)
     t.laced = _laced_of(t.src) if t.enc == "vaapi" else False
-    _ensure_encoder(t.uid, t.enc)
 
 
 READY, WAIT, FAIL, RESTART = "ready", "wait", "fail", "restart"
@@ -522,10 +555,9 @@ def _handle_exit(run: _Run) -> str:
         if run.enc == "vaapi" and _CHIP.search(said):
             # The graphics chip failed on a real file: software from now on,
             # as the whole-copy path does.
-            log.warning("hardware encoding failed for %s, using software: %s", run.uid, said)
-            global _chip_off_at
-            recorder._vaapi = False
-            _chip_off_at = time.time()
+            log.warning("hardware encoding failed for %s, using software for it: %s",
+                        run.uid, said)
+            _chip_bad.add(run.src)
             run.outcome = "chip"
         else:
             log.warning("ffmpeg failed for %s at segment %d: %s", run.uid, run.start, said)
@@ -614,6 +646,7 @@ def _watch():
                         continue
                     if r.proc.poll() is not None:
                         _handle_exit(r)
+                        _forget_playlist(r)
                         continue
                     if now - r.last_ask > IDLE_SECONDS or _met(r, _runs.get(uid, [])):
                         r.dead = True

@@ -94,6 +94,8 @@ def test_a_segment_left_by_an_earlier_run_is_not_this_runs_progress(od, monkeypa
     rec, logf = od
     monkeypatch.setenv("FAKE_FFMPEG_DELAY", "0.5")
     # Segments 101 to 130 are on disk from a run that is gone.
+    with open(os.path.join(ondemand.od_dir(rec["uid"]), "encoder"), "w") as f:
+        f.write(f"software/{ondemand.ENC_VERSION}")
     for n in range(101, 131):
         p = os.path.join(ondemand.od_dir(rec["uid"]), f"seg{n:05d}.ts")
         with open(p, "wb") as f:
@@ -200,15 +202,16 @@ def test_a_failure_that_is_not_the_chips_leaves_the_chip_on(od, monkeypatch):
     assert time.time() - t0 < 2 and len(_starts(logf)) == 1
 
 
-def test_a_chip_failure_switches_to_software_and_the_segment_still_comes(od, monkeypatch):
+def test_a_chip_failure_switches_that_recording_to_software_and_the_segment_still_comes(od, monkeypatch):
     rec, logf = od
     db.set_setting("recorder_encoder", "auto")
     monkeypatch.setattr(recorder, "_vaapi", True)
     monkeypatch.setenv("FAKE_FFMPEG_FAIL_VAAPI", "1")
     assert TestClient(app).get(f"/hls/{rec['uid']}/seg00100.ts").status_code == 200
-    assert recorder._vaapi is False
-    with open(os.path.join(ondemand.od_dir(rec["uid"]), "encoder")) as f:
-        assert f.read().strip() == "software"
+    # This source is made in software from now on. Other recordings, and the
+    # live path, are not told the chip is gone.
+    assert rec["plex_path"] in ondemand._chip_bad and recorder._vaapi is True
+    assert ondemand._marker(rec["uid"]) == f"software/{ondemand.ENC_VERSION}"
     # Said in ffmpeg.log, and kept, not cut, by the next start.
     with open(os.path.join(ondemand.od_dir(rec["uid"]), "ffmpeg-0.log")) as f:
         assert "VAAPI" in f.read()
@@ -309,32 +312,6 @@ def test_a_run_wants_what_its_furthest_viewer_wants():
     assert run.want == 40
 
 
-def test_only_the_chips_own_words_turn_it_off_and_it_comes_back(od, monkeypatch):
-    rec, _ = od
-    assert not ondemand._CHIP.search("Cannot allocate memory for the hardware buffer")
-    assert ondemand._CHIP.search("Failed to initialise VAAPI connection")
-    db.set_setting("recorder_encoder", "auto")
-    monkeypatch.setattr(recorder, "_vaapi", False)
-    monkeypatch.setattr(recorder, "_vaapi_works", lambda: recorder._vaapi is not False)
-    monkeypatch.setattr(ondemand, "_chip_off_at", time.time() - ondemand.CHIP_RETRY - 5)
-    t = ondemand.Ticket(rec, "seg00100.ts", None)
-    t.src = rec["plex_path"]
-    recorder._vaapi = False
-    ondemand._prepare(t)
-    assert recorder._vaapi is None and ondemand._chip_off_at == 0.0
-
-
-def test_a_changed_encoder_stops_its_runs_before_deleting(od, monkeypatch):
-    rec, _ = od
-    monkeypatch.setenv("FAKE_FFMPEG_DELAY", "0.05")
-    assert TestClient(app).get(f"/hls/{rec['uid']}/seg00100.ts").status_code == 200
-    run = ondemand._runs[rec["uid"]][0]
-    ondemand._ensure_encoder(rec["uid"], "vaapi")
-    assert run.dead and run.proc.poll() is not None
-    assert not ondemand._runs.get(rec["uid"])
-    assert not os.path.exists(os.path.join(ondemand.od_dir(rec["uid"]), "seg00100.ts"))
-
-
 def test_a_resume_point_goes_in_the_playlist(od):
     rec, _ = od
     c = TestClient(app)
@@ -361,37 +338,131 @@ def _first_video_pts(fp, path):
     return min(float(x.rstrip(",")) for x in out)
 
 
+def _video_pts(fp, path):
+    import subprocess
+    out = subprocess.run([fp, "-v", "error", "-select_streams", "v:0", "-show_entries",
+                          "packet=pts_time", "-of", "csv=p=0", path],
+                         capture_output=True, text=True).stdout.split()
+    return sorted(float(x.rstrip(",")) for x in out)
+
+
 def test_runs_from_the_start_and_after_a_seek_cut_at_the_same_pictures(tmp_path, monkeypatch):
-    """Real ffmpeg, a file whose sound leads its picture by half a second (as
-    broadcasts do): segment 6 starts at the same time in a run from 0 and in
-    runs started at 2 and 4, within a frame and a half."""
+    """Real ffmpeg, a 29.97 file whose sound leads its picture by half a
+    second (as broadcasts do): segment 10 holds the same pictures, at the same
+    times, in runs started at 0, 3 and 7."""
     import subprocess
     ff, fp = _real_tools()
     monkeypatch.setattr(recorder, "FFMPEG", ff)
     src = tmp_path / "lead.ts"
     subprocess.run([ff, "-v", "error", "-y", "-itsoffset", "0.5", "-f", "lavfi", "-i",
-                    "testsrc=size=320x180:rate=30", "-f", "lavfi", "-i", "sine=frequency=440",
-                    "-t", "40", "-c:v", "mpeg2video", "-c:a", "mp2", "-f", "mpegts", str(src)],
-                   check=True)
+                    "testsrc=size=320x180:rate=30000/1001", "-f", "lavfi", "-i",
+                    "sine=frequency=440", "-t", "60", "-c:v", "mpeg2video", "-c:a", "mp2",
+                    "-f", "mpegts", str(src)], check=True)
     monkeypatch.setattr(recorder, "FFPROBE", fp)
     rec = {"uid": "ab" * 16}
     os.makedirs(ondemand.od_dir(rec["uid"]), exist_ok=True)
     v0 = ondemand.start_offset(rec, str(src))
     assert 0.3 < v0 < 0.7
     seen = {}
-    for start in (0, 2, 4):
+    for start in (0, 3, 7):
         out = tmp_path / f"r{start}"
         out.mkdir()
         proc = subprocess.Popen(recorder.convert_args("software", str(out), False, src=str(src),
                                                       start_seg=start, v0=v0),
                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                 stderr=subprocess.DEVNULL)
-        seg = out / "seg00006.ts"
-        end = time.time() + 90
+        seg = out / "seg00010.ts"
+        end = time.time() + 120
         while not seg.exists() and time.time() < end:
             time.sleep(0.1)
         proc.kill()
         proc.wait()
-        assert seg.exists(), f"run at {start} made no segment 6"
-        seen[start] = _first_video_pts(fp, str(seg))
-    assert max(seen.values()) - min(seen.values()) < 0.05, seen
+        assert seg.exists(), f"run at {start} made no segment 10"
+        seen[start] = _video_pts(fp, str(seg))
+    # Runs after a seek agree to the tenth of a millisecond. The run from the
+    # start picks its first picture by the picture's own time and a seek by
+    # the decoder's, which can differ by one picture: the same pictures,
+    # one frame (1001/30000 s) apart, none dropped and the times continuous.
+    assert len(seen[3]) == len(seen[7]) == len(seen[0])
+    assert max(abs(a - b) for a, b in zip(seen[3], seen[7], strict=True)) < 0.001
+    frame = 1001 / 30000
+    assert max(abs(a - b) for a, b in zip(seen[0], seen[3], strict=True)) < frame + 0.001
+    gaps = [b - a for a, b in zip(seen[0], seen[0][1:], strict=False)]
+    assert max(gaps) < frame + 0.002 and min(gaps) > frame - 0.002
+
+
+
+
+def test_a_recording_keeps_the_encoder_its_segments_were_made_with(od, monkeypatch):
+    rec, _ = od
+    d = ondemand.od_dir(rec["uid"])
+    with open(os.path.join(d, "encoder"), "w") as f:
+        f.write(f"vaapi/{ondemand.ENC_VERSION}")
+    with open(os.path.join(d, "seg00005.ts"), "wb") as f:
+        f.write(b"chip")
+    # The machine would use software now (the setting says so), and the
+    # recording stays as it was: nothing is cleared.
+    assert ondemand._choose_encoder(rec["uid"], rec["plex_path"]) == "vaapi"
+    assert os.path.exists(os.path.join(d, "seg00005.ts"))
+
+
+def test_a_marker_from_an_older_way_of_making_segments_clears_the_folder(od):
+    rec, _ = od
+    d = ondemand.od_dir(rec["uid"])
+    with open(os.path.join(d, "encoder"), "w") as f:
+        f.write("software/1")
+    with open(os.path.join(d, "seg00005.ts"), "wb") as f:
+        f.write(b"old")
+    assert ondemand._choose_encoder(rec["uid"], rec["plex_path"]) == "software"
+    assert not os.path.exists(os.path.join(d, "seg00005.ts"))
+    assert ondemand._marker(rec["uid"]) == f"software/{ondemand.ENC_VERSION}"
+
+
+def test_a_chip_failure_stops_the_runs_first_and_two_requests_clear_once(od, monkeypatch):
+    import threading
+    rec, _ = od
+    monkeypatch.setenv("FAKE_FFMPEG_DELAY", "0.05")
+    assert TestClient(app).get(f"/hls/{rec['uid']}/seg00100.ts").status_code == 200
+    run = ondemand._runs[rec["uid"]][0]
+    with open(os.path.join(ondemand.od_dir(rec["uid"]), "encoder"), "w") as f:
+        f.write(f"vaapi/{ondemand.ENC_VERSION}")
+    ondemand._chip_bad.add(rec["plex_path"])
+    kills = []
+    real = ondemand._kill
+    monkeypatch.setattr(ondemand, "_kill", lambda r: (kills.append(r), real(r)))
+    got = []
+    ts = [threading.Thread(target=lambda: got.append(ondemand._choose_encoder(
+        rec["uid"], rec["plex_path"]))) for _ in range(3)]
+    [t.start() for t in ts]
+    [t.join(30) for t in ts]
+    assert got == ["software"] * 3 and kills == [run]
+    assert run.proc.poll() is not None
+    assert not os.path.exists(os.path.join(ondemand.od_dir(rec["uid"]), "seg00100.ts"))
+
+
+def test_a_new_run_never_inherits_the_progress_of_the_run_it_replaced(od, monkeypatch):
+    rec, _ = od
+    monkeypatch.setenv("FAKE_FFMPEG_DELAY", "0.02")
+    c = TestClient(app)
+    for n in (100, 300, 500):
+        assert c.get(f"/hls/{rec['uid']}/seg{n:05d}.ts").status_code == 200
+        time.sleep(0.02)
+    time.sleep(1.0)                         # they run on, and make progress
+    first = ondemand._runs[rec["uid"]][0]
+    names = {r.playlist for r in ondemand._runs[rec["uid"]]}
+    assert c.get(f"/hls/{rec['uid']}/seg00700.ts").status_code == 200
+    new = ondemand._runs[rec["uid"]][-1]
+    assert first.dead and new.start == 700 and new.playlist not in names
+    assert not os.path.exists(os.path.join(ondemand.od_dir(rec["uid"]), first.playlist))
+    assert new.progress() >= 700 and new.progress() < 760
+
+
+def test_a_start_time_the_file_does_not_give_is_settled_as_zero(tmp_path, monkeypatch):
+    fake = tmp_path / "ffprobe"
+    fake.write_text("#!/bin/sh\necho N/A\n")
+    fake.chmod(0o755)
+    monkeypatch.setattr(recorder, "FFPROBE", str(fake))
+    rec = {"uid": "cd" * 16}
+    assert ondemand.start_offset(rec, "/x") == 0.0
+    with open(os.path.join(ondemand.od_dir(rec["uid"]), "v0")) as f:
+        assert float(f.read()) == 0.0
