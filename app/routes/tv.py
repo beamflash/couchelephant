@@ -399,10 +399,21 @@ def _art_on_now(vcn):
     return (p["art"] or p["thumb"] or "") if p else ""
 
 
+def _channel_name(vcn):
+    """A channel's name when the lineup no longer has it: what a recording
+    kept, or at worst its number, never nothing."""
+    ch = db.one("SELECT title FROM channels WHERE vcn = ?", (vcn,))
+    if ch and ch["title"]:
+        return ch["title"]
+    r = db.one("SELECT channel_title FROM recordings WHERE channel_vcn = ? "
+               "AND COALESCE(channel_title, '') != '' ORDER BY id DESC LIMIT 1", (vcn,))
+    return r["channel_title"] if r else f"Channel {vcn}"
+
+
 def _channel(request, vcn, title):
     has_logo = db.one("SELECT 1 FROM channels WHERE vcn = ? AND logo_path IS NOT NULL "
                       "AND logo_path != ''", (vcn,))
-    return {"number": vcn, "name": title or "",
+    return {"number": vcn, "name": title or _channel_name(vcn),
             "logo": f"{_base(request)}/logo/{vcn}" if has_logo else ""}
 
 
@@ -421,14 +432,17 @@ def _names(show, title, sport=False):
 def _sport_show(show) -> bool:
     """Is this a sports programme, asked by its series name. For the rows that
     come from Plex's schedule, which do not carry the guide's section."""
-    return bool(show and db.one(
+    return bool(show and (db.one(
         "SELECT 1 FROM programs WHERE grandparent_title = ? AND section = 'sports' "
-        "LIMIT 1", (show,)))
+        "LIMIT 1", (show,)) or db.one(
+        "SELECT 1 FROM recordings WHERE show_title = ? AND section = 'sports' "
+        "LIMIT 1", (show,))))
 
 
 def recording_json(request: Request, rec) -> dict:
     view = recorder.view_info(rec["uid"])
     big, small = _names(rec["show_title"], rec["title"], rec["section"] == "sports")
+    big = big or "Recording"
     state = rec["state"]
     return {
         "id": rec["id"],
