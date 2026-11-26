@@ -210,6 +210,12 @@ def breaks_for(rec) -> dict:
     shown = live_on() if growing else final_on()
     rows = db.query("SELECT start_s, end_s, final FROM ad_breaks WHERE recording_id = ? "
                     "ORDER BY start_s", (rec["id"],)) if shown else []
+    # A sports broadcast opens on its team intro, which comskip reads as an
+    # ad because it has no programme before it (a 0 to 188 s "break" found on
+    # a football game). A real break never starts on the first second of a
+    # game, so one that does is not offered. Kept in the table, only unshown.
+    if rec["section"] == "sports":
+        rows = [r for r in rows if r["start_s"] >= 1]
     return {"ok": True,
             "breaks": [{"start": r["start_s"], "end": r["end_s"]} for r in rows],
             "final": rec["ads_final"] == 1,

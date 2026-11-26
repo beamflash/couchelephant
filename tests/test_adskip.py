@@ -148,3 +148,16 @@ def test_a_live_scan_started_again_keeps_the_breaks_already_shown(tuner):
     rows = db.query("SELECT start_s FROM ad_breaks WHERE recording_id = ? ORDER BY start_s",
                     (rec["id"],))
     assert [r["start_s"] for r in rows] == [100.0, 900.0]
+
+
+def test_a_sports_intro_at_second_zero_is_not_offered_as_an_ad(tuner, comskip):
+    """A game opens on its team intro, which comskip reads as an ad from 0.
+    That one is not offered; a later break in the game still is."""
+    comskip(final=[[0.0, 187.92], [720.72, 961.06]])
+    rec = _record()
+    with db.tx() as c:
+        c.execute("UPDATE recordings SET section = 'sports' WHERE id = ?", (rec["id"],))
+    adskip.tick()
+    _until(lambda: (adskip.tick() or recorder.get(rec["id"])["ads_final"] == 1))
+    got = _client().get(f"/api/tv/recordings/{rec['id']}/breaks").json()
+    assert got["breaks"] == [{"start": 720.72, "end": 961.06}]

@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **Resume and Skip ad did nothing early in playback (Apple apps).** A
+  recording whose viewing copy is being made again (an old one is rebuilt on
+  demand) has only its first minutes at first, and the player drops a jump to
+  a place it does not have yet. The resume went to 0:00 and Skip ad did
+  nothing until the copy grew past the break. Every jump (resume, Skip ad,
+  the lock screen scrubber, a reload) now waits until the player is ready and
+  the place exists, shows "Jumping to 2:47:25..." meanwhile, and a resume
+  holds the picture paused until it lands.
+- **A game's team intro was offered as an ad.** A sports recording's "break"
+  that starts at second 0 (the pregame intro) is no longer sent to players.
+
 ## 1.5.40 - 2026-11-26
 
 ### Added
