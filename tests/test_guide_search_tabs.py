@@ -291,3 +291,13 @@ def test_search_matches_a_channel_name_through_the_channel_list_first(client):
     _seed()
     ids, _ = _ids(client, q="abc")
     assert ids == ["a3"]
+
+
+def test_a_form_post_decodes_an_escaped_plus_and_ampersand(client):
+    """The apps escape every value, so "%2B" must arrive as "+" and "%26" as "&"."""
+    with db.tx() as c:
+        c.execute("INSERT INTO channels (vcn, call_sign, title) VALUES ('1+2&3', 'X', 'X')")
+    r = client.post("/api/tv/favorites/add", content="vcn=1%2B2%263",
+                    headers={"Content-Type": "application/x-www-form-urlencoded"})
+    assert r.status_code == 200, r.text
+    assert [c["number"] for c in r.json()["channels"]] == ["1+2&3"]
