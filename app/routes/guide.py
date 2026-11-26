@@ -100,25 +100,27 @@ def favorite_vcns() -> set:
     return {r["vcn"] for r in db.query("SELECT vcn FROM favorite_channels")}
 
 
-def _tab_channels(tab: str, start: int, end: int):
+def _tab_channels(tab: str, since: int):
     """SQL limiting the channel list to what a tab is about, and its args.
 
-    Only channels with something in the window shown: a starred channel with
-    nothing on is an empty row, and the News and Sports tabs are about what
-    is on.
+    Chosen once for the whole guide from `since` onward, not for the window on
+    screen: the page asks for more channels and for more time, and a set that
+    moved with the window skipped, repeated and emptied rows. A channel with
+    something matching anywhere in the loaded guide is in, in vcn order.
     """
     tokens = filters.tab_tokens(tab)
     if not tokens:
         return "", []
     frags, fargs = filters.build(tokens, [])
     return ("AND vcn IN (SELECT a.channel_vcn FROM airings a JOIN programs p "
-            "ON p.guid = a.program_guid WHERE a.ends_at > ? AND a.begins_at < ? "
-            + " ".join(frags) + ")", [start, end] + fargs)
+            "ON p.guid = a.program_guid WHERE a.ends_at > ? " + " ".join(frags) + ")",
+            [since] + fargs)
 
 
 @router.get("/api/grid")
 def api_grid(start: int, end: int, choffset: int = 0, chlimit: int = 12,
-             sports: int = 0, channel: str = "", f: str = "", x: str = "", tab: str = ""):
+             sports: int = 0, channel: str = "", f: str = "", x: str = "", tab: str = "",
+             since: int = 0, vcns: str = ""):
     """A window of the guide grid: some channels, over some span of time.
 
     The client asks for more channels when it scrolls down and for more time
@@ -135,10 +137,18 @@ def api_grid(start: int, end: int, choffset: int = 0, chlimit: int = 12,
         csql.append("""AND vcn IN (SELECT a.channel_vcn FROM airings a
                                    JOIN programs p ON p.guid = a.program_guid
                                    WHERE p.section = 'sports')""")
-    tsql, targs = _tab_channels(tab, start, end)
-    if tsql:
-        csql.append(tsql)
-        cargs += targs
+    # More time for the rows already on screen names them in `vcns`: only
+    # those come back, so the set cannot change under the page.
+    shown = [v for v in vcns.split(",") if v]
+    if shown:
+        csql.append("AND vcn IN (" + ",".join("?" for _ in shown) + ")")
+        cargs += shown
+        chlimit = max(chlimit, len(shown))
+    else:
+        tsql, targs = _tab_channels(tab, since or start)
+        if tsql:
+            csql.append(tsql)
+            cargs += targs
     chosen = [t.split(":", 1)[1] for t in filters.parse(f) if t.startswith("channel:")]
     if chosen:
         csql.append("AND vcn IN (" + ",".join("?" for _ in chosen) + ")")
@@ -381,6 +391,13 @@ def guide(request: Request, day: str = "", channel: str = "", sports: int = 0,
             for r in search_recordings(q, tab=tab)] if q.strip() else []
     stars = favorite_vcns()
 
+    # The tabs keep the day, the search and the filters.
+    keep = {k: v for k, v in (("q", q), ("day", day), ("f", f), ("x", x)) if v}
+    tab_links = [(key, label, "/guide?" + urllib.parse.urlencode(
+        ({"tab": key} if key else {}) | keep))
+        for key, label in (("", "All"), ("favorites", "Favorites"),
+                           ("news", "News"), ("sports", "Sports"))]
+
     days = []
     if not q.strip():
         base = datetime.datetime.fromtimestamp(now, tz()).replace(
@@ -394,7 +411,7 @@ def guide(request: Request, day: str = "", channel: str = "", sports: int = 0,
 
     return page(request, "guide.html", rows=rows, days=days,
                 day=(day or (days[0]["key"] if days else "")),
-                channel=channel, sports=sports, tab=tab, recs=recs,
+                channel=channel, sports=sports, tab=tab, recs=recs, tab_links=tab_links,
                 has_favorites=bool(stars),
                 q=q, logos=_logo_map(), f=f, x=x, overlay=bool(overlay) and not q,
                 nfilters=len(filters.parse(f)) + len(filters.parse(x)))

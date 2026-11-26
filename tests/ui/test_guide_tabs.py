@@ -107,3 +107,49 @@ def test_a_search_result_recording_opens_on_the_recordings_page(page):
     page.goto("/guide?q=zebra")
     page.click('#recresults + .card a')
     page.wait_for_selector(f'[data-rec="{rid}"].hit')
+
+
+def test_scrolling_a_tab_for_more_time_keeps_every_row_once(page):
+    from app import db
+    with db.tx() as c:
+        for r in db.query("SELECT vcn FROM channels"):
+            c.execute("INSERT OR IGNORE INTO favorite_channels (vcn, added_at) VALUES (?, 1)",
+                      (r["vcn"],))
+    page.goto("/guide?tab=favorites")
+    page.wait_for_selector(".gprog")
+    rows = page.locator(".growr").count()
+    ticks = page.locator(".gtick").count()
+    assert rows >= 2
+    for _ in range(3):
+        page.evaluate("var w = document.getElementById('gw'); w.scrollLeft = w.scrollWidth")
+        page.wait_for_timeout(700)
+    assert page.locator(".gtick").count() > ticks, "more time was loaded"
+    vcns = page.eval_on_selector_all(".growr", "els => els.map(e => e.dataset.vcn)")
+    assert len(vcns) == rows == len(set(vcns)), "no row repeated, none lost"
+    assert page.locator(".growr .glane:empty").count() < rows
+
+
+def test_scrolling_a_tab_for_more_channels_keeps_every_row_once(page):
+    import time
+
+    from app import db
+    now = int(time.time())
+    with db.tx() as c:
+        c.execute("INSERT INTO programs (guid, title, section, genres, teams) "
+                  "VALUES ('nz','Zed News','shows','[\"News\"]','[]')")
+        for i in range(14):
+            vcn = f"{70 + i}.1"
+            c.execute("INSERT INTO channels (vcn, call_sign, title) VALUES (?,?,?)",
+                      (vcn, f"Z{i}", f"{vcn} Z{i}"))
+            c.execute("""INSERT INTO airings (id, program_guid, channel_vcn, channel_call_sign,
+                                              channel_title, begins_at, ends_at)
+                         VALUES (?,?,?,?,?,?,?)""",
+                      (f"nz{i}", "nz", vcn, f"Z{i}", vcn, now - 600, now + 7200))
+    page.goto("/guide?tab=news")
+    page.wait_for_selector(".gprog")
+    for _ in range(6):
+        page.evaluate("var w = document.getElementById('gw'); w.scrollTop = w.scrollHeight")
+        page.wait_for_timeout(500)
+    vcns = page.eval_on_selector_all(".growr", "els => els.map(e => e.dataset.vcn)")
+    assert len(vcns) == 14 == len(set(vcns))
+    assert vcns == sorted(vcns, key=float), "in channel order"

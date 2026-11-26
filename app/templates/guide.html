@@ -16,9 +16,8 @@
 
 {# The tabs are named filters on the same page, and stay on a search. #}
 <nav class="tabbar" id="gtabs" aria-label="Guide tabs">
-  {% for key, label in [('', 'All'), ('favorites', 'Favorites'), ('news', 'News'), ('sports', 'Sports')] %}
-    <a href="/guide?{% if key %}tab={{ key }}{% endif %}{% if q %}{{ '&' if key else '' }}q={{ q|urlencode }}{% endif %}"
-       id="tab-{{ key or 'all' }}" class="{{ 'on' if tab == key }}"
+  {% for key, label, href in tab_links %}
+    <a href="{{ href }}" id="tab-{{ key or 'all' }}" class="{{ 'on' if tab == key }}"
        {% if tab == key %}aria-current="page"{% endif %}>{{ label }}</a>
   {% endfor %}
 </nav>
@@ -328,7 +327,9 @@
   }
 
   function addChannel(c) {
+    if (rowByVcn[c.vcn]) return;      // already on screen
     var row = document.createElement('div');
+    row.dataset.vcn = c.vcn;
     row.className = 'growr';
     var label = document.createElement('div');
     label.className = 'gch' + (c.logo ? '' : ' nologo');
@@ -436,8 +437,11 @@
   // Keep it moving without a reload.
   setInterval(marker, 60000);
 
-  function fetchWindow(s, e, off, limit) {
+  // `since` is where the guide on screen begins, so a tab picks its channels
+  // once for the whole guide. `vcns` asks for the rows already drawn, for more time.
+  function fetchWindow(s, e, off, limit, vcns) {
     var u = '/api/grid?start=' + s + '&end=' + e + '&choffset=' + off + '&chlimit=' + limit +
+            '&since=' + startTs + (vcns ? '&vcns=' + encodeURIComponent(vcns) : '') +
             (tab ? '&tab=' + encodeURIComponent(tab) : '') + (channel ? '&channel=' + encodeURIComponent(channel) : '');
     return fetch(u).then(function (r) { return r.json(); });
   }
@@ -482,7 +486,8 @@
     if (guideEnd && endTs >= guideEnd) { moreTime = false; return Promise.resolve(); }
     busy = true; busyH(true);
     var from = endTs, to = endTs + CHUNK;
-    return fetchWindow(from, to, 0, chOffset).then(function (d) {
+    return fetchWindow(from, to, 0, channels.length,
+                       channels.map(function (c) { return c.vcn; }).join(',')).then(function (d) {
       endTs = to;
       drawTicks(from, to);
       d.airings.forEach(place);

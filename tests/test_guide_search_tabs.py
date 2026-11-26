@@ -219,17 +219,70 @@ def test_a_recording_result_links_to_the_recording(client):
     assert f'href="/recordings?rec={rid}"' in page
 
 
-def test_the_tab_channels_are_those_with_something_in_the_window(client):
-    _seed()
-    now = int(time.time())
-    client.post("/api/tv/favorites/add", data={"vcn": "9.1"})
-    client.post("/api/tv/favorites/add", data={"vcn": "4.1"})
+def _news_channels(now):
+    """5.1 and 7.1 have news now, 2.1 only in four hours."""
     with db.tx() as c:
-        c.execute("UPDATE airings SET begins_at = ?, ends_at = ? WHERE id = 'a1'",
-                  (now + 86400, now + 90000))
-    d = client.get("/api/grid", params={"start": now - 900, "end": now + 3600,
-                                        "tab": "favorites"}).json()
-    assert [c["vcn"] for c in d["channels"]] == ["9.1"]
+        for vcn in ("2.1", "5.1", "7.1"):
+            c.execute("INSERT OR REPLACE INTO channels (vcn, call_sign, title) VALUES (?,?,?)",
+                      (vcn, "C" + vcn, vcn + " C" + vcn))
+        c.execute("INSERT OR REPLACE INTO programs (guid, title, section, genres, teams) "
+                  "VALUES ('nn','Late News','shows','[\"News\"]','[]')")
+        for vcn, b, e in [("5.1", now - 600, now + 1200), ("7.1", now - 600, now + 1200),
+                          ("2.1", now + 4 * 3600, now + 5 * 3600)]:
+            c.execute("""INSERT INTO airings (id, program_guid, channel_vcn, channel_call_sign,
+                                              channel_title, begins_at, ends_at)
+                         VALUES (?,?,?,?,?,?,?)""", ("n" + vcn, "nn", vcn, "C" + vcn, vcn, b, e))
+
+
+def _grid(client, **q):
+    d = client.get("/api/grid", params=q).json()
+    return [c["vcn"] for c in d["channels"]], sorted(a["id"] for a in d["airings"]), d
+
+
+def test_a_tab_picks_its_channels_once_for_the_whole_guide(client):
+    """Whatever window is asked for, the channel set and its order are the
+    same, so paging channels never skips or repeats one."""
+    now = int(time.time())
+    _news_channels(now)
+    first = {"start": now - 900, "end": now + 3600, "tab": "news", "since": now - 900}
+    all_vcns, _, _ = _grid(client, **first, chlimit=10)
+    assert all_vcns == ["2.1", "5.1", "7.1"], "2.1 is in the set though it is on in four hours"
+    a, _, d1 = _grid(client, **first, chlimit=2, choffset=0)
+    b, _, d2 = _grid(client, **first, chlimit=2, choffset=2)
+    assert a == ["2.1", "5.1"] and d1["more_channels"] is True
+    assert b == ["7.1"] and d2["more_channels"] is False
+    # the same pages over a later window give the same channels
+    later = dict(first, start=now + 3600, end=now + 6 * 3600)
+    a2, _, _ = _grid(client, **later, chlimit=2, choffset=0)
+    assert a2 == a
+
+
+def test_more_time_on_a_tab_returns_only_the_rows_already_on_screen(client):
+    now = int(time.time())
+    _news_channels(now)
+    got, airings, _ = _grid(client, start=now + 3600, end=now + 6 * 3600, tab="news",
+                            since=now - 900, vcns="5.1,7.1", chlimit=2)
+    assert got == ["5.1", "7.1"], "2.1 is not on screen, so it is not sent"
+    assert airings == [], "and nothing is on those two later"
+    got, airings, _ = _grid(client, start=now + 3600, end=now + 6 * 3600, tab="news",
+                            since=now - 900, vcns="2.1,5.1,7.1", chlimit=3)
+    assert got == ["2.1", "5.1", "7.1"] and airings == ["n2.1"]
+
+
+def test_search_and_the_apps_take_the_tab_too(client):
+    _seed()
+    d = client.get("/api/tv/search", params={"q": "e", "tab": "sports"}).json()
+    assert [a["title"] for a in d["airings"]] == ["Chiefs at Bills"]
+    assert d["recordings"] == []
+    d = client.get("/api/tv/search", params={"q": "evening", "tab": "news"}).json()
+    assert d["airings"] and all(a["title"] == "Evening News" for a in d["airings"])
+
+
+def test_the_tab_links_keep_the_day_and_the_filters(client):
+    _seed()
+    page = client.get("/guide", params={"day": "2026-11-27", "f": "hd", "x": "drm"}).text
+    link = page.split('id="tab-news"')[0].rsplit("<a ", 1)[1]
+    assert "day=2026-11-27" in link and "f=hd" in link and "x=drm" in link and "tab=news" in link
 
 
 def test_search_matches_a_channel_name_through_the_channel_list_first(client):

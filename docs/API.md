@@ -14,7 +14,7 @@ export/import. See [AUTH.md](AUTH.md).
 
 | | |
 | --- | --- |
-| `GET /api/grid` | A window of the guide. `start`, `end`, `choffset`, `chlimit`, and `tab` (`favorites`, `news` or `sports`; left out means all). Returns channels (each with `favorite`) and airings for that window |
+| `GET /api/grid` | A window of the guide. `start`, `end`, `choffset`, `chlimit`, and `tab` (`favorites`, `news` or `sports`; left out means all), `since` (where the guide on screen begins: a tab picks its channels once, from there on, so paging stays steady) and `vcns` (more time for rows already drawn: only those channels come back). Returns channels (each with `favorite`) and airings for that window |
 | `GET /api/program?airing_id=` | One programme: every airing of it, which is live, the teams, and **why** it is being recorded if it is |
 | `GET /api/facets` | Counts for the filter panel: kinds, channels, genres, teams |
 | `GET /api/notices` | What is wrong with Plex right now, and how long it has been wrong |
@@ -84,7 +84,7 @@ Recorded list.
 | `POST /api/tv/live/{vcn}` | Watch a channel now. Joins a recording of that channel if there is one, so no second tuner is used |
 | `POST /api/tv/live/{id}/keepalive` | Still watching. Live viewing nobody keeps alive is closed after a minute and its tuner given back |
 | `GET /api/tv/guide` | The grid for a television: every channel and its programmes from now for `hours` (24). Each programme says whether it is set to record and by whom. `tab` (`favorites`, `news` or `sports`) keeps only that tab's channels and programmes, and each channel says whether it is a `favorite` |
-| `GET /api/tv/search?q=` | Search the guide: `airings` whose title, show, description or channel (name, call sign, network or number) match, soonest first, then `recordings` whose title matches. `limit` caps the airings (60). The web guide's search uses the same query |
+| `GET /api/tv/search?q=` | Search the guide: `airings` whose title, show, description or channel (name, call sign, network or number) match, soonest first, then `recordings` whose title matches. `limit` caps the airings (60), and `tab` narrows airings and recordings as it does the guide. The web guide's search uses the same query |
 | `GET /api/tv/favorites` | The favorite channels, one list for the whole house |
 | `POST /api/tv/favorites/add` | `vcn`. Star a channel. Answers the list. `404` for a channel not in the guide |
 | `POST /api/tv/favorites/remove` | `vcn`. Take the star off. Answers the list |

@@ -761,7 +761,7 @@ def tv_guide(request: Request, hours: int = GUIDE_HOURS, tab: str = ""):
 
 
 @router.get("/api/tv/search")
-def tv_search(request: Request, q: str = "", limit: int = 60):
+def tv_search(request: Request, q: str = "", limit: int = 60, tab: str = ""):
     """Search the guide: what is on or coming up whose title, show, description
     or channel matches, then recordings whose title matches. The web page and
     the apps share the one query."""
@@ -771,7 +771,7 @@ def tv_search(request: Request, q: str = "", limit: int = 60):
     now = int(time.time())
     skip = _unwatchable()
     booked = _booked_slots(now)
-    rows = guide_routes._airings_query("", "", 0, q, 0, max(1, min(200, limit)))
+    rows = guide_routes._airings_query("", "", 0, q, 0, max(1, min(200, limit)), tab=tab)
     airings = []
     for r in rows:
         big, small = _names(r["grandparent_title"], r["title"], r["section"] == "sports")
@@ -783,7 +783,7 @@ def tv_search(request: Request, q: str = "", limit: int = 60):
             "recording": booked.get((r["channel_vcn"], r["begins_at"])),
             "recordable": not r["drm"] and r["channel_vcn"] not in skip,
         })
-    recs = [recording_json(request, r) for r in guide_routes.search_recordings(q)]
+    recs = [recording_json(request, r) for r in guide_routes.search_recordings(q, tab=tab)]
     return {"ok": True, "q": q, "airings": airings, "recordings": recs}
 
 
