@@ -219,7 +219,8 @@ def field_order_interlaced(said: str) -> bool:
     return first in ("tt", "bb", "tb", "bt")
 
 
-def convert_args(enc: str, out_dir: str, interlaced: bool = False) -> list[str]:
+def convert_args(enc: str, out_dir: str, interlaced: bool = False, *,
+                 src: str | None = None, start_seg: int = 0) -> list[str]:
     """The ffmpeg command that turns a broadcast on stdin into the viewing copy.
 
     A keyframe is forced every segment length, by time and not by frame count,
@@ -231,7 +232,14 @@ def convert_args(enc: str, out_dir: str, interlaced: bool = False) -> list[str]:
     args = [FFMPEG, "-hide_banner", "-loglevel", "error", "-y"]
     if enc == "vaapi":
         args += ["-vaapi_device", VAAPI_DEVICE]
-    args += ["-fflags", "+genpts+discardcorrupt", "-i", "pipe:0"]
+    args += ["-fflags", "+genpts+discardcorrupt"]
+    if src:
+        # On demand (see ondemand.py): a file, from the start of one segment.
+        if start_seg:
+            args += ["-ss", str(start_seg * SEGMENT_SECONDS)]
+        args += ["-i", src]
+    else:
+        args += ["-i", "pipe:0"]
     # The broadcast's own timing, picture for picture, on every path. Left to
     # itself the HLS output runs at a constant rate: it filled a gap in the
     # broadcast with copies, each repeating its captions, and after the split
@@ -254,8 +262,18 @@ def convert_args(enc: str, out_dir: str, interlaced: bool = False) -> list[str]:
                  "-c:v", "libx264", "-preset", "veryfast", "-crf", "21",
                  "-maxrate", "8M", "-bufsize", "16M", "-pix_fmt", "yuv420p"]
     args += ["-force_key_frames", keyframes,
-             "-c:a", "aac", "-ac", "2", "-b:a", "160k",
-             "-f", "hls", "-hls_time", str(SEGMENT_SECONDS),
+             "-c:a", "aac", "-ac", "2", "-b:a", "160k"]
+    if src:
+        # Segment numbers and timestamps line up with the playlist that lists
+        # every segment. A segment shows up only once it is whole.
+        args += ["-output_ts_offset", str(start_seg * SEGMENT_SECONDS),
+                 "-f", "hls", "-hls_time", str(SEGMENT_SECONDS),
+                 "-hls_list_size", "3", "-start_number", str(start_seg),
+                 "-hls_flags", "independent_segments+temp_file",
+                 "-hls_segment_filename", os.path.join(out_dir, "seg%05d.ts"),
+                 os.path.join(out_dir, "ff.m3u8")]
+        return args
+    args += ["-f", "hls", "-hls_time", str(SEGMENT_SECONDS),
              "-hls_playlist_type", "event",
              "-hls_flags", "independent_segments+program_date_time",
              "-hls_segment_filename", os.path.join(out_dir, "seg%05d.ts"),
@@ -834,6 +852,10 @@ def ensure_view(rec, src: str | None = None) -> None:
     with _lock:
         if rec["id"] in _jobs:
             return
+        # A recording in Plex is not converted whole: its segments are made
+        # when a player asks for them (ondemand.py).
+        if rec["state"] == "in_plex":
+            return
         if view_info(rec["uid"])["complete"]:
             return
         src = src or broadcast_path(rec["uid"])
@@ -852,6 +874,8 @@ def busy(rec_id: int) -> bool:
 
 def shutdown() -> None:
     """Stop every worker. For tests, and for a clean exit."""
+    from . import ondemand
+    ondemand.shutdown()
     with _lock:
         for job in _jobs.values():
             job.stop()

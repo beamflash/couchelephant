@@ -39,8 +39,8 @@ Everything it writes goes to a scratch folder, checked by the same guard the
 test suite uses. Stop it and nothing is left.
 """
 import hashlib
-import shutil
 import os
+import shutil
 import sys
 import tempfile
 import threading
@@ -255,15 +255,40 @@ def main():
 
     @web.app.post("/test/seed-long")
     def _seed_long(title: str = "Long Game", seconds: int = 240, position: int = 200,
-                   delay: int = 30, adbreak: str = ""):
+                   delay: int = 30, adbreak: str = "",
+                   ondemand: int = 0):
         """Test only: a finished recording of `seconds` that has been left at
         `position`, whose viewing copy is being made again, as a tidied-away
         one is on demand: for `delay` seconds the copy holds only its first 30
-        seconds and no end tag, then the rest appears. `adbreak` "a,b" adds a break. A jump to a later place
+        seconds and no end tag, then the rest appears. `adbreak` "a,b" adds a break. `ondemand=1` makes it a recording in Plex with no
+        viewing copy at all: its stream lists every segment and makes each when asked. A jump to a later place
         before then has nowhere to land. Returns the recording's id."""
         import subprocess
         uid = "10ad" * 8
         vdir = recorder.view_dir(uid)
+        if ondemand:
+            plex_file = os.path.join(SCRATCH, "long.ts")
+            shutil.rmtree(recorder.rec_dir(uid), ignore_errors=True)
+            if not os.path.exists(plex_file):
+                subprocess.run([recorder.FFMPEG, "-v", "error", "-f", "lavfi", "-i",
+                                "testsrc=size=320x180:rate=15", "-f", "lavfi", "-i",
+                                "sine=frequency=440", "-t", str(seconds), "-c:v", "mpeg2video",
+                                "-c:a", "mp2", "-f", "mpegts", plex_file], check=True)
+            now = int(time.time())
+            with db.tx() as c:
+                c.execute("DELETE FROM recordings WHERE uid = ?", (uid,))
+                cur = c.execute("""INSERT INTO recordings (uid, kind, state, title, show_title,
+                                       section, channel_vcn, channel_title, begins_at, ends_at,
+                                       position, plex_path, moved_at)
+                                   VALUES (?, 'recording', 'in_plex', ?, ?, 'shows', '9.1', ?, ?, ?, ?, ?, ?)""",
+                                (uid, title, title, demo_guide.CHANNELS["9.1"][1],
+                                 now - 172800, now - 172800 + seconds, position, plex_file, now - 86400))
+                if adbreak:
+                    a, b = (float(x) for x in adbreak.split(","))
+                    c.execute("INSERT INTO ad_breaks (recording_id, start_s, end_s, final) "
+                              "VALUES (?, ?, ?, 1)", (cur.lastrowid, a, b))
+                    c.execute("UPDATE recordings SET ads_final = 1 WHERE id = ?", (cur.lastrowid,))
+            return {"ok": True, "id": cur.lastrowid}
         src = os.path.join(vdir, "full.m3u8")
         # Made once (it takes a few seconds), then reused by every seed.
         if not os.path.exists(src) or f"seg{seconds // 6 - 1:05d}.ts" not in open(src).read():

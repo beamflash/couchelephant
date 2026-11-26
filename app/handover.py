@@ -434,6 +434,7 @@ def tidy(now: int | None = None) -> None:
             continue
         if rec["plex_path"] and os.path.exists(rec["plex_path"]):
             shutil.rmtree(recorder.view_dir(rec["uid"]), ignore_errors=True)
+            shutil.rmtree(os.path.join(recorder.rec_dir(rec["uid"]), "od"), ignore_errors=True)
         elif _library_present(rec):
             # Deleted in Plex. The library is there and the file is not in
             # it, so there is nothing left to list or to play.

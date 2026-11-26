@@ -37,6 +37,7 @@ from .. import (
     exposure,
     filters,
     handover,
+    ondemand,
     passes,
     paths,
     ratelimit,
@@ -441,8 +442,19 @@ def _sport_show(show) -> bool:
         "LIMIT 1", (show,))))
 
 
+def state_in_plex_on_demand(rec, view) -> bool:
+    """In Plex with no whole viewing copy, and a duration known from an
+    earlier request for its stream."""
+    return (rec["state"] == "in_plex" and not view["complete"]
+            and ondemand.cached_duration(rec["uid"]) is not None)
+
+
 def recording_json(request: Request, rec) -> dict:
     view = recorder.view_info(rec["uid"])
+    if state_in_plex_on_demand(rec, view):
+        # Its stream lists every segment, so all of it can be reached at once.
+        view = {**view, "seconds": ondemand.cached_duration(rec["uid"]) or view["seconds"],
+                "complete": True}
     big, small = _names(rec["show_title"], rec["title"], rec["section"] == "sports")
     big = big or "Recording"
     state = rec["state"]
@@ -1595,7 +1607,8 @@ def live_keepalive(rec_id: int, paused: str = Form("")):
 def master_playlist(uid: str, start: str = ""):
     """One picture and the broadcast's captions, CC1, inside it. Without this
     line Apple's player never offers captions, even though they are there."""
-    if not _UID.match(uid) or not os.path.exists(recorder.playlist_path(uid)):
+    if not _UID.match(uid) or not (os.path.exists(recorder.playlist_path(uid))
+                                   or ondemand.use(uid)):
         return Response(status_code=404)
     variant = "index.m3u8" + ("?start=0" if start == "0" else "")
     # No language: CC1 is whatever the station captions in, English on most,
@@ -1613,6 +1626,13 @@ def master_playlist(uid: str, start: str = ""):
 def playlist(uid: str, start: str = ""):
     if not _UID.match(uid):
         return Response(status_code=404)
+    rec = ondemand.use(uid)
+    if rec:
+        text = ondemand.playlist(rec, start == "0")
+        if text is None:
+            return Response(status_code=404)
+        return Response(text, media_type="application/vnd.apple.mpegurl",
+                        headers={"Cache-Control": "no-store"})
     path = recorder.playlist_path(uid)
     if not os.path.exists(path):
         return Response(status_code=404)
@@ -1650,7 +1670,14 @@ def segment_k(token: str, uid: str, segment: str):
 def segment_(uid: str, segment: str):
     if not _UID.match(uid) or not _SEGMENT.match(segment):
         return Response(status_code=404)
-    path = os.path.join(recorder.view_dir(uid), segment)
+    rec = ondemand.use(uid)
+    if rec:
+        # Made now if it is not there yet, and waited for.
+        path = ondemand.segment(rec, segment)
+        if not path:
+            return Response(status_code=404)
+    else:
+        path = os.path.join(recorder.view_dir(uid), segment)
     if not os.path.exists(path):
         return Response(status_code=404)
     return FileResponse(path, media_type="video/mp2t",

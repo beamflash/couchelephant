@@ -411,14 +411,27 @@ def test_a_handover_that_is_not_set_up_holds_the_recording_and_says_why(tuner, p
     assert os.path.exists(recorder.broadcast_path(rec["uid"]))
 
 
-def test_an_old_viewing_copy_is_removed_and_made_again_on_demand(tuner, library):
+def test_an_old_viewing_copy_is_removed_and_its_segments_made_on_demand(tuner, library):
     rec = _record()
     handover.tick(wait=True)
     done = recorder.get(rec["id"])
     handover.tidy(now=int(time.time()) + 3 * 86400)
     assert not os.path.exists(recorder.view_dir(rec["uid"]))
+    # Not converted whole: the stream lists every segment and makes the one
+    # asked for.
     recorder.ensure_view(done, done["plex_path"])
-    _until(lambda: recorder.view_info(rec["uid"])["complete"])
+    assert not recorder.busy(rec["id"])
+    # The stand-in file cannot be probed, so its length is given.
+    from app import ondemand
+    os.makedirs(ondemand.od_dir(rec["uid"]), exist_ok=True)
+    with open(os.path.join(ondemand.od_dir(rec["uid"]), "duration"), "w") as f:
+        f.write("60.0")
+    from fastapi.testclient import TestClient
+
+    from app.web import app
+    c = TestClient(app)
+    text = c.get(f"/hls/{rec['uid']}/index.m3u8").text
+    assert "#EXT-X-ENDLIST" in text and "seg00000.ts" in text
 
 
 def test_a_recording_deleted_in_plex_leaves_the_list(tuner, library):
