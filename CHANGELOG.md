@@ -30,7 +30,8 @@
 - The teams of a recording or a Plex booking, and the show name on a pass's
   history lines, are kept with them, so passes, overtime and the schedule's
   failed bookings no longer depend on the guide still listing the programme.
-  A channel the lineup no longer has keeps the name its recordings carry.
+  A pass that was deleted still lists its show and sport, from what its
+  bookings kept. A channel the lineup no longer has keeps the name its recordings carry.
 
 ## 1.5.38 - 2026-11-25
 

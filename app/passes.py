@@ -1054,7 +1054,8 @@ def orphans() -> list[dict]:
         g["shown"] = g["shown"] or r["show_title"] or r["title"] or ""
         g["sports"] = g["sports"] or r["section"] == "sports"
     for o in db.query(
-            "SELECT o.*, p.grandparent_title AS show, p.section AS section "
+            "SELECT o.*, COALESCE(o.show_title, p.grandparent_title) AS show, "
+            "COALESCE(o.section, p.section) AS section "
             "FROM our_grabs o LEFT JOIN programs p ON p.guid = o.program_guid "
             "WHERE o.begins_at > ? AND " + _gone_pass("pass_id", "pass_uid", "o")
             + " ORDER BY o.begins_at", (_now() + LEAD_SECONDS,)):
@@ -1107,20 +1108,26 @@ def remember(row, source: str, subscription: str | None = None,
         c.execute(
             """INSERT INTO our_grabs (airing_id, program_guid, title, channel_vcn,
                                       begins_at, source, subscription, pass_id,
-                                      pass_uid, expectation_id, created_at, teams)
+                                      pass_uid, expectation_id, created_at, teams,
+                                      show_title, section)
                VALUES (?,?,?,?,?,?,?,?,
                        (SELECT uid FROM passes WHERE id = ?),?,?,
-                       (SELECT NULLIF(teams, '[]') FROM programs WHERE guid = ?))
+                       (SELECT NULLIF(teams, '[]') FROM programs WHERE guid = ?),
+                       (SELECT NULLIF(grandparent_title, '') FROM programs WHERE guid = ?),
+                       (SELECT NULLIF(section, '') FROM programs WHERE guid = ?))
                ON CONFLICT(airing_id) DO UPDATE SET source=excluded.source,
                  subscription=COALESCE(excluded.subscription, our_grabs.subscription),
                  pass_id=COALESCE(excluded.pass_id, our_grabs.pass_id),
                  pass_uid=COALESCE(excluded.pass_uid, our_grabs.pass_uid),
                  expectation_id=excluded.expectation_id,
                  teams=COALESCE(excluded.teams, our_grabs.teams),
+                 show_title=COALESCE(excluded.show_title, our_grabs.show_title),
+                 section=COALESCE(excluded.section, our_grabs.section),
                  created_at=excluded.created_at""",
             (row["id"], row["program_guid"], row["title"], row["channel_vcn"],
              row["begins_at"], source, subscription, pass_id, pass_id,
-             expectation_id, _now(), row["program_guid"]))
+             expectation_id, _now(), row["program_guid"], row["program_guid"],
+             row["program_guid"]))
 
 
 def forget(airing_id) -> None:

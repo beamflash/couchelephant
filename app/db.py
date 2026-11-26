@@ -651,6 +651,8 @@ MIGRATIONS = [
     # forgets a programme once it has aired. See app/recart.py.
     ("pass_actions", "parent_title", "TEXT"),
     ("our_grabs", "teams", "TEXT"),
+    ("our_grabs", "show_title", "TEXT"),
+    ("our_grabs", "section", "TEXT"),
     ("recordings", "art", "TEXT"),
     ("recordings", "thumb", "TEXT"),
     ("recordings", "content_rating", "TEXT"),

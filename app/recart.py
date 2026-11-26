@@ -75,6 +75,14 @@ _GRABS = """UPDATE our_grabs SET teams = (SELECT NULLIF(p.teams, '[]') FROM prog
            AND EXISTS (SELECT 1 FROM programs p WHERE p.guid = our_grabs.program_guid
                        AND p.teams IS NOT NULL AND p.teams != '[]')"""
 
+_GRABS_NAME = """UPDATE our_grabs SET
+         show_title = COALESCE(show_title, (SELECT NULLIF(p.grandparent_title, '')
+                               FROM programs p WHERE p.guid = our_grabs.program_guid)),
+         section = COALESCE(section, (SELECT NULLIF(p.section, '')
+                            FROM programs p WHERE p.guid = our_grabs.program_guid))
+       WHERE (show_title IS NULL OR section IS NULL) AND program_guid IS NOT NULL
+         AND EXISTS (SELECT 1 FROM programs p WHERE p.guid = our_grabs.program_guid)"""
+
 _LOG = """UPDATE pass_actions SET parent_title = (SELECT NULLIF(p.grandparent_title, '')
            FROM programs p WHERE p.guid = pass_actions.program_guid)
          WHERE parent_title IS NULL AND program_guid IS NOT NULL
@@ -86,7 +94,7 @@ def migrate(conn) -> None:
     a row made before the columns existed keeps what it can."""
     # Whatever the guide offers goes through the same check as a fetched one.
     conn.create_function("ce_public", 1, _public)
-    for sql in (*_REFRESH, _LOG, _GRABS):
+    for sql in (*_REFRESH, _LOG, _GRABS, _GRABS_NAME):
         conn.execute(sql)
 
 

@@ -242,10 +242,16 @@ def test_every_recording_api_survives_an_empty_guide(client, synced):
                   " VALUES ('g9', 'Ep', 'Show', '5.1', 1, ?)", (int(time.time()) + 3600,))
     aid = _airing("a-x", "g-x", "5.1", int(time.time()) + 7200)
     recorder.book(aid)
+    with db.tx() as c:
+        c.execute("INSERT INTO our_grabs (airing_id, program_guid, title, channel_vcn, begins_at,"
+                  " source, pass_id, pass_uid, created_at) VALUES ('ag', 'plex://episode/abc', 'Ep',"
+                  " '5.1', ?, 'pass', 98, 'gone-uid', 1)", (int(time.time()) + 7200,))
     recart.refresh_from_guide()
     with db.tx() as c:
         for t in GUIDE_TABLES:
             c.execute(f"DELETE FROM {t}")
+    from app import passes
+    assert [o["title"] for o in passes.orphans() if o["lost_id"] == 98] == ["Murder, She Wrote"]
 
     # Each surface, with the guide gone.
     home = client.get("/api/tv/home").json()
@@ -527,3 +533,50 @@ def test_the_one_time_copy_gives_old_plex_bookings_their_teams():
     recart.migrate(conn)
     conn.commit()
     assert db.one("SELECT teams FROM our_grabs")["teams"] == TEAMS
+
+
+def test_a_destination_with_the_recording_art_event_hears_the_notice(monkeypatch):
+    from app import health, notify
+    from tests import fake_chat
+    url = fake_chat.start()
+    monkeypatch.setattr(notify, "DISCORD_HOSTS", frozenset({"127.0.0.1", "localhost"}))
+    monkeypatch.setattr(notify, "DISCORD_SCHEMES", frozenset({"http"}))
+    try:
+        notify.save_destination(name="Apps", kind="discord", events=[health.RECORDING_ART],
+                                remind_hours=24, webhook=f"{url}/api/webhooks/1/a")
+        _finished("u1", title=None, show_title=None, guid=None, plex_rating_key=None)
+        now = int(time.time())
+        recart.daily_check(None, now=now)
+        assert "recording_art" in _open_codes()
+        assert notify.dispatch(now=now) == 1
+        assert len(fake_chat.discord_sent()) == 1
+    finally:
+        fake_chat.stop()
+
+
+def test_a_lost_pass_keeps_its_show_and_sport_when_the_guide_forgot():
+    from app import passes
+    begins = int(time.time()) + 7200
+    _program("g-lost")
+    with db.tx() as c:
+        c.execute("INSERT INTO our_grabs (airing_id, program_guid, title, channel_vcn, begins_at,"
+                  " source, pass_id, pass_uid, created_at) VALUES ('a1', 'g-lost', 'Ep', '5.1', ?,"
+                  " 'pass', 99, 'gone-uid', 1)", (begins,))
+    conn = db.connect()
+    recart.migrate(conn)                          # what the guide still knows is copied
+    conn.commit()
+    with db.tx() as c:
+        c.execute("DELETE FROM programs")
+    got = [o for o in passes.orphans() if o["lost_id"] == 99]
+    assert got and got[0]["title"] == "Murder, She Wrote"
+
+
+def test_a_booking_made_now_keeps_the_show_and_section():
+    from app import passes
+    _program("g2")
+    with db.tx() as c:
+        c.execute("UPDATE programs SET section = 'sports' WHERE guid = 'g2'")
+    passes.remember({"id": "a2", "program_guid": "g2", "title": "Ep", "channel_vcn": "5.1",
+                     "begins_at": 5}, "pass", "sub", pass_id=1)
+    row = db.one("SELECT show_title, section FROM our_grabs WHERE airing_id = 'a2'")
+    assert row and row["show_title"] == "Murder, She Wrote" and row["section"] == "sports"
