@@ -199,3 +199,109 @@ def test_the_daily_check_raises_a_notice_only_when_repair_fails(monkeypatch):
     recart.daily_check(None, now=10_000)
     codes = [n["code"] for n in db.query("SELECT code FROM notices WHERE resolved_at IS NULL")]
     assert "recording_art" in codes
+
+
+# ---------- the rest of what outlives the guide ----------
+
+TEAMS = '[{"id": 1, "name": "Chiefs"}, {"id": 2, "name": "Broncos"}]'
+
+
+def test_the_teams_are_read_from_the_recording_first():
+    from app import overtime
+    rid = _finished("u1", guid="plex://episode/gone", title="Game", teams=TEAMS)
+    assert overtime.guide_teams(_rec(rid)) == ["Chiefs", "Broncos"]
+
+
+def test_a_pass_sees_the_teams_of_its_own_recording_after_the_guide_forgot():
+    from app import passes
+    _finished("u1", guid="plex://episode/gone", state="scheduled", teams=TEAMS,
+              source="pass", pass_id=7, begins_at=int(time.time()) + 3600,
+              starts_at=int(time.time()) + 3000, airing_id="a1")
+    got = passes._pass_bookings(7)
+    assert got and got[0]["teams"] == TEAMS
+
+
+def test_a_booking_log_keeps_the_show_name():
+    from app import passes
+    passes._log(3, {"program_guid": "g", "id": "a", "title": "Ep", "grandparent_title": "Show",
+                    "channel_vcn": "5.1", "begins_at": 5}, "failed", "no", False)
+    assert db.one("SELECT parent_title FROM pass_actions")["parent_title"] == "Show"
+
+
+def test_the_one_time_copy_fills_the_show_name_of_old_log_lines():
+    _program("g1")
+    with db.tx() as c:
+        c.execute("INSERT INTO pass_actions (program_guid, program_title, action) "
+                  "VALUES ('g1', 'Ep', 'failed')")
+    conn = db.connect()
+    recart.migrate(conn)
+    conn.commit()
+    assert db.one("SELECT parent_title FROM pass_actions")["parent_title"] == "Murder, She Wrote"
+
+
+def test_a_failed_booking_keeps_its_show_name_when_the_guide_is_empty():
+    from app.routes import passes as pass_routes
+    begins = int(time.time()) + 7200
+    with db.tx() as c:
+        c.execute("INSERT INTO pass_actions (pass_id, program_guid, airing_id, program_title,"
+                  " parent_title, channel_vcn, begins_at, action, reason, dry_run, created_at)"
+                  " VALUES (1, 'gone', 'a1', 'Ep', 'Show', '5.1', ?, 'failed', 'nope', 0, 1)",
+                  (begins,))
+    rows = pass_routes._schedule_rows()
+    failed = [r for r in rows if r["status"] == "failed"]
+    assert failed and failed[0]["title"] == "Ep" and failed[0]["parent"] == "Show"
+
+
+def test_a_channel_that_left_the_lineup_still_has_a_name(client):
+    from starlette.requests import Request
+
+    from app.routes import tv
+    req = Request({"type": "http", "headers": [(b"host", b"testserver")], "scheme": "http",
+                   "server": ("testserver", 80), "path": "/", "query_string": b""})
+    _finished("u1", channel_vcn="77.1", channel_title="77.1 WXYZ")
+    assert tv._channel(req, "77.1", "")["name"] == "77.1 WXYZ"
+    assert tv._channel(req, "88.8", "")["name"] == "Channel 88.8"
+
+
+def test_sport_is_told_from_the_recordings_when_the_guide_forgot():
+    from app.routes import tv
+    _finished("u1", show_title="NFL Football", section="sports", guid=None)
+    assert tv._sport_show("NFL Football")
+
+
+def test_a_recording_never_has_an_empty_title(client):
+    _finished("u1", title=None, show_title=None, guid=None)
+    assert client.get("/api/tv/home").json()["recent"][0]["title"]
+
+
+def test_a_destination_that_heard_every_fault_hears_about_art_too():
+    from app import health, notify
+    others = [c for c, _ in notify.FAULTS if c != health.RECORDING_ART]
+    with db.tx() as c:
+        c.execute("DELETE FROM destinations")
+        c.execute("DELETE FROM settings WHERE key = 'mig_art_event'")
+        c.execute("INSERT INTO destinations (name, kind, events) VALUES ('d', 'webhook', ?)",
+                  (",".join(others),))
+    notify.add_art_event()
+    got = db.one("SELECT events FROM destinations")["events"].split(",")
+    assert health.RECORDING_ART in got
+    assert health.RECORDING_ART in [c for c, _ in notify.FAULTS]
+
+
+def test_the_web_pages_and_the_failed_bookings_survive_an_empty_guide(client, synced):
+    begins = int(time.time()) + 7200
+    _finished("u1")
+    with db.tx() as c:
+        c.execute("INSERT INTO pass_actions (pass_id, program_guid, airing_id, program_title,"
+                  " parent_title, channel_vcn, begins_at, action, reason, dry_run, created_at)"
+                  " VALUES (1, 'gone', 'a1', 'Ep', 'Show', '5.1', ?, 'failed', 'nope', 0, 1)",
+                  (begins,))
+        for t in GUIDE_TABLES:
+            c.execute(f"DELETE FROM {t}")
+    for path in ("/home", "/recordings"):
+        assert client.get(path).status_code == 200
+    rows = client.get("/api/schedule").json()["rows"]
+    assert rows and all(r["title"] for r in rows)
+    assert [r for r in rows if r["status"] == "failed"][0]["parent"] == "Show"
+    for r in client.get("/api/tv/recordings").json()["recorded"]:
+        assert r["title"] and r["art"] and r["channel"]["name"]
