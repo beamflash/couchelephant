@@ -39,6 +39,7 @@ from .. import (
     passes,
     paths,
     ratelimit,
+    recart,
     recorder,
     sync,
     tls,
@@ -380,6 +381,14 @@ def _art(program_guid):
     return (p["art"] or p["thumb"] or "") if p else ""
 
 
+def _art_of(request, rec):
+    """The picture for a recording: its own copy first, the guide second, and
+    last a title card, so a tile is never blank."""
+    return (rec["art"] or rec["thumb"] or _art(rec["program_guid"])
+            or (_art_on_now(rec["channel_vcn"]) if rec["kind"] == "live" else "")
+            or recart.card_url(_base(request), rec["uid"]))
+
+
 def _art_on_now(vcn):
     """A live channel has no programme of its own: the picture of what the
     guide says is on it now, so a card for it is not blank."""
@@ -428,8 +437,7 @@ def recording_json(request: Request, rec) -> dict:
         "recorded_by": "couchelephant",
         "title": big, "subtitle": small,
         "channel": _channel(request, rec["channel_vcn"], rec["channel_title"]),
-        "art": _art(rec["program_guid"])
-               or (_art_on_now(rec["channel_vcn"]) if rec["kind"] == "live" else ""),
+        "art": _art_of(request, rec),
         "begins_at": rec["begins_at"], "ends_at": rec["ends_at"],
         "started_at": rec["started_at"], "ended_at": rec["ended_at"],
         # How much there is to watch right now, which for a recording still
@@ -494,7 +502,8 @@ def _plex_now(request, now):
             "id": f"plex:{g['id']}", "kind": "recording", "state": "recording",
             "recorded_by": "plex", "title": big, "subtitle": small,
             "channel": _channel(request, g["channel_vcn"], ch["title"] if ch else ""),
-            "art": "", "begins_at": g["begins_at"], "ends_at": g["ends_at"],
+            "art": recart.card_url(_base(request), f"plex-{g['id']}"),
+            "begins_at": g["begins_at"], "ends_at": g["ends_at"],
             "seconds": max(0, now - (g["begins_at"] or now)), "complete": False,
             "position": 0, "playable": False, "playlist": "",
             "note": "Cannot play while Plex is recording",
