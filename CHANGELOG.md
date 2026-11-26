@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.5.40 - 2026-11-26
 
 ### Added
 
@@ -14,6 +14,17 @@
   on a channel in the apps. An empty Favorites tab says how to add one. The
   server has `GET /api/tv/search`, `GET /api/tv/favorites` with `add` and
   `remove`, and a `tab` on `/api/grid` and `/api/tv/guide`.
+
+### Fixed
+
+- **"The network connection was lost" on a tap.** The server closed an idle
+  connection after 5 seconds, and an app that reused it at that moment lost
+  the request, for example starting live TV. Idle connections now stay open
+  75 seconds, and the apps try once more when a reused connection drops.
+- A recording keeps its own genres, so the News tab still finds older news
+  recordings after the guide has forgotten them.
+- The guide grid pages channels in a stable order, refuses oversized requests,
+  limits a tab's channels to the day shown, and tab links keep the channel.
 
 ## 1.5.39 - 2026-11-26
 
