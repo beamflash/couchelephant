@@ -112,8 +112,7 @@ STORES = {
 
 # Kept out of an export unless the user asks. A token in a file is a token in
 # whatever the file lands in.
-SECRET_SETTINGS = frozenset(("plex_token", "cf_aud", "pg_password", "my_password",
-                             "card_secret"))
+SECRET_SETTINGS = frozenset(("plex_token", "cf_aud", "pg_password", "my_password"))
 
 # Never durable, whoever asks. These describe what this machine last did, not
 # anything anybody decided. `backingstore_status` in particular is written by
@@ -123,7 +122,9 @@ TRANSIENT_SETTINGS = frozenset(("backingstore_status",
                                 # The last health reading of Plex's own guide.
                                 # A snapshot of another machine's Plex, not a
                                 # decision of this user's worth carrying.
-                                "epg_refreshed_at", "guide_ends_at"))
+                                "epg_refreshed_at", "guide_ends_at",
+                                # When the recording-details sweep last ran here.
+                                "recart_checked_at"))
 
 # What a restore must never bring back. These rebuild from Plex on the next
 # sync, and a stale copy is worse than an empty one.

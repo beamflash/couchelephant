@@ -22,7 +22,7 @@ import uuid
 
 import httpx
 
-from . import db, paths, tuner
+from . import db, paths, recart, tuner
 
 log = logging.getLogger("couchelephant.recorder")
 
@@ -542,8 +542,8 @@ def book(airing, source: str = "manual", pass_id: int | None = None,
              prog["episode"] if prog else None, prog["year"] if prog else None,
              prog["section"] if prog else None,
              prog["summary"] if prog else None,
-             (prog["art"] or None) if prog else None,
-             (prog["thumb"] or None) if prog else None,
+             (recart._public(prog["art"]) or None) if prog else None,
+             (recart._public(prog["thumb"]) or None) if prog else None,
              (prog["content_rating"] or None) if prog else None,
              (prog["teams"] if prog and prog["teams"] != "[]" else None),
              airing["channel_vcn"],

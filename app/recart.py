@@ -8,11 +8,10 @@ from Plex when the guide is gone, and, when no picture exists anywhere, drawn
 as a title card so no tile is ever empty.
 """
 import functools
-import hmac
 import io
 import logging
 import os
-import secrets
+import threading
 import time
 import zlib
 
@@ -22,8 +21,16 @@ from . import db, health
 
 log = logging.getLogger("couchelephant.recart")
 
-DISCOVER_URL = os.environ.get("COUCHELEPHANT_DISCOVER_URL",
-                              "https://discover.provider.plex.tv")
+_DEFAULT_DISCOVER = "https://discover.provider.plex.tv"
+DISCOVER_URL = os.environ.get("COUCHELEPHANT_DISCOVER_URL", _DEFAULT_DISCOVER)
+# A picture address is sent to every client, so only a secure one is used.
+if not DISCOVER_URL.startswith("https://"):
+    DISCOVER_URL = _DEFAULT_DISCOVER
+FETCH_TIMEOUT = 10.0         # seconds a call to Plex may take, never the 120 the rest use
+MAX_BODY = 256 * 1024        # a metadata answer is a few KB; refuse anything near this
+MAX_URL = 1000
+PASS_SECONDS = 20.0          # one pass stops starting fetches after this long
+DAILY_CAP = 20               # recordings the daily sweep looks at per pass
 # A finished recording: the ones whose picture matters and will not come back.
 SHOWN = "('recording', 'finished', 'moving', 'in_plex', 'failed')"
 PER_PASS = 2                 # fetches per minute, so Plex is never hammered
@@ -36,15 +43,15 @@ _REFRESH = (
     # The guide's picture wins while it has one: it is the newest. A blank one
     # never replaces what is kept.
     """UPDATE recordings SET
-         art = COALESCE((SELECT NULLIF(p.art, '') FROM programs p
+         art = COALESCE((SELECT NULLIF(ce_public(p.art), '') FROM programs p
                          WHERE p.guid = recordings.program_guid), art),
-         thumb = COALESCE((SELECT NULLIF(p.thumb, '') FROM programs p
+         thumb = COALESCE((SELECT NULLIF(ce_public(p.thumb), '') FROM programs p
                            WHERE p.guid = recordings.program_guid), thumb)
        WHERE program_guid IS NOT NULL AND EXISTS (
          SELECT 1 FROM programs p WHERE p.guid = recordings.program_guid
-           AND ((NULLIF(p.art, '') IS NOT NULL
+           AND ((NULLIF(ce_public(p.art), '') IS NOT NULL
                  AND p.art IS NOT COALESCE(recordings.art, ''))
-             OR (NULLIF(p.thumb, '') IS NOT NULL
+             OR (NULLIF(ce_public(p.thumb), '') IS NOT NULL
                  AND p.thumb IS NOT COALESCE(recordings.thumb, ''))))""",
     # What is already kept is never overwritten, only filled in.
     """UPDATE recordings SET
@@ -62,6 +69,12 @@ _REFRESH = (
 )
 
 
+_GRABS = """UPDATE our_grabs SET teams = (SELECT NULLIF(p.teams, '[]') FROM programs p
+           WHERE p.guid = our_grabs.program_guid)
+         WHERE teams IS NULL AND program_guid IS NOT NULL
+           AND EXISTS (SELECT 1 FROM programs p WHERE p.guid = our_grabs.program_guid
+                       AND p.teams IS NOT NULL AND p.teams != '[]')"""
+
 _LOG = """UPDATE pass_actions SET parent_title = (SELECT NULLIF(p.grandparent_title, '')
            FROM programs p WHERE p.guid = pass_actions.program_guid)
          WHERE parent_title IS NULL AND program_guid IS NOT NULL
@@ -71,7 +84,9 @@ _LOG = """UPDATE pass_actions SET parent_title = (SELECT NULLIF(p.grandparent_ti
 def migrate(conn) -> None:
     """Copy what the guide still has onto every recording. Runs at start, so
     a row made before the columns existed keeps what it can."""
-    for sql in (*_REFRESH, _LOG):
+    # Whatever the guide offers goes through the same check as a fetched one.
+    conn.create_function("ce_public", 1, _public)
+    for sql in (*_REFRESH, _LOG, _GRABS):
         conn.execute(sql)
 
 
@@ -86,7 +101,7 @@ def _public(url) -> str:
     """An address a client may be handed: absolute, https, and carrying no
     credential. Anything else is dropped, never kept."""
     u = (url or "").strip()
-    if not u.startswith(("https://", "http://")):
+    if len(u) > MAX_URL or not u.startswith(("https://", "http://")):
         return ""
     low = u.lower()
     if "token" in low or "x-plex" in low or "@" in u.split("//", 1)[1].split("/", 1)[0]:
@@ -97,10 +112,16 @@ def _public(url) -> str:
 def discover(guid: str, token: str) -> dict:
     """Plex's own metadata for a plex:// guid: public picture addresses."""
     ident = (guid or "").rsplit("/", 1)[-1]
-    r = httpx.get(f"{DISCOVER_URL}/library/metadata/{ident}", timeout=15,
-                  headers={"Accept": "application/json", "X-Plex-Token": token})
-    r.raise_for_status()
-    items = r.json().get("MediaContainer", {}).get("Metadata", []) or []
+    import json
+    with httpx.stream("GET", f"{DISCOVER_URL}/library/metadata/{ident}", timeout=FETCH_TIMEOUT,
+                      headers={"Accept": "application/json", "X-Plex-Token": token}) as r:
+        r.raise_for_status()
+        body = b""
+        for chunk in r.iter_bytes():
+            body += chunk
+            if len(body) > MAX_BODY:
+                raise ValueError("answer too large")
+    items = json.loads(body).get("MediaContainer", {}).get("Metadata", []) or []
     m = items[0] if items else {}
     return {"art": m.get("art") or m.get("grandparentArt"),
             "thumb": m.get("thumb") or m.get("grandparentThumb")}
@@ -149,15 +170,20 @@ def _wait(fails) -> int:
     return min(7 * DAY, 3600 * 4 ** max(0, (fails or 1) - 1))
 
 
-def _missing_art(limit=None, now=0, forced=False):
+def _missing_art(limit=None, now=0):
+    """Recordings with no picture whose last miss is old enough to ask again."""
     rows = db.query(
         f"SELECT * FROM recordings WHERE kind = 'recording' AND state IN {SHOWN} "
         "AND COALESCE(art, '') = '' AND COALESCE(thumb, '') = '' "
         "AND (COALESCE(program_guid, '') != '' OR COALESCE(plex_rating_key, '') != '') "
         "ORDER BY id DESC")
+    return _due(rows, limit, now)
+
+
+def _due(rows, limit, now):
     out = []
     for r in rows:
-        if not forced and r["art_tried_at"] and now < r["art_tried_at"] + _wait(r["art_fails"]):
+        if r["art_tried_at"] and now < r["art_tried_at"] + _wait(r["art_fails"]):
             continue
         out.append(r)
         if limit and len(out) >= limit:
@@ -165,13 +191,16 @@ def _missing_art(limit=None, now=0, forced=False):
     return out
 
 
-def backfill(plex, now: int | None = None, limit: int = PER_PASS) -> int:
+def backfill(plex, now: int | None = None, limit: int = PER_PASS,
+             deadline: float | None = None) -> int:
     """Fetch the picture of a few recordings that have none. Failures are
     remembered, so a recording Plex has no picture for is not asked every
-    minute."""
+    minute, and a pass stops starting fetches once its time is used."""
     now = now or int(time.time())
     got = 0
     for rec in _missing_art(limit, now):
+        if deadline and time.monotonic() > deadline:
+            break
         if fetch_art(rec, plex):
             got += 1
         else:
@@ -200,78 +229,98 @@ def _repair_identity(rec, plex) -> bool:
     return True
 
 
-def daily_check(plex, now: int | None = None) -> None:
-    """Every finished recording has a title and a picture. What is missing is
-    repaired from Plex; a notice is raised only for what could not be."""
-    now = now or int(time.time())
-    refresh_from_guide()
-    nameless = db.query(
+def _nameless():
+    return db.query(
         f"SELECT * FROM recordings WHERE kind = 'recording' AND state IN {SHOWN} "
         "AND COALESCE(title, '') = '' AND COALESCE(show_title, '') = ''")
-    stuck = [r for r in nameless if not _repair_identity(r, plex)]
-    for rec in _missing_art(now=now, forced=True):
-        if not fetch_art(rec, plex):
+
+
+def daily_check(plex, now: int | None = None, deadline: float | None = None) -> None:
+    """Every finished recording has a title. What is missing is repaired from
+    Plex, a few at a time and never faster than the backoff allows, and a
+    notice is raised only for one that could not be. A missing picture is not
+    a fault: a title card stands in and the picture is looked for in the
+    background."""
+    now = now or int(time.time())
+    refresh_from_guide()
+    for rec in _due(_nameless(), DAILY_CAP, now):
+        if deadline and time.monotonic() > deadline:
+            break
+        if not _repair_identity(rec, plex):
             _fail(rec["id"], now)
-    faded = db.query(
-        f"SELECT * FROM recordings WHERE kind = 'recording' AND state IN {SHOWN} "
-        "AND COALESCE(art, '') = '' AND COALESCE(thumb, '') = '' "
-        "AND COALESCE(art_fails, 0) >= 3")
+    backfill(plex, now, DAILY_CAP, deadline)
+    stuck = _nameless()
     notes = []
-    if stuck or faded:
-        names = [(r["title"] or r["show_title"] or f"recording {r['id']}")
-                 for r in [*stuck, *faded]][:5]
+    if stuck:
         notes.append({
             "code": health.RECORDING_ART, "severity": "warn",
             "title": "A recording could not be given its details",
-            "detail": (f"{len(stuck)} recording(s) have no title and {len(faded)} have no "
-                       "picture that Plex could supply: " + ", ".join(names) + "."),
-            "hint": "A title card is shown in place of the picture. It is looked for "
-                    "again each day.",
+            "detail": (f"{len(stuck)} recording(s) have no title and Plex could not supply "
+                       "one: " + ", ".join(f"recording {r['id']}" for r in stuck[:5]) + "."),
+            "hint": "It is looked for again each day.",
         })
     health.record(notes, now, owns=health.RECORDING_ART_CODES)
 
 
 def tick(now: int | None = None) -> None:
-    """Every minute: copy from the guide, fetch a few, and once a day check."""
+    """Every minute: copy from the guide, fetch a few, and once a day check.
+    Bounded in time: it gives up starting new fetches after PASS_SECONDS."""
     now = now or int(time.time())
+    deadline = time.monotonic() + PASS_SECONDS
     refresh_from_guide()
     plex = None
     url, token = db.get_setting("plex_url"), db.get_setting("plex_token")
     if url and token:
         from .plex import Plex
-        plex = Plex(url, token)
+        plex = Plex(url, token, timeout=httpx.Timeout(FETCH_TIMEOUT, connect=5.0))
     try:
-        backfill(plex, now)
+        backfill(plex, now, deadline=deadline)
         last = int(db.get_setting("recart_checked_at") or 0)
         if now - last >= DAY:
             db.set_setting("recart_checked_at", now)
-            daily_check(plex, now)
+            daily_check(plex, now, deadline)
     finally:
         if plex is not None:
             plex.close()
 
 
+# ---------- its own thread ----------
+
+_stop = threading.Event()
+_thread: threading.Thread | None = None
+
+
+def _run(interval) -> None:
+    # Apart from every other loop on purpose: a slow Plex or a hung fetch here
+    # must never hold up overtime, resume points or a recording.
+    _stop.wait(20)
+    while not _stop.is_set():
+        try:
+            tick()
+        except Exception as e:
+            log.exception("recording art: %s", e)
+        _stop.wait(interval)
+
+
+def start(interval: float = 60, first_wait: bool = True) -> None:
+    global _thread
+    if _thread and _thread.is_alive():
+        return
+    _stop.clear()
+    _thread = threading.Thread(target=_run, args=(interval,), daemon=True, name="ce-recart")
+    _thread.start()
+
+
+def stop() -> None:
+    _stop.set()
+
+
+def art_url(base: str, key: str) -> str:
+    """Where a client asks for a recording's picture, with its own key."""
+    return f"{base}/api/tv/art/{key}"
+
+
 # ---------- the title card ----------
-
-def _secret() -> bytes:
-    s = db.get_setting("card_secret")
-    if not s:
-        s = secrets.token_hex(32)
-        db.set_setting("card_secret", s)
-    return s.encode()
-
-
-def sign(key: str) -> str:
-    return hmac.new(_secret(), key.encode(), "sha256").hexdigest()[:32]
-
-
-def signature_ok(key: str, sig: str) -> bool:
-    return hmac.compare_digest(sign(key), sig or "")
-
-
-def card_url(base: str, key: str) -> str:
-    return f"{base}/card/{key}/{sign(key)}.png"
-
 
 def _flat_png(w=16, h=9, rgb=(20, 23, 28)) -> bytes:
     """A plain card, for a machine with no Pillow."""

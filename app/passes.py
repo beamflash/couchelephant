@@ -888,13 +888,14 @@ def _pass_bookings(pass_id: int) -> list[dict]:
     since = now - LANGUAGE_WINDOW
     out = []
     for g in db.query(
-            "SELECT o.*, p.teams FROM our_grabs o LEFT JOIN programs p ON p.guid = o.program_guid "
+            "SELECT o.*, p.teams AS guide_teams FROM our_grabs o "
+            "LEFT JOIN programs p ON p.guid = o.program_guid "
             "WHERE o.pass_id = ? AND o.source = 'pass' AND o.begins_at > ?",
             (pass_id, since)):
         if g["begins_at"] <= now + LEAD_SECONDS and not _grab_alive(g):
             continue          # lost: Plex dropped it and nothing records it
         out.append({"id": g["airing_id"], "program_guid": g["program_guid"],
-                    "teams": g["teams"], "begins_at": g["begins_at"],
+                    "teams": g["teams"] or g["guide_teams"], "begins_at": g["begins_at"],
                     "channel_vcn": g["channel_vcn"], "grab": g, "rec": None,
                     "started": g["begins_at"] <= now + LEAD_SECONDS,
                     "channel_language": _channel_language(g["channel_vcn"])})
@@ -1106,18 +1107,20 @@ def remember(row, source: str, subscription: str | None = None,
         c.execute(
             """INSERT INTO our_grabs (airing_id, program_guid, title, channel_vcn,
                                       begins_at, source, subscription, pass_id,
-                                      pass_uid, expectation_id, created_at)
+                                      pass_uid, expectation_id, created_at, teams)
                VALUES (?,?,?,?,?,?,?,?,
-                       (SELECT uid FROM passes WHERE id = ?),?,?)
+                       (SELECT uid FROM passes WHERE id = ?),?,?,
+                       (SELECT NULLIF(teams, '[]') FROM programs WHERE guid = ?))
                ON CONFLICT(airing_id) DO UPDATE SET source=excluded.source,
                  subscription=COALESCE(excluded.subscription, our_grabs.subscription),
                  pass_id=COALESCE(excluded.pass_id, our_grabs.pass_id),
                  pass_uid=COALESCE(excluded.pass_uid, our_grabs.pass_uid),
                  expectation_id=excluded.expectation_id,
+                 teams=COALESCE(excluded.teams, our_grabs.teams),
                  created_at=excluded.created_at""",
             (row["id"], row["program_guid"], row["title"], row["channel_vcn"],
              row["begins_at"], source, subscription, pass_id, pass_id,
-             expectation_id, _now()))
+             expectation_id, _now(), row["program_guid"]))
 
 
 def forget(airing_id) -> None:

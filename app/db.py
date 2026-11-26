@@ -650,6 +650,7 @@ MIGRATIONS = [
     # What a recording needs to be shown, kept on the row because the guide
     # forgets a programme once it has aired. See app/recart.py.
     ("pass_actions", "parent_title", "TEXT"),
+    ("our_grabs", "teams", "TEXT"),
     ("recordings", "art", "TEXT"),
     ("recordings", "thumb", "TEXT"),
     ("recordings", "content_rating", "TEXT"),
