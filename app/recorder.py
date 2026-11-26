@@ -585,6 +585,8 @@ def cancel(rec_id: int) -> None:
         job = _jobs.pop(rec_id, None)
     if job:
         job.stop()
+    from . import ondemand
+    ondemand.forget(rec["uid"])
     shutil.rmtree(rec_dir(rec["uid"]), ignore_errors=True)
     with db.tx() as c:
         c.execute("DELETE FROM recordings WHERE id = ?", (rec_id,))

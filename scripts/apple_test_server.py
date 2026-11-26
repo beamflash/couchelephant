@@ -268,6 +268,8 @@ def main():
         vdir = recorder.view_dir(uid)
         if ondemand:
             plex_file = os.path.join(SCRATCH, "long.ts")
+            from app import ondemand
+            ondemand.forget(uid)
             shutil.rmtree(recorder.rec_dir(uid), ignore_errors=True)
             if not os.path.exists(plex_file):
                 subprocess.run([recorder.FFMPEG, "-v", "error", "-f", "lavfi", "-i",

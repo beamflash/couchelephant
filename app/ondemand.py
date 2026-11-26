@@ -157,6 +157,7 @@ class _Run:
 
     def covers(self, n: int) -> bool:
         return (not self.dead and self.proc.poll() is None
+                and os.path.isdir(od_dir(self.uid))
                 and self.start <= n <= self.progress() + AHEAD)
 
     def words(self) -> str:
@@ -531,6 +532,17 @@ def _start_watcher():
         if _watcher is None or not _watcher.is_alive():
             _watcher = threading.Thread(target=_watch, daemon=True)
             _watcher.start()
+
+
+def forget(uid: str):
+    """The recording is gone or made over: stop what runs for it."""
+    with _lock(uid):
+        victims = _runs.pop(uid, [])
+        for r in victims:
+            r.dead = True
+    for v in victims:
+        _kill(v)
+    _failed.pop(uid, None)
 
 
 def shutdown():

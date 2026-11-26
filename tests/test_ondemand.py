@@ -260,3 +260,17 @@ def test_only_a_plain_segment_name_is_a_segment(od):
     c = TestClient(app)
     for bad in ("seg1000.ts", "seg\u0661\u0662\u0663\u0664\u0665.ts", "seg00001.ts%0a"):
         assert c.get(f"/hls/{rec['uid']}/{bad}").status_code == 404
+
+
+def test_a_recording_made_over_does_not_keep_the_run_of_its_old_files(od):
+    import shutil
+    rec, logf = od
+    c = TestClient(app)
+    assert c.get(f"/hls/{rec['uid']}/seg00100.ts").status_code == 200
+    ondemand.forget(rec["uid"])
+    shutil.rmtree(ondemand.od_dir(rec["uid"]))
+    os.makedirs(ondemand.od_dir(rec["uid"]))
+    with open(os.path.join(ondemand.od_dir(rec["uid"]), "duration"), "w") as f:
+        f.write("4000.0")
+    assert c.get(f"/hls/{rec['uid']}/seg00101.ts").status_code == 200
+    assert len(_starts(logf)) == 2 and not ondemand.running("nothing")
