@@ -226,7 +226,8 @@ def test_a_failed_library_picture_falls_back_to_the_card_and_is_not_retried(clie
 def test_every_recording_api_survives_an_empty_guide(client, synced):
     _program("plex://episode/abc")
     with db.tx() as c:
-        c.execute("UPDATE programs SET content_rating = 'TV-PG' WHERE guid = 'plex://episode/abc'")
+        c.execute("UPDATE programs SET content_rating = 'TV-PG', genres = '[\"News\"]' "
+                  "WHERE guid = 'plex://episode/abc'")
     first = _finished("u1")
     _finished("u2", guid=None, title="Local Thing", show_title=None)
     _finished("u3", guid="plex://episode/zzz", state="finished")
@@ -260,6 +261,10 @@ def test_every_recording_api_survives_an_empty_guide(client, synced):
             assert r["channel"]["name"], (name, r)
     # The KEPT picture is what is used where there is one, not only the card.
     assert ART in [r["art"] for r in home["recent"]]
+    # And the kept genres still answer the News tab of recording search.
+    assert _rec(first)["genres"] == '["News"]'
+    found = client.get("/api/tv/search", params={"q": "murder", "tab": "news"}).json()
+    assert [r["title"] for r in found["recordings"]] == ["Murder, She Wrote"]
     assert lists["recordings"][0]["art"] == ART or ART in [r["art"] for r in lists["recordings"]]
     assert lists["detail"][0]["art"] == ART
     # What is on screen at that point keeps its rating.
@@ -782,3 +787,24 @@ def test_a_percent_sign_in_the_host_is_not_kept():
 def test_a_title_card_is_not_cached_for_long():
     from app.routes import art
     assert "max-age=300" in art.CARD_HEADERS["Cache-Control"]
+
+
+def test_booking_and_refresh_keep_the_genres_and_the_news_tab_uses_them(client, synced):
+    aid = _airing("a-gen", "g-gen", "5.1", int(time.time()) + 3600)
+    with db.tx() as c:
+        c.execute("UPDATE programs SET genres = '[\"News\"]' WHERE guid = 'g-gen'")
+    rid = recorder.book(aid)
+    assert _rec(rid)["genres"] == '["News"]'
+    with db.tx() as c:
+        c.execute("UPDATE recordings SET kind='recording', state='finished', title='Late News'")
+        for t in GUIDE_TABLES:
+            c.execute(f"DELETE FROM {t}")
+    found = client.get("/api/tv/search", params={"q": "late", "tab": "news"}).json()
+    assert len(found["recordings"]) == 1, "the guide forgot it, the recording did not"
+    # An older row is filled from the guide while it still has the programme.
+    rid2 = _finished("old", guid="plex://episode/old")
+    _program("plex://episode/old")
+    with db.tx() as c:
+        c.execute("UPDATE programs SET genres = '[\"Drama\"]' WHERE guid = 'plex://episode/old'")
+    recart.refresh_from_guide()
+    assert _rec(rid2)["genres"] == '["Drama"]'

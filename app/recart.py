@@ -61,10 +61,13 @@ _REFRESH = (
                             (SELECT NULLIF(p.content_rating, '') FROM programs p
                              WHERE p.guid = recordings.program_guid)),
          teams = COALESCE(NULLIF(teams, ''), (SELECT NULLIF(NULLIF(p.teams, '[]'), '')
+                            FROM programs p WHERE p.guid = recordings.program_guid)),
+         genres = COALESCE(NULLIF(NULLIF(genres, ''), '[]'),
+                           (SELECT NULLIF(NULLIF(p.genres, '[]'), '')
                             FROM programs p WHERE p.guid = recordings.program_guid))
        WHERE program_guid IS NOT NULL
          AND (NULLIF(summary, '') IS NULL OR NULLIF(content_rating, '') IS NULL
-              OR NULLIF(teams, '') IS NULL)
+              OR NULLIF(teams, '') IS NULL OR NULLIF(NULLIF(genres, ''), '[]') IS NULL)
          AND EXISTS (SELECT 1 FROM programs p WHERE p.guid = recordings.program_guid)""",
 )
 

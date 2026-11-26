@@ -664,6 +664,7 @@ MIGRATIONS = [
     ("recordings", "thumb", "TEXT"),
     ("recordings", "content_rating", "TEXT"),
     ("recordings", "teams", "TEXT"),
+    ("recordings", "genres", "TEXT"),
     ("recordings", "art_tried_at", "INTEGER"),
     ("recordings", "art_fails", "INTEGER DEFAULT 0"),
     ("recordings", "ads_final", "INTEGER DEFAULT 0"),
