@@ -8,23 +8,25 @@
   whole viewing copy (they are tidied away after two days) is no longer
   converted from the start. Its stream lists every 4 second segment for the
   full length at once, so a player can jump anywhere, and the server makes a
-  segment when it is asked for: one ffmpeg per recording, started at the
-  asked-for place, left running just ahead of the player, started again at a
-  far jump, and stopped when nobody asks for a minute. Same encoder as before
-  (graphics chip, with software as the fallback). A far place arrives in a
-  second or two instead of after the conversion. Complete copies and
-  recordings still being recorded play as before.
+  segment when it is asked for. Each viewer gets an ffmpeg started at the
+  place asked for (up to three at once for one recording, so two people at
+  different places do not disturb each other), kept just ahead of the player
+  by pausing it, started again at a far jump, and stopped when nobody asks
+  for a minute. Same encoder as before (graphics chip, with software as the
+  fallback). A far place arrives in a second or two instead of after the
+  conversion. Complete copies and recordings still being made play as before.
 
 ### Fixed
 
 - **Resume and Skip ad did nothing early in playback (Apple apps).** An old
-  recording had its viewing copy tidied away and rebuilt from 0:00 when you
-  played it, so a far place (2:47 into a game) did not exist yet and the
-  player dropped the jump. The resume went to 0:00 and Skip ad did nothing.
-  Fixed at the root by on-demand playback (below), and every jump (resume,
-  Skip ad, the lock screen scrubber, a reload) also waits until the player is
-  ready and the place exists, shows "Jumping to 2:47:25..." meanwhile, and a
-  resume holds the picture paused until it lands.
+  recording had its viewing copy rebuilt from 0:00 when you played it, so a
+  far place (2:47 into a game) did not exist yet and the player dropped the
+  jump: the resume went to 0:00 and Skip ad did nothing. On-demand playback
+  (see Changed) fixes that at the root. As a safety net every jump (resume,
+  Skip ad, the lock screen scrubber, a reload) waits until the player is ready
+  and the place exists and says "Jumping to 2:47:25..." meanwhile. Leaving
+  during that wait no longer saves 0:00 as the place, and Skip ad stays on
+  offer while a jump waits.
 - **A game's team intro was offered as an ad.** A sports recording's "break"
   that starts at second 0 (the pregame intro) is no longer sent to players.
 
