@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **Recordings no longer lose their pictures, and no tile is ever blank.** The
+  Top Shelf on Apple TV, the Home page and the Recorded lists read a
+  recording's picture from the guide, and the guide forgets a programme once
+  it has aired, so older recordings showed empty tiles. A recording now keeps
+  its own copy of its picture, description, rating and teams, filled when it
+  is booked and refreshed while the guide still has the programme.
+- Recordings made before this are filled in once at start from whatever the
+  guide still has. For the rest, CouchElephant asks Plex in the background for
+  the public picture address, a couple a minute at most, and remembers a miss
+  so it does not ask again every minute. An address that carries a Plex token
+  is never kept or handed to a client.
+- When no picture exists anywhere, the recording gets a title card: its name on
+  the CouchElephant background. The address is signed by a secret only this
+  server holds, so it works for the Top Shelf, which sends no key, and cannot
+  be guessed. It shows nothing the list did not already say.
+- Once a day every finished recording is checked for a title and a picture.
+  Whatever is missing is repaired from Plex by its guid or library item, and a
+  notice appears only if the repair fails.
+
 ## 1.5.38 - 2026-11-25
 
 ### Added
