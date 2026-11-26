@@ -2,12 +2,12 @@
 and never the only copy, because the guide forgets a programme once it has aired."""
 import time
 
-from app import db, recart, recorder
+from app import auth, db, recart, recorder
 from tests.test_recorder import _airing
 
 ART = "https://metadata-static.plex.tv/a/art.jpg"
 THUMB = "https://metadata-static.plex.tv/a/thumb.jpg"
-GUIDE_TABLES = ("airings", "programs", "plex_grabs", "plex_subscriptions")
+GUIDE_TABLES = ("airings", "programs", "plex_grabs", "plex_subscriptions", "channels", "teams")
 
 
 def _finished(uid, guid="plex://episode/abc", state="in_plex", **kw):
@@ -124,32 +124,116 @@ def test_an_address_that_carries_a_token_is_never_kept(monkeypatch):
 
 # ---------- never a blank tile ----------
 
-def test_no_art_anywhere_gets_a_title_card_that_needs_no_sign_in(client):
+def _path(url):
+    assert url.startswith("http://testserver"), url
+    return url[len("http://testserver"):]
+
+
+def test_no_art_anywhere_gets_a_title_card_from_the_authenticated_route(client):
     _finished("u1", guid=None)
     art = client.get("/api/tv/home").json()["recent"][0]["art"]
-    assert "/card/" in art
-    path = art.split("testserver", 1)[1]
-    r = client.get(path)
+    assert art == "http://testserver/api/tv/art/u1"
+    r = client.get(_path(art))
     assert r.status_code == 200 and r.headers["content-type"] == "image/png"
     assert r.content[:8] == b"\x89PNG\r\n\x1a\n"
 
 
-def test_a_card_address_cannot_be_guessed(client):
+def test_the_picture_route_needs_the_same_sign_in_as_the_rest(client):
     _finished("u1", guid=None)
-    assert client.get("/card/u1/" + "0" * 32 + ".png").status_code == 404
-    assert client.get("/card/nobody/" + "0" * 32 + ".png").status_code == 404
+    db.set_setting("auth_mode", "local")
+    auth.create_user("owner", "a-good-password")
+    assert client.get("/api/tv/art/u1").status_code == 401
+    assert recart.art_url("x", "u1") == "x/api/tv/art/u1"
 
 
-def test_the_card_route_is_open_to_a_television_with_no_key():
+def test_there_is_no_open_card_route_any_more(client):
     from app import web
-    assert web._is_open("/card/abc/def.png")
+    assert not web._is_open("/card/abc/def.png")
+    assert client.get("/card/u1/" + "0" * 32 + ".png").status_code in (401, 404)
+
+
+def test_a_picture_for_nobody_is_a_404(client):
+    assert client.get("/api/tv/art/nobody").status_code == 404
+
+
+def test_a_kept_public_picture_is_sent_on_as_a_redirect(client):
+    _finished("u1", art=ART)
+    r = client.get("/api/tv/art/u1", follow_redirects=False)
+    assert r.status_code == 302 and r.headers["location"] == ART
+
+
+def test_the_library_picture_is_fetched_here_with_the_token_in_a_header(client, monkeypatch):
+    from app.routes import art as art_route
+    seen = []
+
+    class R:
+        status_code = 200
+        headers = {"content-type": "image/jpeg"}
+
+        def __init__(self, body):
+            self.body = body
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"MediaContainer": {"Metadata": [{"thumb": "/library/metadata/1/thumb/2"}]}}
+
+        def iter_bytes(self):
+            yield b"JPEGDATA"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_get(url, **kw):
+        seen.append((url, kw.get("headers")))
+        return R(b"")
+
+    def fake_stream(method, url, **kw):
+        seen.append((url, kw.get("headers")))
+        return R(b"")
+    monkeypatch.setattr(art_route.httpx, "get", fake_get)
+    monkeypatch.setattr(art_route.httpx, "stream", fake_stream)
+    db.set_setting("plex_url", "http://plex.test:32400")
+    db.set_setting("plex_token", "SECRET")
+    art_route._cache.clear()
+    art_route._missed.clear()
+    _finished("u1", guid=None)
+    r = client.get("/api/tv/art/u1")
+    assert r.status_code == 200 and r.content == b"JPEGDATA"
+    assert all(h and h["X-Plex-Token"] == "SECRET" for _, h in seen)
+    assert all("SECRET" not in url for url, _ in seen)
+    assert "SECRET" not in r.headers.get("location", "")
+
+
+def test_a_failed_library_picture_falls_back_to_the_card_and_is_not_retried(client, monkeypatch):
+    from app.routes import art as art_route
+    calls = []
+
+    def boom(*a, **k):
+        calls.append(1)
+        raise RuntimeError("down")
+    monkeypatch.setattr(art_route.httpx, "get", boom)
+    db.set_setting("plex_url", "http://plex.test:32400")
+    db.set_setting("plex_token", "t")
+    art_route._cache.clear()
+    art_route._missed.clear()
+    _finished("u1", guid=None)
+    for _ in range(3):
+        assert client.get("/api/tv/art/u1").headers["content-type"] == "image/png"
+    assert len(calls) == 1
 
 
 # ---------- the whole class: the guide is empty and nothing blanks ----------
 
 def test_every_recording_api_survives_an_empty_guide(client, synced):
     _program("plex://episode/abc")
-    _finished("u1")
+    with db.tx() as c:
+        c.execute("UPDATE programs SET content_rating = 'TV-PG' WHERE guid = 'plex://episode/abc'")
+    first = _finished("u1")
     _finished("u2", guid=None, title="Local Thing", show_title=None)
     _finished("u3", guid="plex://episode/zzz", state="finished")
     _finished("u4", guid="plex://episode/yyy", state="recording", begins_at=1, ends_at=2)
@@ -162,18 +246,35 @@ def test_every_recording_api_survives_an_empty_guide(client, synced):
     with db.tx() as c:
         for t in GUIDE_TABLES:
             c.execute(f"DELETE FROM {t}")
-    seen = []
+
+    # Each surface, with the guide gone.
     home = client.get("/api/tv/home").json()
-    seen += home["recent"] + home["live_now"]
-    seen += client.get("/api/tv/recordings").json()["recorded"]
-    seen.append(client.get(f"/api/tv/recordings/{seen[0]['id']}").json()["recording"])
-    assert len(seen) >= 8
-    for r in seen:
-        assert r["title"], r
-        assert r["art"], r
+    lists = {"home recent": home["recent"], "home live": home["live_now"],
+             "recordings": client.get("/api/tv/recordings").json()["recorded"],
+             "detail": [client.get(f"/api/tv/recordings/{first}").json()["recording"]]}
+    for name, rows in lists.items():
+        assert rows, name
+        for r in rows:
+            assert r["title"], (name, r)
+            assert r["art"], (name, r)
+            assert r["channel"]["name"], (name, r)
+    # The KEPT picture is what is used where there is one, not only the card.
+    assert ART in [r["art"] for r in home["recent"]]
+    assert lists["recordings"][0]["art"] == ART or ART in [r["art"] for r in lists["recordings"]]
+    assert lists["detail"][0]["art"] == ART
+    # What is on screen at that point keeps its rating.
+    now = client.get(f"/api/tv/recordings/{first}/now").json()["program"]
+    assert now["title"] and now["rating"] == "TV-PG"
+    # Every picture address answers with an image, or sends to a public one.
+    for rows in lists.values():
+        for r in rows:
+            got = client.get(_path(r["art"]), follow_redirects=False) \
+                if r["art"].startswith("http://testserver") else None
+            if got is not None:
+                assert got.status_code in (200, 302)
+                assert got.status_code == 302 or got.headers["content-type"].startswith("image/")
     sched = client.get("/api/tv/schedule").json()["rows"]
     assert all(row["title"] for row in sched if str(row["id"]).startswith("ce:"))
-    assert client.get("/recorded").status_code in (200, 303, 404)
 
 
 # ---------- the daily self-check ----------
@@ -190,15 +291,104 @@ def test_the_daily_check_repairs_a_missing_title_from_plex(monkeypatch):
     recart.daily_check(FakePlex(), now=10_000)
     r = _rec(rid)
     assert r["title"] == "An Egg to Die For" and r["season"] == 11
-    assert not [n for n in db.query("SELECT * FROM notices WHERE resolved_at IS NULL")
-                if n["code"] == "recording_art"]
+    assert "recording_art" not in _open_codes()
 
 
-def test_the_daily_check_raises_a_notice_only_when_repair_fails(monkeypatch):
+def _open_codes():
+    return [n["code"] for n in db.query("SELECT code FROM notices WHERE resolved_at IS NULL")]
+
+
+def test_the_daily_check_raises_a_notice_only_when_a_title_cannot_be_repaired():
     _finished("u1", title=None, show_title=None, guid=None, plex_rating_key=None)
     recart.daily_check(None, now=10_000)
-    codes = [n["code"] for n in db.query("SELECT code FROM notices WHERE resolved_at IS NULL")]
-    assert "recording_art" in codes
+    assert "recording_art" in _open_codes()
+
+
+def test_a_missing_picture_alone_is_not_a_fault(monkeypatch):
+    _finished("u1", guid="plex://episode/x")
+    monkeypatch.setattr(recart, "discover", lambda g, t: {})
+    db.set_setting("plex_token", "t")
+    for day in range(6):
+        recart.daily_check(None, now=10_000 + day * 8 * 86400)
+    assert "recording_art" not in _open_codes()
+
+
+def test_the_daily_sweep_asks_about_a_few_recordings_a_pass_and_respects_backoff(monkeypatch):
+    for i in range(50):
+        _finished(f"u{i}", guid=f"plex://episode/{i}")
+    asked = []
+
+    def miss(g, t):
+        asked.append(g)
+        return {}
+    monkeypatch.setattr(recart, "discover", miss)
+    db.set_setting("plex_token", "t")
+    recart.daily_check(None, now=10_000)
+    assert len(asked) == recart.DAILY_CAP
+    recart.daily_check(None, now=10_060)             # inside the wait: only the untried ones
+    assert len(asked) == 2 * recart.DAILY_CAP
+
+
+def test_a_pass_stops_starting_fetches_when_its_time_is_used(monkeypatch):
+    for i in range(5):
+        _finished(f"u{i}", guid=f"plex://episode/{i}")
+    asked = []
+    monkeypatch.setattr(recart, "discover", lambda g, t: asked.append(g) or {})
+    db.set_setting("plex_token", "t")
+    recart.backfill(None, now=10_000, limit=5, deadline=time.monotonic() - 1)
+    assert asked == []
+
+
+def test_a_hung_fetch_does_not_hold_up_overtime(monkeypatch):
+    import threading
+
+    from app import overtime
+    release = threading.Event()
+    started = threading.Event()
+
+    def hang():
+        started.set()
+        release.wait(30)
+    monkeypatch.setattr(recart, "tick", hang)
+    recart._stop.clear()
+    t0 = time.monotonic()
+    monkeypatch.setattr(recart._stop, "wait", lambda s=None: False if s == 20 else release.wait(30))
+    recart.start()
+    assert started.wait(5)
+    overtime.tick()
+    assert time.monotonic() - t0 < 5
+    release.set()
+    recart.stop()
+    assert recart._thread.daemon
+
+
+def test_the_art_work_is_not_in_the_overtime_loop():
+    import inspect
+
+    from app import web
+    assert "recart" not in inspect.getsource(web.outside_loop)
+
+
+def test_a_non_https_discovery_address_is_refused(monkeypatch):
+    import importlib
+    monkeypatch.setenv("COUCHELEPHANT_DISCOVER_URL", "http://evil.example")
+    mod = importlib.reload(recart)
+    try:
+        assert mod.DISCOVER_URL.startswith("https://discover.provider.plex.tv")
+    finally:
+        monkeypatch.delenv("COUCHELEPHANT_DISCOVER_URL")
+        importlib.reload(recart)
+
+
+def test_an_oversized_stored_address_is_dropped():
+    assert recart._public("https://x.example/" + "a" * 2000) == ""
+
+
+def test_what_the_guide_offers_goes_through_the_same_check_when_copied():
+    _program("plex://episode/abc", art="https://x.example/a.jpg?X-Plex-Token=abc", thumb=THUMB)
+    rid = _finished("u1")
+    recart.refresh_from_guide()
+    assert not _rec(rid)["art"] and _rec(rid)["thumb"] == THUMB
 
 
 # ---------- the rest of what outlives the guide ----------
@@ -288,9 +478,12 @@ def test_a_destination_that_heard_every_fault_hears_about_art_too():
     assert health.RECORDING_ART in [c for c, _ in notify.FAULTS]
 
 
-def test_the_web_pages_and_the_failed_bookings_survive_an_empty_guide(client, synced):
+def test_the_web_pages_draw_what_the_api_gives_after_an_empty_guide(client, synced):
     begins = int(time.time()) + 7200
+    _program("plex://episode/abc")
     _finished("u1")
+    _finished("u2", guid=None)
+    recart.refresh_from_guide()
     with db.tx() as c:
         c.execute("INSERT INTO pass_actions (pass_id, program_guid, airing_id, program_title,"
                   " parent_title, channel_vcn, begins_at, action, reason, dry_run, created_at)"
@@ -298,10 +491,39 @@ def test_the_web_pages_and_the_failed_bookings_survive_an_empty_guide(client, sy
                   (begins,))
         for t in GUIDE_TABLES:
             c.execute(f"DELETE FROM {t}")
-    for path in ("/home", "/recordings"):
-        assert client.get(path).status_code == 200
+    # The Home page is built in the browser from /api/tv/home, using r.art as
+    # the card picture and r.title as its name; the recordings page the same
+    # from /api/schedule.
+    home = client.get("/home")
+    assert home.status_code == 200
+    assert "/api/tv/home" in home.text and "r.art" in home.text and "esc(r.title)" in home.text
+    page = client.get("/recordings")
+    assert page.status_code == 200 and "/api/schedule" in page.text
+    cards = client.get("/api/tv/home").json()["recent"]
+    assert len(cards) == 2 and all(c["title"] and c["art"] for c in cards)
+    assert any(c["art"] == ART for c in cards)
     rows = client.get("/api/schedule").json()["rows"]
     assert rows and all(r["title"] for r in rows)
     assert [r for r in rows if r["status"] == "failed"][0]["parent"] == "Show"
-    for r in client.get("/api/tv/recordings").json()["recorded"]:
-        assert r["title"] and r["art"] and r["channel"]["name"]
+
+
+def test_a_pass_sees_the_teams_of_a_plex_booking_after_the_guide_forgot():
+    from app import passes
+    begins = int(time.time()) + 7200
+    with db.tx() as c:
+        c.execute("INSERT INTO our_grabs (airing_id, program_guid, title, channel_vcn, begins_at,"
+                  " source, pass_id, teams, created_at) VALUES ('a1', 'gone', 'Game', '5.1', ?,"
+                  " 'pass', 4, ?, 1)", (begins, TEAMS))
+    got = passes._pass_bookings(4)
+    assert got and got[0]["teams"] == TEAMS
+
+
+def test_the_one_time_copy_gives_old_plex_bookings_their_teams():
+    with db.tx() as c:
+        c.execute("INSERT OR REPLACE INTO programs (guid, title, teams) VALUES ('g1', 'G', ?)",
+                  (TEAMS,))
+        c.execute("INSERT INTO our_grabs (airing_id, program_guid, created_at) VALUES ('a', 'g1', 1)")
+    conn = db.connect()
+    recart.migrate(conn)
+    conn.commit()
+    assert db.one("SELECT teams FROM our_grabs")["teams"] == TEAMS

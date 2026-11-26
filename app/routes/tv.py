@@ -386,7 +386,7 @@ def _art_of(request, rec):
     last a title card, so a tile is never blank."""
     return (rec["art"] or rec["thumb"] or _art(rec["program_guid"])
             or (_art_on_now(rec["channel_vcn"]) if rec["kind"] == "live" else "")
-            or recart.card_url(_base(request), rec["uid"]))
+            or recart.art_url(_base(request), rec["uid"]))
 
 
 def _art_on_now(vcn):
@@ -516,7 +516,7 @@ def _plex_now(request, now):
             "id": f"plex:{g['id']}", "kind": "recording", "state": "recording",
             "recorded_by": "plex", "title": big, "subtitle": small,
             "channel": _channel(request, g["channel_vcn"], ch["title"] if ch else ""),
-            "art": recart.card_url(_base(request), f"plex-{g['id']}"),
+            "art": recart.art_url(_base(request), f"plex-{g['id']}"),
             "begins_at": g["begins_at"], "ends_at": g["ends_at"],
             "seconds": max(0, now - (g["begins_at"] or now)), "complete": False,
             "position": 0, "playable": False, "playlist": "",
@@ -701,7 +701,7 @@ def recording_now(request: Request, rec_id: int, seconds: float = 0):
                 "summary": rec["summary"] or (p["summary"] if p else "") or "",
                 "begins_at": rec["begins_at"], "ends_at": rec["ends_at"],
                 "season": rec["season"], "episode": rec["episode"], "year": rec["year"],
-                "rating": (p["content_rating"] if p else "") or ""}
+                "rating": rec["content_rating"] or (p["content_rating"] if p else "") or ""}
     prog["channel"] = _channel(request, rec["channel_vcn"], rec["channel_title"])
     return {"ok": True, "program": prog}
 

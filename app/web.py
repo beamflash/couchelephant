@@ -36,7 +36,7 @@ from . import (
 from .plex import Plex
 from .routes import (
     account,
-    card,
+    art,
     data,
     guide,
     notices,
@@ -80,9 +80,7 @@ app.mount("/static", StaticFiles(directory=os.path.join(BASE, "static")), name="
 _OPEN_EXACT = frozenset(("/login", "/setup", "/logout", "/healthz", "/welcome",
                          "/favicon.ico", "/api/tv/hello", "/api/tv/pair",
                          "/api/tv/pair/poll"))
-# The title cards: a television's home-screen image load sends no key. The
-# address carries a signature only this server can make, so none can be guessed.
-_OPEN_PREFIX = ("/static/", "/card/")
+_OPEN_PREFIX = ("/static/",)
 
 
 # What a signed-in non-administrator may not change: the Plex connection,
@@ -338,6 +336,7 @@ async def startup():
     asyncio.create_task(backingstore_loop())
     asyncio.create_task(recorder_loop())
     asyncio.create_task(outside_loop())
+    recart.start()
     # Reports still waiting from last time get their retry thread back.
     await asyncio.to_thread(reportsend.start_flusher)
 
@@ -346,6 +345,7 @@ async def startup():
 async def shutdown():
     await asyncio.to_thread(announce.stop)
     recorder.shutdown()
+    recart.stop()
     adskip.shutdown()
 
 
@@ -385,8 +385,7 @@ async def outside_loop():
     because a server slow to answer must never hold a recording up."""
     await asyncio.sleep(20)
     while True:
-        for name, job in (("overtime", overtime.tick), ("resume", handover.send_positions),
-                          ("recording art", recart.tick)):
+        for name, job in (("overtime", overtime.tick), ("resume", handover.send_positions)):
             try:
                 if recorder.available():
                     await asyncio.to_thread(job)
@@ -485,6 +484,6 @@ def healthz():
     })
 
 
-for r in (account, card, data, guide, notices, record, report, pass_routes, settings, tv, tv_settings,
+for r in (account, art, data, guide, notices, record, report, pass_routes, settings, tv, tv_settings,
           update_routes):
     app.include_router(r.router)

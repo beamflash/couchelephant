@@ -15,13 +15,22 @@
   the public picture address, a couple a minute at most, and remembers a miss
   so it does not ask again every minute. An address that carries a Plex token
   is never kept or handed to a client.
-- When no picture exists anywhere, the recording gets a title card: its name on
-  the CouchElephant background. The address is signed by a secret only this
-  server holds, so it works for the Top Shelf, which sends no key, and cannot
-  be guessed. It shows nothing the list did not already say.
-- Once a day every finished recording is checked for a title and a picture.
-  Whatever is missing is repaired from Plex by its guid or library item, and a
-  notice appears only if the repair fails.
+- When no public picture exists, a recording's picture is asked for at
+  `/api/tv/art/{id}`, behind the same sign-in as the rest of the TV API. It
+  sends the kept public picture on, or fetches the Plex library's own picture
+  here with the token kept on the server, or draws a title card with the name
+  on the CouchElephant background. There is no unauthenticated picture address.
+- The background work for pictures and titles runs on its own thread with a
+  10 second limit on every call to Plex and a time budget per pass, so a slow
+  Plex cannot hold up sports overtime or resume points. The first pass after
+  an upgrade looks at a few recordings at a time.
+- Once a day every finished recording is checked for a title. A missing one
+  is repaired from Plex, and a notice (also an alert event) appears only if
+  that fails. A missing picture is never a fault: the title card stands in.
+- The teams of a recording or a Plex booking, and the show name on a pass's
+  history lines, are kept with them, so passes, overtime and the schedule's
+  failed bookings no longer depend on the guide still listing the programme.
+  A channel the lineup no longer has keeps the name its recordings carry.
 
 ## 1.5.38 - 2026-11-25
 
