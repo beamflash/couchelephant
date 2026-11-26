@@ -251,6 +251,8 @@ def main():
                        now - 172800, now - 169200))
         return {"ok": True}
 
+    _long_seed = [0]
+
     @web.app.post("/test/seed-long")
     def _seed_long(title: str = "Long Game", seconds: int = 240, position: int = 200,
                    delay: int = 30, adbreak: str = ""):
@@ -262,16 +264,20 @@ def main():
         import subprocess
         uid = "10ad" * 8
         vdir = recorder.view_dir(uid)
-        shutil.rmtree(vdir, ignore_errors=True)
-        os.makedirs(vdir)
-        subprocess.run([recorder.FFMPEG, "-v", "error", "-f", "lavfi", "-i",
-                        "testsrc=size=320x180:rate=15", "-f", "lavfi", "-i",
-                        "sine=frequency=440", "-t", str(seconds), "-c:v", "libx264",
-                        "-pix_fmt", "yuv420p", "-g", "30", "-c:a", "aac", "-f", "hls",
-                        "-hls_time", "6", "-hls_playlist_type", "event",
-                        "-hls_segment_filename", os.path.join(vdir, "seg%05d.ts"),
-                        os.path.join(vdir, "full.m3u8")], check=True)
-        full = open(os.path.join(vdir, "full.m3u8"), encoding="utf-8").read()
+        src = os.path.join(vdir, "full.m3u8")
+        # Made once (it takes a few seconds), then reused by every seed.
+        if not os.path.exists(src) or f"seg{seconds // 6 - 1:05d}.ts" not in open(src).read():
+            shutil.rmtree(vdir, ignore_errors=True)
+            os.makedirs(vdir)
+            subprocess.run([recorder.FFMPEG, "-v", "error", "-f", "lavfi", "-i",
+                            "testsrc=size=160x90:rate=10", "-f", "lavfi", "-i",
+                            "sine=frequency=440", "-t", str(seconds), "-c:v", "libx264",
+                            "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-g", "30",
+                            "-c:a", "aac", "-f", "hls", "-hls_time", "6",
+                            "-hls_playlist_type", "event",
+                            "-hls_segment_filename", os.path.join(vdir, "seg%05d.ts"),
+                            src], check=True)
+        full = open(src, encoding="utf-8").read()
         # The first five segments (30 s), without the end tag.
         short, kept = [], 0
         for line in full.splitlines():
@@ -283,9 +289,14 @@ def main():
         index = os.path.join(vdir, "index.m3u8")
         open(index, "w", encoding="utf-8").write("\n".join(short) + "\n")
 
+        _long_seed[0] += 1
+        mine = _long_seed[0]
+
         def _grow():
             time.sleep(delay)
-            os.replace(os.path.join(vdir, "full.m3u8"), index)
+            # An earlier seed's timer must not grow a later seed's copy.
+            if _long_seed[0] == mine:
+                shutil.copyfile(src, index)
         threading.Thread(target=_grow, daemon=True).start()
         now = int(time.time())
         with db.tx() as c:
