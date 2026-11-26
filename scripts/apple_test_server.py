@@ -237,14 +237,15 @@ def main():
     @web.app.post("/test/seed-recording")
     def _seed_recording(title: str):
         """Test only: a finished recording with this title, so a search for a
-        recording has one whatever earlier tests deleted."""
+        recording has one whatever earlier tests deleted. It is two days old, so it is not in
+        today's calendar, where the first item is the recording under way."""
         now = int(time.time())
         with db.tx() as c:
             c.execute("""INSERT INTO recordings (uid, kind, state, title, show_title, section,
                              channel_vcn, channel_title, begins_at, ends_at)
                          VALUES (?, 'recording', 'finished', ?, ?, 'shows', '9.1', ?, ?, ?)""",
                       (f"{now:032x}", title, title, demo_guide.CHANNELS["9.1"][1],
-                       now - 7200, now - 3600))
+                       now - 172800, now - 169200))
         return {"ok": True}
 
     from app.routes import passes as _pass_routes
