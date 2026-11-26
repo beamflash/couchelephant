@@ -18,7 +18,7 @@ import zoneinfo
 
 import httpx
 
-from . import db, folders, paths, recorder
+from . import db, folders, ondemand, paths, recorder
 from .plex import Plex, PlexError
 
 log = logging.getLogger("couchelephant.handover")
@@ -430,11 +430,13 @@ def tidy(now: int | None = None) -> None:
         keep = 2 * 86400
     for rec in db.query("SELECT * FROM recordings WHERE state = 'in_plex' "
                         "AND moved_at <= ?", (now - keep,)):
-        if recorder.watched_recently(rec) or recorder.busy(rec["id"]):
+        # Not while someone is watching it on demand: its segments are in use.
+        if (recorder.watched_recently(rec) or recorder.busy(rec["id"])
+                or ondemand.running(rec["uid"])):
             continue
         if rec["plex_path"] and os.path.exists(rec["plex_path"]):
             shutil.rmtree(recorder.view_dir(rec["uid"]), ignore_errors=True)
-            shutil.rmtree(os.path.join(recorder.rec_dir(rec["uid"]), "od"), ignore_errors=True)
+            shutil.rmtree(ondemand.od_dir(rec["uid"]), ignore_errors=True)
         elif _library_present(rec):
             # Deleted in Plex. The library is there and the file is not in
             # it, so there is nothing left to list or to play.

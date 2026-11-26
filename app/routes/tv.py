@@ -19,6 +19,7 @@ import urllib.parse
 import zoneinfo
 from datetime import datetime
 
+import anyio
 import segno
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import (
@@ -55,7 +56,7 @@ from ._shared import VERSION, _plex, current_user, page
 router = APIRouter()
 log = logging.getLogger("couchelephant")
 
-_SEGMENT = re.compile(r"^seg\d{5}\.ts$")
+_SEGMENT = re.compile(r"seg[0-9]{5}\.ts")
 _UID = re.compile(r"^[0-9a-f]{32}$")
 # A pairing code nobody approved is forgotten after this long.
 PAIR_SECONDS = 600
@@ -442,6 +443,12 @@ def _sport_show(show) -> bool:
         "LIMIT 1", (show,))))
 
 
+def _plex_file_gone(rec, view) -> bool:
+    """In Plex, no whole viewing copy of ours, and no file to make one from."""
+    return (rec["state"] == "in_plex" and not view["complete"]
+            and not ondemand._source(rec))
+
+
 def _on_demand_seconds(rec, view) -> float | None:
     """How long a recording in Plex with no whole viewing copy plays for, when
     its stream is made on demand (ondemand.py): the length the stream lists
@@ -459,7 +466,8 @@ def _on_demand_seconds(rec, view) -> float | None:
 
 def recording_json(request: Request, rec) -> dict:
     view = recorder.view_info(rec["uid"])
-    on_demand = _on_demand_seconds(rec, view)
+    gone = _plex_file_gone(rec, view)
+    on_demand = None if gone else _on_demand_seconds(rec, view)
     if on_demand:
         # Its stream lists every segment, so all of it can be reached at once.
         view = {**view, "seconds": on_demand, "complete": True}
@@ -481,7 +489,7 @@ def recording_json(request: Request, rec) -> dict:
         "seconds": round(view["seconds"], 1),
         "complete": view["complete"],
         "position": round(rec["position"] or 0, 1),
-        "playable": view["segments"] > 0 or state in ("in_plex",),
+        "playable": (view["segments"] > 0 or state in ("in_plex",)) and not gone,
         # The master playlist, which tells a player the captions are there.
         "playlist": f"{_base(request)}/hls/{rec['uid']}/master.m3u8",
         "error": rec["error"] if state == "failed" else None,
@@ -492,7 +500,8 @@ def recording_json(request: Request, rec) -> dict:
                      if state == "finished" and rec["error"] else None),
         # Sports overtime: how long a game ran past its padding, or why it
         # was not followed.
-        "note": rec["ot_note"] if rec["ot_state"] in ("in", "post") else None,
+        "note": ("This recording's file is not in Plex's folder any more."
+                 if gone else rec["ot_note"] if rec["ot_state"] in ("in", "post") else None),
         # What a list of recordings sorts and filters by.
         "group": rec["show_title"] or rec["title"] or "",
         "category": _category(rec),
@@ -1670,20 +1679,27 @@ def playlist_k(token: str, uid: str, start: str = ""):
 
 
 @router.get("/hlsk/{token}/{uid}/{segment}")
-def segment_k(token: str, uid: str, segment: str):
-    return segment_(uid, segment)
+async def segment_k(token: str, uid: str, segment: str, request: Request):
+    return await segment_(uid, segment, request)
 
 
 @router.get("/hls/{uid}/{segment}")
-def segment_(uid: str, segment: str):
-    if not _UID.match(uid) or not _SEGMENT.match(segment):
+async def segment_(uid: str, segment: str, request: Request):
+    if not _UID.match(uid) or not _SEGMENT.fullmatch(segment):
         return Response(status_code=404)
-    rec = ondemand.use(uid)
-    if rec:
-        # Made now if it is not there yet, and waited for.
-        path = ondemand.segment(rec, segment)
-        if not path:
-            return Response(status_code=404)
+    # A recording made on demand: the segment is made now if it is not there
+    # yet. Waited for without holding a thread, and given up when the player
+    # has gone.
+    ticket = await anyio.to_thread.run_sync(ondemand.begin_request, uid, segment)
+    if ticket:
+        while True:
+            how = ondemand.poll(ticket)
+            if how == ondemand.READY:
+                path = ticket.path
+                break
+            if how == ondemand.FAIL or await request.is_disconnected():
+                return Response(status_code=404)
+            await asyncio.sleep(0.05)
     else:
         path = os.path.join(recorder.view_dir(uid), segment)
     if not os.path.exists(path):
