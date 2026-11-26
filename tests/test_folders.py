@@ -749,7 +749,7 @@ def test_a_new_destination_hears_a_folder_that_was_only_a_risk_when_it_turns_red
 def test_existing_destinations_that_hear_every_fault_get_the_folder_one(chat):
     every = [c for c, _ in notify.FAULTS if c != health.FOLDER_BLOCKED]
     full = _dest(chat, events=every)
-    narrow = _dest(chat, events=every[:-1])
+    narrow = _dest(chat, events=every[1:])
     db.set_setting("mig_folder_event", "")
     notify.add_folder_event()
     assert health.FOLDER_BLOCKED in notify.split_events(notify.get_destination(full)["events"])

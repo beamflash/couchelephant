@@ -112,7 +112,8 @@ STORES = {
 
 # Kept out of an export unless the user asks. A token in a file is a token in
 # whatever the file lands in.
-SECRET_SETTINGS = frozenset(("plex_token", "cf_aud", "pg_password", "my_password"))
+SECRET_SETTINGS = frozenset(("plex_token", "cf_aud", "pg_password", "my_password",
+                             "card_secret"))
 
 # Never durable, whoever asks. These describe what this machine last did, not
 # anything anybody decided. `backingstore_status` in particular is written by
