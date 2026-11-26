@@ -219,8 +219,12 @@ def field_order_interlaced(said: str) -> bool:
     return first in ("tt", "bb", "tb", "bt")
 
 
+TS_ROOM = 1.0
+
+
 def convert_args(enc: str, out_dir: str, interlaced: bool = False, *,
-                 src: str | None = None, start_seg: int = 0) -> list[str]:
+                 src: str | None = None, start_seg: int = 0, v0: float = 0.0,
+                 playlist: str = "ff.m3u8") -> list[str]:
     """The ffmpeg command that turns a broadcast on stdin into the viewing copy.
 
     A keyframe is forced every segment length, by time and not by frame count,
@@ -236,7 +240,10 @@ def convert_args(enc: str, out_dir: str, interlaced: bool = False, *,
     if src:
         # On demand (see ondemand.py): a file, from the start of one segment.
         if start_seg:
-            args += ["-ss", str(start_seg * SEGMENT_SECONDS)]
+            # Counted from the first PICTURE (v0 after the start of the file,
+            # which is where a run from the start counts from), so every run
+            # cuts at the same pictures.
+            args += ["-ss", f"{start_seg * SEGMENT_SECONDS + v0:.6f}"]
         args += ["-i", src]
     else:
         args += ["-i", "pipe:0"]
@@ -266,12 +273,16 @@ def convert_args(enc: str, out_dir: str, interlaced: bool = False, *,
     if src:
         # Segment numbers and timestamps line up with the playlist that lists
         # every segment. A segment shows up only once it is whole.
-        args += ["-output_ts_offset", str(start_seg * SEGMENT_SECONDS),
+        # A second of room before the first picture: its encoder starts with
+        # negative decode times, and a muxer that has to move them up moves
+        # a run from the start (and only that one) by a few frames.
+        # (v0 again: the same picture gets the same time in every run.)
+        args += ["-output_ts_offset", f"{(start_seg * SEGMENT_SECONDS + v0 if start_seg else 0) + TS_ROOM:.6f}",
                  "-f", "hls", "-hls_time", str(SEGMENT_SECONDS),
                  "-hls_list_size", "3", "-start_number", str(start_seg),
                  "-hls_flags", "independent_segments+temp_file",
                  "-hls_segment_filename", os.path.join(out_dir, "seg%05d.ts"),
-                 os.path.join(out_dir, "ff.m3u8")]
+                 os.path.join(out_dir, playlist)]
         return args
     args += ["-f", "hls", "-hls_time", str(SEGMENT_SECONDS),
              "-hls_playlist_type", "event",

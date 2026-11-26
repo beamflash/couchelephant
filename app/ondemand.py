@@ -56,7 +56,11 @@ RESTARTS = 2
 LOG_CAP = 200_000
 
 _SEGMENT = re.compile(r"seg[0-9]{5}\.ts")
-_CHIP = re.compile(r"vaapi|/dev/dri|hwupload|libva|hardware|device creation", re.I)
+_CHIP = re.compile(r"vaapi|/dev/dri|hwupload|libva|device creation", re.I)
+# After a chip failure the chip is tried again after this long.
+CHIP_RETRY = 600
+# A source whose first picture starts this long after the file does.
+TS_ROOM = recorder.TS_ROOM
 
 
 def od_dir(uid: str) -> str:
@@ -108,7 +112,35 @@ def duration(rec) -> float | None:
     return d
 
 
-def playlist(rec, start0: bool = False) -> str | None:
+def start_offset(rec, src: str) -> float:
+    """How long after the start of the file its first PICTURE comes (sound
+    that leads the picture makes this more than 0). A run from the start counts
+    time from the picture and a run after a seek from the seek point, so this
+    is what makes them cut at the same pictures. Cached beside the duration."""
+    mark = os.path.join(od_dir(rec["uid"]), "v0")
+    try:
+        with open(mark) as f:
+            return float(f.read())
+    except (OSError, ValueError):
+        pass
+    v0 = 0.0
+    try:
+        def get(*a):
+            r = subprocess.run([recorder.FFPROBE, "-v", "error", *a, src],
+                               capture_output=True, text=True, timeout=60)
+            return float(r.stdout.split()[0])
+        v0 = max(0.0, get("-select_streams", "v:0", "-show_entries", "stream=start_time",
+                          "-of", "default=nw=1:nk=1")
+                 - get("-show_entries", "format=start_time", "-of", "default=nw=1:nk=1"))
+    except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+        return 0.0
+    os.makedirs(od_dir(rec["uid"]), exist_ok=True)
+    with open(mark, "w") as f:
+        f.write(f"{v0:.6f}")
+    return v0
+
+
+def playlist(rec, start0: bool = False, at: float | None = None) -> str | None:
     """A VOD playlist of every segment, so a player can go anywhere at once."""
     d = duration(rec)
     if not d:
@@ -119,6 +151,8 @@ def playlist(rec, start0: bool = False) -> str | None:
            "#EXT-X-INDEPENDENT-SEGMENTS"]
     if start0:
         out.append("#EXT-X-START:TIME-OFFSET=0,PRECISE=YES")
+    elif at is not None and 0 < at < d:
+        out.append(f"#EXT-X-START:TIME-OFFSET={at:.3f},PRECISE=YES")
     for i in range(count):
         length = min(SEG, d - i * SEG)
         out += [f"#EXTINF:{length:.6f},", f"seg{i:05d}.ts"]
@@ -132,9 +166,10 @@ class _Run:
     def __init__(self, uid, proc, start, enc, slot, log_path, log_from):
         self.uid, self.proc, self.start, self.enc = uid, proc, start, enc
         self.slot, self.log_path, self.log_from = slot, log_path, log_from
+        self.playlist = f"ff-{slot}.m3u8"
         self.spawned = time.time()
         self.last_ask = self.spawned
-        self.want = start
+        self.asks: list[tuple[float, int]] = []
         self.done = start - 1          # the highest segment this run has made
         self.paused = False
         self.dead = False              # stopped by us
@@ -144,16 +179,30 @@ class _Run:
     def segment_path(self, n: int) -> str:
         return os.path.join(od_dir(self.uid), f"seg{n:05d}.ts")
 
+    def ask(self, n: int):
+        now = time.time()
+        self.last_ask = now
+        self.asks = [(t, k) for t, k in self.asks if now - t < 30] + [(now, n)]
+
+    @property
+    def want(self) -> int:
+        """How far on its viewers are: the furthest of the recent asks."""
+        now = time.time()
+        recent = [k for t, k in self.asks if now - t < 30]
+        return max(recent) if recent else self.start
+
     def progress(self) -> int:
-        """Counted from this run's own files only: a segment an earlier run
-        left behind is older than the run."""
-        while True:
-            try:
-                if os.path.getmtime(self.segment_path(self.done + 1)) < self.spawned:
-                    return self.done
-            except OSError:
-                return self.done
-            self.done += 1
+        """The highest segment this run made, from its own playlist: files
+        another run made are not its progress."""
+        try:
+            with open(os.path.join(od_dir(self.uid), self.playlist)) as f:
+                lines = f.read().split()
+        except OSError:
+            return self.done
+        for line in lines:
+            if _SEGMENT.fullmatch(line):
+                self.done = max(self.done, int(line[3:8]))
+        return self.done
 
     def covers(self, n: int) -> bool:
         return (not self.dead and self.proc.poll() is None
@@ -177,12 +226,18 @@ _guard = threading.Lock()
 _failed: dict[str, tuple[float, str]] = {}
 _laced: dict[str, bool] = {}
 _down = False
+_chip_off_at = 0.0
 _watcher: threading.Thread | None = None
 
 
 def _lock(uid: str) -> threading.RLock:
     with _guard:
         return _locks.setdefault(uid, threading.RLock())
+
+
+def lock(uid: str) -> threading.RLock:
+    """The recording's lock, for whoever must not race a viewer starting."""
+    return _lock(uid)
 
 
 def running(uid: str) -> bool:
@@ -196,12 +251,17 @@ def allow():
     _failed.clear()
 
 
+try:
+    # Looked up here, in the parent: nothing is loaded in the child.
+    _PRCTL = ctypes.CDLL("libc.so.6", use_errno=True).prctl
+except (OSError, AttributeError):
+    _PRCTL = None
+
+
 def _pdeath():
     # Dies with the process that started it, so a crash leaves no ffmpeg.
-    try:
-        ctypes.CDLL("libc.so.6", use_errno=True).prctl(1, signal.SIGKILL)
-    except (OSError, AttributeError):
-        pass
+    if _PRCTL:
+        _PRCTL(1, signal.SIGKILL)
 
 
 # The parent-death signal fires when the THREAD that started the child ends,
@@ -227,7 +287,7 @@ def _popen(args, **kwargs) -> subprocess.Popen:
         if _starter is None or not _starter.is_alive():
             _starter = threading.Thread(target=_start_loop, daemon=True)
             _starter.start()
-    if sys.platform.startswith("linux"):
+    if sys.platform.startswith("linux") and _PRCTL:
         kwargs["preexec_fn"] = _pdeath
     box: list = []
     done = threading.Event()
@@ -265,18 +325,23 @@ def _open_log(uid: str, slot: int):
     return path
 
 
-def _spawn(rec, n: int, enc: str, laced: bool, src: str) -> _Run:
+def _spawn(rec, n: int, enc: str, laced: bool, src: str, v0: float) -> _Run:
     """Called with the recording's lock held. A new ffmpeg at segment n."""
     uid = rec["uid"]
     os.makedirs(od_dir(uid), exist_ok=True)
     used = {r.slot for r in _runs.get(uid, []) if not r.dead}
     slot = next(i for i in range(MAX_RUNS + 2) if i not in used)
     path = _open_log(uid, slot)
+    try:
+        os.remove(os.path.join(od_dir(uid), f"ff-{slot}.m3u8"))
+    except OSError:
+        pass
     with open(path, "ab") as logf:
         logf.write(f"--- start at segment {n} ---\n".encode())
         logf.flush()
         log_from = logf.tell()
-        proc = _popen(recorder.convert_args(enc, od_dir(uid), laced, src=src, start_seg=n),
+        proc = _popen(recorder.convert_args(enc, od_dir(uid), laced, src=src, start_seg=n, v0=v0,
+                                            playlist=f"ff-{slot}.m3u8"),
                       stdin=subprocess.DEVNULL, stdout=logf, stderr=logf)
     run = _Run(uid, proc, n, enc, slot, path, log_from)
     _runs.setdefault(uid, []).append(run)
@@ -284,32 +349,40 @@ def _spawn(rec, n: int, enc: str, laced: bool, src: str) -> _Run:
     return run
 
 
-def _same_encoder(uid: str, enc: str) -> list[_Run]:
+def _ensure_encoder(uid: str, enc: str):
     """One encoder per recording's od/: when it changed (the graphics chip
-    failed and software took over) what was made by the other is cleared.
-    Returns the runs to stop; called with the lock held."""
+    failed and software took over) the other's segments are cleared. Its runs
+    are stopped first, and only then is anything deleted."""
     mark = os.path.join(od_dir(uid), "encoder")
-    try:
-        with open(mark) as f:
-            was = f.read().strip()
-    except OSError:
-        was = ""
-    victims: list[_Run] = []
-    if was and was != enc:
-        victims = _runs.pop(uid, [])
+
+    def was() -> str:
+        try:
+            with open(mark) as f:
+                return f.read().strip()
+        except OSError:
+            return ""
+    if was() == enc:
+        return
+    with _lock(uid):
+        old = was()
+        if old == enc:
+            return
+        victims = _runs.pop(uid, []) if old else []
         for r in victims:
             r.dead = True
-        try:
-            for name in os.listdir(od_dir(uid)):
-                if _SEGMENT.fullmatch(name):
-                    os.remove(os.path.join(od_dir(uid), name))
-        except OSError:
-            pass
-    if was != enc:
+    for v in victims:
+        _kill(v)
+    with _lock(uid):
+        if old:
+            try:
+                for name in os.listdir(od_dir(uid)):
+                    if _SEGMENT.fullmatch(name):
+                        os.remove(os.path.join(od_dir(uid), name))
+            except OSError:
+                pass
         os.makedirs(od_dir(uid), exist_ok=True)
         with open(mark, "w") as f:
             f.write(enc)
-    return victims
 
 
 def _cover(uid: str, n: int) -> _Run | None:
@@ -331,8 +404,8 @@ def _resume(run: _Run):
 
 
 def _touch(run: _Run, n: int):
-    run.last_ask = time.time()
-    run.want = n
+    """A viewer asked for n. Called with the recording's lock held."""
+    run.ask(n)
     if run.paused and run.progress() - n <= RESUME_AT:
         _resume(run)
 
@@ -351,6 +424,7 @@ class Ticket:
         self.src = ""
         self.enc = ""
         self.laced = False
+        self.v0 = 0.0
 
 
 def _fail(uid: str, why: str):
@@ -368,7 +442,6 @@ def _assign(t: Ticket) -> bool:
         if run is None:
             if _down:
                 return False
-            victims += _same_encoder(t.uid, t.enc)
             live = [r for r in _runs.get(t.uid, []) if not r.dead]
             while len(live) >= MAX_RUNS:
                 old = min(live, key=lambda r: r.last_ask)
@@ -377,7 +450,7 @@ def _assign(t: Ticket) -> bool:
                 _runs[t.uid].remove(old)
                 victims.append(old)
             try:
-                run = _spawn(t.rec, t.n, t.enc, t.laced, t.src)
+                run = _spawn(t.rec, t.n, t.enc, t.laced, t.src, t.v0)
             except OSError as e:
                 _fail(t.uid, f"ffmpeg did not start: {e}")
                 run = None
@@ -393,9 +466,10 @@ def begin(rec, name: str, wait: float | None = None) -> Ticket | None:
     """Starts getting a segment. May run probes, so not on the event loop."""
     t = Ticket(rec, name, wait)
     if os.path.exists(t.path):
-        run = _cover(t.uid, t.n)
-        if run:
-            _touch(run, t.n)
+        with _lock(t.uid):
+            run = _cover(t.uid, t.n)
+            if run:
+                _touch(run, t.n)
         return t
     if _down:
         return None
@@ -410,12 +484,24 @@ def begin(rec, name: str, wait: float | None = None) -> Ticket | None:
         _fail(t.uid, "the recording's file is not there")
         return None
     t.src = src
-    t.enc = recorder.encoder()
-    t.laced = _laced_of(src) if t.enc == "vaapi" else False
+    t.v0 = start_offset(rec, src)
+    _prepare(t)
     return t if _assign(t) else None
 
 
-READY, WAIT, FAIL = "ready", "wait", "fail"
+def _prepare(t: Ticket):
+    """The encoder for this ticket, and what must be known to use it."""
+    global _chip_off_at
+    if _chip_off_at and time.time() - _chip_off_at > CHIP_RETRY and recorder._vaapi is False:
+        # A failure of the chip is not for ever: it is tried again.
+        recorder._vaapi = None
+        _chip_off_at = 0.0
+    t.enc = recorder.encoder()
+    t.laced = _laced_of(t.src) if t.enc == "vaapi" else False
+    _ensure_encoder(t.uid, t.enc)
+
+
+READY, WAIT, FAIL, RESTART = "ready", "wait", "fail", "restart"
 
 
 def _handle_exit(run: _Run) -> str:
@@ -437,7 +523,9 @@ def _handle_exit(run: _Run) -> str:
             # The graphics chip failed on a real file: software from now on,
             # as the whole-copy path does.
             log.warning("hardware encoding failed for %s, using software: %s", run.uid, said)
+            global _chip_off_at
             recorder._vaapi = False
+            _chip_off_at = time.time()
             run.outcome = "chip"
         else:
             log.warning("ffmpeg failed for %s at segment %d: %s", run.uid, run.start, said)
@@ -447,7 +535,8 @@ def _handle_exit(run: _Run) -> str:
 
 
 def poll(t: Ticket) -> str:
-    """Where a request stands. Never blocks."""
+    """Where a request stands. Never blocks, and never does the slow part:
+    RESTART says restart(t) is to be called, off the event loop."""
     if os.path.exists(t.path):
         return READY
     if time.time() >= t.deadline:
@@ -460,15 +549,22 @@ def poll(t: Ticket) -> str:
             return FAIL
         if t.restarts >= RESTARTS or _down:
             return FAIL
-        # Stopped under us (another viewer's seek, a chip failure): start
-        # again, here.
-        t.restarts += 1
-        t.enc = recorder.encoder()
-        t.laced = _laced_of(t.src) if t.enc == "vaapi" else False
-        return WAIT if _assign(t) else FAIL
-    with _lock(t.uid):
-        _touch(run, t.n)
+        return RESTART
+    lock = _lock(t.uid)
+    if lock.acquire(blocking=False):
+        try:
+            _touch(run, t.n)
+        finally:
+            lock.release()
     return WAIT
+
+
+def restart(t: Ticket) -> bool:
+    """Starts again, here, after the run was stopped under the request
+    (another viewer's seek, a chip failure). May be slow: off the event loop."""
+    t.restarts += 1
+    _prepare(t)
+    return _assign(t)
 
 
 def segment(rec, name: str, wait: float | None = None) -> str | None:
@@ -482,6 +578,8 @@ def segment(rec, name: str, wait: float | None = None) -> str | None:
             return t.path
         if how == FAIL:
             return t.path if os.path.exists(t.path) else None
+        if how == RESTART and not restart(t):
+            return None
         time.sleep(0.05)
 
 
@@ -492,6 +590,16 @@ def begin_request(uid: str, name: str) -> Ticket | None:
 
 
 # ---------- the watcher ----------
+
+def _met(r: _Run, runs: list[_Run]) -> bool:
+    """Its next segment is already there, made by a newer run: they met, and
+    this one has nothing left to do."""
+    nxt = r.progress() + 1
+    if not os.path.exists(r.segment_path(nxt)):
+        return False
+    return any(o is not r and not o.dead and o.start > r.start
+               and o.start <= nxt <= o.progress() for o in runs)
+
 
 def _watch():
     while True:
@@ -507,7 +615,7 @@ def _watch():
                     if r.proc.poll() is not None:
                         _handle_exit(r)
                         continue
-                    if now - r.last_ask > IDLE_SECONDS:
+                    if now - r.last_ask > IDLE_SECONDS or _met(r, _runs.get(uid, [])):
                         r.dead = True
                         victims.append(r)
                         continue

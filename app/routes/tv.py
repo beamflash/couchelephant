@@ -57,6 +57,7 @@ router = APIRouter()
 log = logging.getLogger("couchelephant")
 
 _SEGMENT = re.compile(r"seg[0-9]{5}\.ts")
+_AT = re.compile(r"[0-9]{1,6}(\.[0-9]{1,3})?")
 _UID = re.compile(r"^[0-9a-f]{32}$")
 # A pairing code nobody approved is forgotten after this long.
 PAIR_SECONDS = 600
@@ -1621,13 +1622,14 @@ def live_keepalive(rec_id: int, paused: str = Form("")):
 # ---------- the video ----------
 
 @router.get("/hls/{uid}/master.m3u8")
-def master_playlist(uid: str, start: str = ""):
+def master_playlist(uid: str, start: str = "", at: str = ""):
     """One picture and the broadcast's captions, CC1, inside it. Without this
     line Apple's player never offers captions, even though they are there."""
     if not _UID.match(uid) or not (os.path.exists(recorder.playlist_path(uid))
                                    or ondemand.use(uid)):
         return Response(status_code=404)
-    variant = "index.m3u8" + ("?start=0" if start == "0" else "")
+    variant = "index.m3u8" + ("?start=0" if start == "0" else
+                              f"?at={at}" if _AT.fullmatch(at) else "")
     # No language: CC1 is whatever the station captions in, English on most,
     # French or Spanish on others, and a wrong label is worse than none.
     text = ("#EXTM3U\n#EXT-X-VERSION:6\n#EXT-X-INDEPENDENT-SEGMENTS\n"
@@ -1640,12 +1642,14 @@ def master_playlist(uid: str, start: str = ""):
 
 
 @router.get("/hls/{uid}/index.m3u8")
-def playlist(uid: str, start: str = ""):
+def playlist(uid: str, start: str = "", at: str = ""):
     if not _UID.match(uid):
         return Response(status_code=404)
     rec = ondemand.use(uid)
     if rec:
-        text = ondemand.playlist(rec, start == "0")
+        # "at" is where a resume begins: the player opens there, and no
+        # ffmpeg is wasted on the first seconds it was never going to show.
+        text = ondemand.playlist(rec, start == "0", float(at) if _AT.fullmatch(at) else None)
         if text is None:
             return Response(status_code=404)
         return Response(text, media_type="application/vnd.apple.mpegurl",
@@ -1669,13 +1673,13 @@ def playlist(uid: str, start: str = ""):
 
 
 @router.get("/hlsk/{token}/{uid}/master.m3u8")
-def master_playlist_k(token: str, uid: str, start: str = ""):
-    return master_playlist(uid, start)
+def master_playlist_k(token: str, uid: str, start: str = "", at: str = ""):
+    return master_playlist(uid, start, at)
 
 
 @router.get("/hlsk/{token}/{uid}/index.m3u8")
-def playlist_k(token: str, uid: str, start: str = ""):
-    return playlist(uid, start)
+def playlist_k(token: str, uid: str, start: str = "", at: str = ""):
+    return playlist(uid, start, at)
 
 
 @router.get("/hlsk/{token}/{uid}/{segment}")
@@ -1699,6 +1703,10 @@ async def segment_(uid: str, segment: str, request: Request):
                 break
             if how == ondemand.FAIL or await request.is_disconnected():
                 return Response(status_code=404)
+            if how == ondemand.RESTART:
+                # Starting again can be slow: not on the event loop.
+                if not await anyio.to_thread.run_sync(ondemand.restart, ticket):
+                    return Response(status_code=404)
             await asyncio.sleep(0.05)
     else:
         path = os.path.join(recorder.view_dir(uid), segment)

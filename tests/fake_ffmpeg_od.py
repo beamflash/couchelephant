@@ -29,4 +29,11 @@ while True:
     with open(path + ".tmp", "wb") as f:
         f.write(b"ts%d" % n)
     os.replace(path + ".tmp", path)
+    # The run's own playlist, as ffmpeg keeps it: the last three.
+    shown = list(range(max(start, n - 2), n + 1))
+    with open(a[-1] + ".tmp", "w") as f:
+        f.write(f"#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:{shown[0]}\n")
+        for k in shown:
+            f.write(f"#EXTINF:4.0,\nseg{k:05d}.ts\n")
+    os.replace(a[-1] + ".tmp", a[-1])
     n += 1

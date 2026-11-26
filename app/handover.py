@@ -431,18 +431,21 @@ def tidy(now: int | None = None) -> None:
     for rec in db.query("SELECT * FROM recordings WHERE state = 'in_plex' "
                         "AND moved_at <= ?", (now - keep,)):
         # Not while someone is watching it on demand: its segments are in use.
-        if (recorder.watched_recently(rec) or recorder.busy(rec["id"])
-                or ondemand.running(rec["uid"])):
-            continue
-        if rec["plex_path"] and os.path.exists(rec["plex_path"]):
-            shutil.rmtree(recorder.view_dir(rec["uid"]), ignore_errors=True)
-            shutil.rmtree(ondemand.od_dir(rec["uid"]), ignore_errors=True)
-        elif _library_present(rec):
-            # Deleted in Plex. The library is there and the file is not in
-            # it, so there is nothing left to list or to play.
-            shutil.rmtree(recorder.rec_dir(rec["uid"]), ignore_errors=True)
-            with db.tx() as c:
-                c.execute("DELETE FROM recordings WHERE id = ?", (rec["id"],))
+        # The check and the removal are one step under the recording's lock,
+        # so a viewer cannot start in between.
+        with ondemand.lock(rec["uid"]):
+            if (recorder.watched_recently(rec) or recorder.busy(rec["id"])
+                    or ondemand.running(rec["uid"])):
+                continue
+            if rec["plex_path"] and os.path.exists(rec["plex_path"]):
+                shutil.rmtree(recorder.view_dir(rec["uid"]), ignore_errors=True)
+                shutil.rmtree(ondemand.od_dir(rec["uid"]), ignore_errors=True)
+            elif _library_present(rec):
+                # Deleted in Plex. The library is there and the file is not in
+                # it, so there is nothing left to list or to play.
+                shutil.rmtree(recorder.rec_dir(rec["uid"]), ignore_errors=True)
+                with db.tx() as c:
+                    c.execute("DELETE FROM recordings WHERE id = ?", (rec["id"],))
 
 
 def _library_present(rec) -> bool:

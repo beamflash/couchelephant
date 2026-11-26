@@ -58,7 +58,7 @@ def test_a_far_segment_starts_ffmpeg_at_its_time(od):
     rec, logf = od
     got = TestClient(app).get(f"/hls/{rec['uid']}/seg00500.ts")
     assert got.status_code == 200 and got.content == b"ts500"
-    assert _starts(logf) == [["ss=2000", "offset=2000", "start=500"]]
+    assert _starts(logf) == [["ss=2000.000000", "offset=2001.000000", "start=500"]]
 
 
 def test_two_requests_do_not_start_two_ffmpegs(od):
@@ -148,14 +148,16 @@ def test_the_least_recently_asked_run_is_stopped_over_the_cap(od):
 
 def test_a_request_whose_run_was_replaced_starts_again(od, monkeypatch):
     rec, logf = od
-    monkeypatch.setenv("FAKE_FFMPEG_DELAY", "0.3")
+    monkeypatch.setenv("FAKE_FFMPEG_DELAY", "1.5")
     t = ondemand.begin(rec, "seg00100.ts")
     for n in (300, 500, 700):
         ondemand.begin(rec, f"seg{n:05d}.ts")
     assert t.run.dead
     end = time.time() + 15
     how = ondemand.poll(t)
-    while how == ondemand.WAIT and time.time() < end:
+    while how in (ondemand.WAIT, ondemand.RESTART) and time.time() < end:
+        if how == ondemand.RESTART:
+            assert ondemand.restart(t)
         time.sleep(0.05)
         how = ondemand.poll(t)
     assert how == ondemand.READY and t.restarts >= 1
@@ -274,3 +276,122 @@ def test_a_recording_made_over_does_not_keep_the_run_of_its_old_files(od):
         f.write("4000.0")
     assert c.get(f"/hls/{rec['uid']}/seg00101.ts").status_code == 200
     assert len(_starts(logf)) == 2 and not ondemand.running("nothing")
+
+
+def test_poll_never_starts_anything_itself(od, monkeypatch):
+    rec, _ = od
+    monkeypatch.setenv("FAKE_FFMPEG_DELAY", "1.5")
+    t = ondemand.begin(rec, "seg00100.ts")
+    ondemand._kill(t.run)
+    monkeypatch.setattr(ondemand, "_spawn", lambda *a, **k: pytest.fail("poll spawned"))
+    assert ondemand.poll(t) == ondemand.RESTART
+
+
+def test_a_run_stops_when_it_meets_a_newer_one(od, monkeypatch):
+    rec, _ = od
+    monkeypatch.setenv("FAKE_FFMPEG_DELAY", "0.2")
+    monkeypatch.setattr(ondemand, "AHEAD", 2)
+    c = TestClient(app)
+    assert c.get(f"/hls/{rec['uid']}/seg00100.ts").status_code == 200
+    first = ondemand._runs[rec["uid"]][0]
+    assert c.get(f"/hls/{rec['uid']}/seg00105.ts").status_code == 200
+    end = time.time() + 15
+    while not first.dead and time.time() < end:
+        time.sleep(0.1)
+    assert first.dead and len(ondemand._runs[rec["uid"]]) == 1
+
+
+def test_a_run_wants_what_its_furthest_viewer_wants():
+    run = ondemand._Run("u", None, 10, "software", 0, "x", 0)
+    run.ask(12)
+    run.ask(40)
+    run.ask(13)
+    assert run.want == 40
+
+
+def test_only_the_chips_own_words_turn_it_off_and_it_comes_back(od, monkeypatch):
+    rec, _ = od
+    assert not ondemand._CHIP.search("Cannot allocate memory for the hardware buffer")
+    assert ondemand._CHIP.search("Failed to initialise VAAPI connection")
+    db.set_setting("recorder_encoder", "auto")
+    monkeypatch.setattr(recorder, "_vaapi", False)
+    monkeypatch.setattr(recorder, "_vaapi_works", lambda: recorder._vaapi is not False)
+    monkeypatch.setattr(ondemand, "_chip_off_at", time.time() - ondemand.CHIP_RETRY - 5)
+    t = ondemand.Ticket(rec, "seg00100.ts", None)
+    t.src = rec["plex_path"]
+    recorder._vaapi = False
+    ondemand._prepare(t)
+    assert recorder._vaapi is None and ondemand._chip_off_at == 0.0
+
+
+def test_a_changed_encoder_stops_its_runs_before_deleting(od, monkeypatch):
+    rec, _ = od
+    monkeypatch.setenv("FAKE_FFMPEG_DELAY", "0.05")
+    assert TestClient(app).get(f"/hls/{rec['uid']}/seg00100.ts").status_code == 200
+    run = ondemand._runs[rec["uid"]][0]
+    ondemand._ensure_encoder(rec["uid"], "vaapi")
+    assert run.dead and run.proc.poll() is not None
+    assert not ondemand._runs.get(rec["uid"])
+    assert not os.path.exists(os.path.join(ondemand.od_dir(rec["uid"]), "seg00100.ts"))
+
+
+def test_a_resume_point_goes_in_the_playlist(od):
+    rec, _ = od
+    c = TestClient(app)
+    got = c.get(f"/hls/{rec['uid']}/index.m3u8?at=200").text
+    assert "#EXT-X-START:TIME-OFFSET=200.000,PRECISE=YES" in got
+    assert "EXT-X-START" not in c.get(f"/hls/{rec['uid']}/index.m3u8?at=abc").text
+    assert "index.m3u8?at=200" in c.get(f"/hls/{rec['uid']}/master.m3u8?at=200").text
+    assert "?at" not in c.get(f"/hls/{rec['uid']}/master.m3u8?at=x").text
+
+
+def _real_tools():
+    import shutil
+    ff, fp = shutil.which("ffmpeg"), shutil.which("ffprobe")
+    if not ff or not fp:
+        pytest.skip("no real ffmpeg here")
+    return ff, fp
+
+
+def _first_video_pts(fp, path):
+    import subprocess
+    out = subprocess.run([fp, "-v", "error", "-select_streams", "v:0", "-show_entries",
+                          "packet=pts_time", "-of", "csv=p=0", path],
+                         capture_output=True, text=True).stdout.split()
+    return min(float(x.rstrip(",")) for x in out)
+
+
+def test_runs_from_the_start_and_after_a_seek_cut_at_the_same_pictures(tmp_path, monkeypatch):
+    """Real ffmpeg, a file whose sound leads its picture by half a second (as
+    broadcasts do): segment 6 starts at the same time in a run from 0 and in
+    runs started at 2 and 4, within a frame and a half."""
+    import subprocess
+    ff, fp = _real_tools()
+    monkeypatch.setattr(recorder, "FFMPEG", ff)
+    src = tmp_path / "lead.ts"
+    subprocess.run([ff, "-v", "error", "-y", "-itsoffset", "0.5", "-f", "lavfi", "-i",
+                    "testsrc=size=320x180:rate=30", "-f", "lavfi", "-i", "sine=frequency=440",
+                    "-t", "40", "-c:v", "mpeg2video", "-c:a", "mp2", "-f", "mpegts", str(src)],
+                   check=True)
+    monkeypatch.setattr(recorder, "FFPROBE", fp)
+    rec = {"uid": "ab" * 16}
+    os.makedirs(ondemand.od_dir(rec["uid"]), exist_ok=True)
+    v0 = ondemand.start_offset(rec, str(src))
+    assert 0.3 < v0 < 0.7
+    seen = {}
+    for start in (0, 2, 4):
+        out = tmp_path / f"r{start}"
+        out.mkdir()
+        proc = subprocess.Popen(recorder.convert_args("software", str(out), False, src=str(src),
+                                                      start_seg=start, v0=v0),
+                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL)
+        seg = out / "seg00006.ts"
+        end = time.time() + 90
+        while not seg.exists() and time.time() < end:
+            time.sleep(0.1)
+        proc.kill()
+        proc.wait()
+        assert seg.exists(), f"run at {start} made no segment 6"
+        seen[start] = _first_video_pts(fp, str(seg))
+    assert max(seen.values()) - min(seen.values()) < 0.05, seen
