@@ -153,3 +153,42 @@ def test_scrolling_a_tab_for_more_channels_keeps_every_row_once(page):
     vcns = page.eval_on_selector_all(".growr", "els => els.map(e => e.dataset.vcn)")
     assert len(vcns) == 14 == len(set(vcns))
     assert vcns == sorted(vcns, key=float), "in channel order"
+
+
+def test_a_tab_channel_whose_match_is_past_the_first_chunk_shows_once(page, synced):
+    """Page down through more channels than one page holds, then right past the
+    first four hours: the channel with its only match late must appear once,
+    with its programme, and none repeated or empty."""
+    import time
+    now = int(time.time()) // 1800 * 1800
+    with db.tx() as c:
+        c.execute("INSERT OR REPLACE INTO programs (guid, title, section, genres, teams) "
+                  "VALUES ('nt','Tab News','shows','[\"News\"]','[]')")
+        for i in range(25):
+            vcn = f"80.{i}"
+            c.execute("INSERT INTO channels (vcn, call_sign, title) VALUES (?,?,?)",
+                      (vcn, f"T{i}", vcn))
+            c.execute("""INSERT INTO airings (id, program_guid, channel_vcn, channel_call_sign,
+                         channel_title, begins_at, ends_at) VALUES (?,?,?,?,?,?,?)""",
+                      (f"tn{i}", "nt", vcn, f"T{i}", vcn, now, now + 1800))
+        c.execute("INSERT INTO channels (vcn, call_sign, title) VALUES ('99.9','LATE','99.9')")
+        c.execute("""INSERT INTO airings (id, program_guid, channel_vcn, channel_call_sign,
+                     channel_title, begins_at, ends_at) VALUES ('tlate','nt','99.9','LATE','99.9',?,?)""",
+                  (now + 6 * 3600, now + 7 * 3600))
+    page.goto("/guide?tab=news")
+    page.wait_for_selector(".gprog")
+    for _ in range(40):
+        page.evaluate("var w = document.getElementById('gw'); w.scrollTop = w.scrollHeight;")
+        page.wait_for_timeout(250)
+        if page.locator('.growr[data-vcn="99.9"]').count():
+            break
+    assert page.locator('.growr[data-vcn="99.9"]').count() == 1
+    for _ in range(40):
+        page.evaluate("var w = document.getElementById('gw'); w.scrollLeft = w.scrollWidth;")
+        page.wait_for_timeout(250)
+        if page.locator('.gprog[data-vcn="99.9"]').count():
+            break
+    assert page.locator('.gprog[data-vcn="99.9"]').count() == 1
+    assert page.locator('.growr[data-vcn="99.9"]').count() == 1
+    seen = page.eval_on_selector_all(".growr", "els => els.map(e => e.dataset.vcn)")
+    assert len(seen) == len(set(seen)), "no channel row is drawn twice"
