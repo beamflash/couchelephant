@@ -39,6 +39,7 @@ Everything it writes goes to a scratch folder, checked by the same guard the
 test suite uses. Stop it and nothing is left.
 """
 import hashlib
+import shutil
 import os
 import sys
 import tempfile
@@ -249,6 +250,57 @@ def main():
                       ("5eed" * 8, title, title, demo_guide.CHANNELS["9.1"][1],
                        now - 172800, now - 169200))
         return {"ok": True}
+
+    @web.app.post("/test/seed-long")
+    def _seed_long(title: str = "Long Game", seconds: int = 240, position: int = 200,
+                   delay: int = 30, adbreak: str = ""):
+        """Test only: a finished recording of `seconds` that has been left at
+        `position`, whose viewing copy is being made again, as a tidied-away
+        one is on demand: for `delay` seconds the copy holds only its first 30
+        seconds and no end tag, then the rest appears. `adbreak` "a,b" adds a break. A jump to a later place
+        before then has nowhere to land. Returns the recording's id."""
+        import subprocess
+        uid = "10ad" * 8
+        vdir = recorder.view_dir(uid)
+        shutil.rmtree(vdir, ignore_errors=True)
+        os.makedirs(vdir)
+        subprocess.run([recorder.FFMPEG, "-v", "error", "-f", "lavfi", "-i",
+                        "testsrc=size=320x180:rate=15", "-f", "lavfi", "-i",
+                        "sine=frequency=440", "-t", str(seconds), "-c:v", "libx264",
+                        "-pix_fmt", "yuv420p", "-g", "30", "-c:a", "aac", "-f", "hls",
+                        "-hls_time", "6", "-hls_playlist_type", "event",
+                        "-hls_segment_filename", os.path.join(vdir, "seg%05d.ts"),
+                        os.path.join(vdir, "full.m3u8")], check=True)
+        full = open(os.path.join(vdir, "full.m3u8"), encoding="utf-8").read()
+        # The first five segments (30 s), without the end tag.
+        short, kept = [], 0
+        for line in full.splitlines():
+            if line.startswith("#EXTINF:"):
+                kept += 1
+            if kept > 5 or line.startswith("#EXT-X-ENDLIST"):
+                break
+            short.append(line)
+        index = os.path.join(vdir, "index.m3u8")
+        open(index, "w", encoding="utf-8").write("\n".join(short) + "\n")
+
+        def _grow():
+            time.sleep(delay)
+            os.replace(os.path.join(vdir, "full.m3u8"), index)
+        threading.Thread(target=_grow, daemon=True).start()
+        now = int(time.time())
+        with db.tx() as c:
+            c.execute("DELETE FROM recordings WHERE uid = ?", (uid,))
+            cur = c.execute("""INSERT INTO recordings (uid, kind, state, title, show_title, section,
+                                   channel_vcn, channel_title, begins_at, ends_at, position)
+                               VALUES (?, 'recording', 'finished', ?, ?, 'shows', '9.1', ?, ?, ?, ?)""",
+                            (uid, title, title, demo_guide.CHANNELS["9.1"][1],
+                             now - 172800, now - 172800 + seconds, position))
+            if adbreak:
+                a, b = (float(x) for x in adbreak.split(","))
+                c.execute("INSERT INTO ad_breaks (recording_id, start_s, end_s, final) "
+                          "VALUES (?, ?, ?, 1)", (cur.lastrowid, a, b))
+                c.execute("UPDATE recordings SET ads_final = 1 WHERE id = ?", (cur.lastrowid,))
+        return {"ok": True, "id": cur.lastrowid}
 
     from app.routes import passes as _pass_routes
     _real_tuner_total = _pass_routes._tuner_total
