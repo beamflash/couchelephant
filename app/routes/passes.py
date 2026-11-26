@@ -133,7 +133,7 @@ def _why_map():
 # rows are discarded one join later.
 _FAILED_SQL = """
   SELECT NULL AS id, pa.program_title AS title,
-         COALESCE(p.grandparent_title, '') AS parent_title,
+         COALESCE(pa.parent_title, p.grandparent_title, '') AS parent_title,
          pa.channel_vcn AS channel_vcn, pa.begins_at AS begins_at,
          COALESCE(a.ends_at, live.ends_at) AS ends_at,
          'failed' AS status, NULL AS subscription,

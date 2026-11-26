@@ -711,11 +711,11 @@ def _note(row, action, reason, now, airing=None):
     with db.tx() as c:
         c.execute(
             """INSERT INTO pass_actions (pass_id, program_guid, airing_id,
-                                         program_title, channel_vcn, begins_at,
-                                         action, reason, dry_run, created_at)
-               VALUES (?,?,?,?,?,?,?,?,0,?)""",
+                                         program_title, parent_title, channel_vcn,
+                                         begins_at, action, reason, dry_run, created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,0,?)""",
             (row["pass_id"], row["program_guid"], aid, row["title"],
-             vcn, begins, action, reason, now))
+             passes._parent_of(row), vcn, begins, action, reason, now))
 
 
 def _cancel(plex, row, why, now):

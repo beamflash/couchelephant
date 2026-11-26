@@ -547,16 +547,32 @@ def already_handled(program_guid, read_at: int | None = None,
     return None
 
 
+def _parent_of(row):
+    """The show a row belongs to, kept on the log line: the guide forgets it."""
+    if not row:
+        return None
+    try:
+        got = row["grandparent_title"]
+    except (KeyError, IndexError):
+        got = None
+    if not got and row["program_guid"]:
+        p = db.one("SELECT grandparent_title FROM programs WHERE guid = ?",
+                   (row["program_guid"],))
+        got = p["grandparent_title"] if p else None
+    return got or None
+
+
 def _log(pass_id, row, action, reason, dry_run, subscription=None):
     with db.tx() as c:
         c.execute(
             """INSERT INTO pass_actions (pass_id, program_guid, airing_id, program_title,
-                                         channel_vcn, begins_at, action, reason,
-                                         plex_subscription, dry_run, created_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                                         parent_title, channel_vcn, begins_at, action,
+                                         reason, plex_subscription, dry_run, created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
             (pass_id, row["program_guid"] if row else None,
              row["id"] if row else None,
              row["title"] if row else None,
+             _parent_of(row),
              row["channel_vcn"] if row else None,
              row["begins_at"] if row else None,
              action, reason, subscription, 1 if dry_run else 0, _now()),
@@ -883,13 +899,14 @@ def _pass_bookings(pass_id: int) -> list[dict]:
                     "started": g["begins_at"] <= now + LEAD_SECONDS,
                     "channel_language": _channel_language(g["channel_vcn"])})
     for r in db.query(
-            "SELECT r.*, p.teams FROM recordings r LEFT JOIN programs p ON p.guid = r.program_guid "
+            "SELECT r.*, p.teams AS guide_teams FROM recordings r "
+            "LEFT JOIN programs p ON p.guid = r.program_guid "
             "WHERE r.pass_id = ? AND r.source = 'pass' AND r.kind = 'recording' "
             "AND r.state IN ('scheduled', 'recording') AND r.begins_at > ?", (pass_id, since)):
         if r["state"] != "recording" and r["begins_at"] < now - LEAD_SECONDS:
             continue          # never started, so not a recording under way
         out.append({"id": r["airing_id"], "program_guid": r["program_guid"],
-                    "teams": r["teams"], "begins_at": r["begins_at"],
+                    "teams": r["teams"] or r["guide_teams"], "begins_at": r["begins_at"],
                     "channel_vcn": r["channel_vcn"], "grab": None, "rec": r,
                     "started": r["state"] == "recording" or r["starts_at"] <= now,
                     "channel_language": _channel_language(r["channel_vcn"])})

@@ -122,8 +122,11 @@ def _same_team(guide: str, espn: set[str]) -> bool:
 
 def guide_teams(rec) -> list[str]:
     """The two teams, from the guide's list, or else from the title."""
-    p = db.one("SELECT teams FROM programs WHERE guid = ?", (rec["program_guid"],)) \
-        if rec["program_guid"] else None
+    # The recording's own copy first: the guide forgets a game once it has aired.
+    kept = rec["teams"] if "teams" in rec.keys() else None
+    p = {"teams": kept} if kept else (db.one(
+        "SELECT teams FROM programs WHERE guid = ?", (rec["program_guid"],))
+        if rec["program_guid"] else None)
     try:
         names = [t.get("name") for t in json.loads(p["teams"] or "[]")] if p else []
     except (ValueError, TypeError):

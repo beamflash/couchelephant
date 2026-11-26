@@ -62,10 +62,16 @@ _REFRESH = (
 )
 
 
+_LOG = """UPDATE pass_actions SET parent_title = (SELECT NULLIF(p.grandparent_title, '')
+           FROM programs p WHERE p.guid = pass_actions.program_guid)
+         WHERE parent_title IS NULL AND program_guid IS NOT NULL
+           AND EXISTS (SELECT 1 FROM programs p WHERE p.guid = pass_actions.program_guid)"""
+
+
 def migrate(conn) -> None:
     """Copy what the guide still has onto every recording. Runs at start, so
     a row made before the columns existed keeps what it can."""
-    for sql in _REFRESH:
+    for sql in (*_REFRESH, _LOG):
         conn.execute(sql)
 
 
