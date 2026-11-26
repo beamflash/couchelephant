@@ -291,20 +291,14 @@ def main():
               f"ad break {AD_BREAK}", flush=True)
 
     print(f"CouchElephant for the Apple tests on port {PORT}, scratch {SCRATCH}", flush=True)
-    # A simulator under load reuses a kept-alive connection a little after the
-    # server's default idle close (uvicorn closes at 5 s, oneport at 10 s), and
-    # a POST on a connection that has just been closed fails with "The network
-    # connection was lost". A tap lands there by chance. The tests' server never
-    # closes an idle connection inside a run, so the race cannot happen.
-    oneport.HEADER_SECONDS = 3600
     config = uvicorn.Config(web.app, host="0.0.0.0", port=PORT, log_level="warning",
                             proxy_headers=False, server_header=False,
-                            timeout_keep_alive=3600)
+                            timeout_keep_alive=oneport.KEEP_ALIVE_SECONDS)
     if AWAY:
         # A second address for the same install: plain HTTP on its own port.
         alias = uvicorn.Server(uvicorn.Config(web.app, host="0.0.0.0", port=ALIAS_PORT, log_level="warning",
                                               proxy_headers=False, server_header=False,
-                                              timeout_keep_alive=3600))
+                                              timeout_keep_alive=oneport.KEEP_ALIVE_SECONDS))
         threading.Thread(target=alias.run, daemon=True).start()
         oneport.serve(config)       # HTTP and HTTPS on the one port
     else:

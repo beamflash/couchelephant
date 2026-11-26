@@ -497,3 +497,9 @@ def test_the_cap_sits_below_the_descriptor_limit():
     assert oneport.connection_cap(256) < 256 // 2 + 1
     assert oneport.connection_cap(1024) > 100
     assert oneport.connection_cap(None) > 0
+
+
+def test_an_idle_connection_outlives_the_clients_reuse_race():
+    from app import __main__
+    assert oneport.KEEP_ALIVE_SECONDS == 75 and oneport.HEADER_SECONDS >= 75
+    assert __main__.make_config(1).timeout_keep_alive == 75

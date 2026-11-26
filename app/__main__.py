@@ -31,7 +31,8 @@ def _open_later(port: int) -> None:
 def make_config(port: int) -> uvicorn.Config:
     # proxy_headers off: app.exposure alone decides whom to believe.
     return uvicorn.Config("app.web:app", host="0.0.0.0", port=port,
-                          server_header=False, proxy_headers=False)
+                          server_header=False, proxy_headers=False,
+                          timeout_keep_alive=oneport.KEEP_ALIVE_SECONDS)
 
 
 def main(argv: list[str]) -> int:

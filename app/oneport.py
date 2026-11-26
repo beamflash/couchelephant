@@ -37,7 +37,11 @@ TLS_HELLO = 0x16
 _BAD_HOST = re.compile(r"[/\\?#@\s]")
 IS_WINDOWS = sys.platform == "win32"
 NO_READER = False            # tests: act like a loop with no add_reader
-HEADER_SECONDS = 10          # after hand-over, a request's headers must be whole by then
+# An idle kept-alive connection is closed after this long. Five or ten seconds
+# raced with a client reusing the connection at that instant ("The network
+# connection was lost" on a POST), so it is long, and uvicorn is given the same.
+KEEP_ALIVE_SECONDS = 75
+HEADER_SECONDS = KEEP_ALIVE_SECONDS   # after hand-over, a request's headers must be whole by then
 MAX_CONNECTIONS = None       # tests set it; None means from the descriptor limit
 PER_ADDRESS = 16             # one outsider address (IPv6: its /64) may hold this many
 MAX_WATCHED = 500            # select() on Windows takes 512 at most
