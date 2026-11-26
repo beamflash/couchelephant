@@ -442,19 +442,27 @@ def _sport_show(show) -> bool:
         "LIMIT 1", (show,))))
 
 
-def state_in_plex_on_demand(rec, view) -> bool:
-    """In Plex with no whole viewing copy, and a duration known from an
-    earlier request for its stream."""
-    return (rec["state"] == "in_plex" and not view["complete"]
-            and ondemand.cached_duration(rec["uid"]) is not None)
+def _on_demand_seconds(rec, view) -> float | None:
+    """How long a recording in Plex with no whole viewing copy plays for, when
+    its stream is made on demand (ondemand.py): the length the stream lists
+    when that is known, else the length it was recorded for. Nothing is probed
+    here, a list of recordings must stay quick."""
+    if rec["state"] != "in_plex" or view["complete"]:
+        return None
+    d = ondemand.cached_duration(rec["uid"])
+    if d is None and rec["started_at"] and rec["ended_at"]:
+        d = rec["ended_at"] - rec["started_at"]
+    if d is None:
+        d = (rec["ends_at"] or 0) - (rec["begins_at"] or 0)
+    return float(d) if d and d > 0 else None
 
 
 def recording_json(request: Request, rec) -> dict:
     view = recorder.view_info(rec["uid"])
-    if state_in_plex_on_demand(rec, view):
+    on_demand = _on_demand_seconds(rec, view)
+    if on_demand:
         # Its stream lists every segment, so all of it can be reached at once.
-        view = {**view, "seconds": ondemand.cached_duration(rec["uid"]) or view["seconds"],
-                "complete": True}
+        view = {**view, "seconds": on_demand, "complete": True}
     big, small = _names(rec["show_title"], rec["title"], rec["section"] == "sports")
     big = big or "Recording"
     state = rec["state"]

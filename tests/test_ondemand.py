@@ -75,9 +75,9 @@ def test_two_requests_do_not_start_two_ffmpegs(od):
 
 def test_an_idle_ffmpeg_is_stopped(od, monkeypatch):
     rec, _ = od
-    monkeypatch.setattr(ondemand, "IDLE_SECONDS", 0.1)
     TestClient(app).get(f"/hls/{rec['uid']}/seg00010.ts")
     proc = ondemand._runs[rec["uid"]].proc
+    monkeypatch.setattr(ondemand, "IDLE_SECONDS", 0.1)
     deadline = time.time() + 8
     while proc.poll() is None and time.time() < deadline:
         time.sleep(0.2)
@@ -89,8 +89,9 @@ def test_a_segment_past_the_end_is_not_there(od):
     assert TestClient(app).get(f"/hls/{rec['uid']}/seg01000.ts").status_code == 404
 
 
-def test_a_segment_left_by_an_earlier_run_is_not_this_runs_progress(od):
+def test_a_segment_left_by_an_earlier_run_is_not_this_runs_progress(od, monkeypatch):
     rec, logf = od
+    monkeypatch.setenv("FAKE_FFMPEG_DELAY", "0.5")
     c = TestClient(app)
     assert c.get(f"/hls/{rec['uid']}/seg00300.ts").status_code == 200
     assert c.get(f"/hls/{rec['uid']}/seg00100.ts").status_code == 200
@@ -98,3 +99,10 @@ def test_a_segment_left_by_an_earlier_run_is_not_this_runs_progress(od):
     # it: asking for 301 starts there and does not wait for 100 to climb.
     assert c.get(f"/hls/{rec['uid']}/seg00301.ts").status_code == 200
     assert [s[2] for s in _starts(logf)] == ["start=300", "start=100", "start=301"]
+
+
+def test_the_recording_says_all_of_it_is_there_before_its_stream_was_ever_asked(od):
+    rec, _ = od
+    os.remove(os.path.join(ondemand.od_dir(rec["uid"]), "duration"))
+    got = TestClient(app).get(f"/api/tv/recordings/{rec['id']}").json()["recording"]
+    assert got["complete"] is True and got["playable"] is True and got["seconds"] > 0
