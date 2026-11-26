@@ -35,6 +35,7 @@ from .. import (
     auth,
     db,
     exposure,
+    filters,
     handover,
     passes,
     paths,
@@ -45,6 +46,7 @@ from .. import (
     tls,
     tuner,
 )
+from . import guide as guide_routes
 from . import passes as pass_routes
 from . import record
 from ._shared import VERSION, _plex, current_user, page
@@ -735,7 +737,7 @@ def _booked_slots(now):
 
 
 @router.get("/api/tv/guide")
-def tv_guide(request: Request, hours: int = GUIDE_HOURS):
+def tv_guide(request: Request, hours: int = GUIDE_HOURS, tab: str = ""):
     """The grid: every channel, and what is on it from now for a day.
 
     One answer, not pages. A day of guide for a household's channels is a few
@@ -744,6 +746,9 @@ def tv_guide(request: Request, hours: int = GUIDE_HOURS):
     """
     now = int(time.time())
     until = now + max(1, min(48, hours)) * 3600
+    # A tab is a named filter: favorites, news or sports. Empty means all.
+    tabfrags, tabargs = filters.build(filters.tab_tokens(tab), [])
+    stars = guide_routes.favorite_vcns()
     skip = _unwatchable()
     booked = _booked_slots(now)
     chans = db.query("SELECT vcn, call_sign, title, logo_path FROM channels")
@@ -751,8 +756,8 @@ def tv_guide(request: Request, hours: int = GUIDE_HOURS):
         """SELECT a.id, a.channel_vcn, a.begins_at, a.ends_at, a.premiere,
                   COALESCE(a.drm, 0) AS drm, p.title, p.grandparent_title, p.section
            FROM airings a JOIN programs p ON p.guid = a.program_guid
-           WHERE a.ends_at > ? AND a.begins_at < ?
-           ORDER BY a.begins_at""", (now, until))
+           WHERE a.ends_at > ? AND a.begins_at < ? """ + " ".join(tabfrags) + """
+           ORDER BY a.begins_at""", (now, until, *tabargs))
     by = {}
     for r in rows:
         by.setdefault(r["channel_vcn"], []).append(r)
@@ -773,8 +778,71 @@ def tv_guide(request: Request, hours: int = GUIDE_HOURS):
             })
         if mine:
             out.append({"channel": _channel(request, c["vcn"], c["title"] or c["call_sign"]),
-                        "watchable": c["vcn"] not in skip, "programs": mine})
+                        "watchable": c["vcn"] not in skip,
+                        "favorite": c["vcn"] in stars, "programs": mine})
     return {"ok": True, "now": now, "start": now, "end": until, "channels": out}
+
+
+@router.get("/api/tv/search")
+def tv_search(request: Request, q: str = "", limit: int = 60, tab: str = ""):
+    """Search the guide: what is on or coming up whose title, show, description
+    or channel matches, then recordings whose title matches. The web page and
+    the apps share the one query."""
+    q = (q or "").strip()
+    if not q:
+        return {"ok": True, "q": "", "airings": [], "recordings": []}
+    now = int(time.time())
+    skip = _unwatchable()
+    booked = _booked_slots(now)
+    rows = guide_routes._airings_query("", "", 0, q, 0, max(1, min(200, limit)), tab=tab)
+    airings = []
+    for r in rows:
+        big, small = _names(r["grandparent_title"], r["title"], r["section"] == "sports")
+        airings.append({
+            "id": r["id"], "title": big, "subtitle": small,
+            "begins_at": r["begins_at"], "ends_at": r["ends_at"],
+            "live": bool(r["premiere"]), "sport": r["section"] == "sports",
+            "channel": _channel(request, r["channel_vcn"], r["channel_title"]),
+            "recording": booked.get((r["channel_vcn"], r["begins_at"])),
+            "recordable": not r["drm"] and r["channel_vcn"] not in skip,
+        })
+    recs = [recording_json(request, r) for r in guide_routes.search_recordings(q, tab=tab)]
+    return {"ok": True, "q": q, "airings": airings, "recordings": recs}
+
+
+# ---------- favorite channels ----------
+# One list for the whole household, so a star on the web shows on the TV.
+
+def _favorites_json(request: Request) -> dict:
+    out = []
+    for r in db.query("""SELECT c.vcn, c.title, c.call_sign FROM favorite_channels f
+                         JOIN channels c ON c.vcn = f.vcn"""):
+        out.append(_channel(request, r["vcn"], r["title"] or r["call_sign"]))
+    out.sort(key=lambda c: _vcn_key(c["number"]))
+    return {"ok": True, "channels": out}
+
+
+@router.get("/api/tv/favorites")
+def favorites(request: Request):
+    return _favorites_json(request)
+
+
+@router.post("/api/tv/favorites/add")
+def favorites_add(request: Request, vcn: str = Form(...)):
+    if not db.one("SELECT 1 FROM channels WHERE vcn = ?", (vcn,)):
+        return JSONResponse({"ok": False, "error": "That channel is not in the guide."},
+                            status_code=404)
+    with db.tx() as c:
+        c.execute("INSERT OR IGNORE INTO favorite_channels (vcn, added_at) VALUES (?, ?)",
+                  (vcn, int(time.time())))
+    return _favorites_json(request)
+
+
+@router.post("/api/tv/favorites/remove")
+def favorites_remove(request: Request, vcn: str = Form(...)):
+    with db.tx() as c:
+        c.execute("DELETE FROM favorite_channels WHERE vcn = ?", (vcn,))
+    return _favorites_json(request)
 
 
 @router.get("/api/tv/program")

@@ -14,10 +14,18 @@
   {% endif %}
 </div>
 
+{# The tabs are named filters on the same page, and stay on a search. #}
+<nav class="tabbar" id="gtabs" aria-label="Guide tabs">
+  {% for key, label, href in tab_links %}
+    <a href="{{ href }}" id="tab-{{ key or 'all' }}" class="{{ 'on' if tab == key }}"
+       {% if tab == key %}aria-current="page"{% endif %}>{{ label }}</a>
+  {% endfor %}
+</nav>
+
 {% if not q %}
 <div class="daybar">
   {% for d in days %}
-    <a href="/guide?day={{ d.key }}{% if channel %}&channel={{ channel }}{% endif %}{% if sports %}&sports=1{% endif %}"
+    <a href="/guide?day={{ d.key }}{% if channel %}&channel={{ channel }}{% endif %}{% if tab %}&tab={{ tab }}{% endif %}"
        class="{{ 'on' if d.key == day }}"
        {% if not loop.first %}data-ts="{{ d.ts }}" data-fmt="dayshort"{% endif %}
        >{{ d.label }}</a>
@@ -28,6 +36,7 @@
 {# One form. Search and the filter panel narrow the same result set. #}
 <form method="get" action="/guide" class="row filterbar" id="sb">
   {% if not q %}<input type="hidden" name="day" value="{{ day }}">{% endif %}
+  {% if tab %}<input type="hidden" name="tab" value="{{ tab }}">{% endif %}
   <input type="hidden" name="f" id="f_inc" value="{{ f }}">
   <input type="hidden" name="x" id="f_exc" value="{{ x }}">
 
@@ -85,6 +94,27 @@
   <div class="empty">Nothing in the guide matches "{{ q }}".</div>
 {% endif %}
 </div>
+{% if recs %}
+<h2 class="recheading" id="recresults">Recordings</h2>
+<div class="card" style="padding:0">
+  <table>
+    {% for r in recs %}
+    <tr>
+      <td class="dim" style="white-space:nowrap"><time data-ts="{{ r.begins_at }}" data-fmt="when">{{ r.begins_at|fmt }}</time></td>
+      <td><a href="/recordings?rec={{ r.id }}"><b>{{ r.title }}</b></a>
+        {% if r.sub %}<div class="tiny dim">{{ r.sub }}</div>{% endif %}</td>
+      <td class="tiny dim">{{ r.vcn or '' }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+{% elif tab == 'favorites' and not has_favorites %}
+<div class="card empty" id="nofavorites">
+  <b>No favorite channels yet.</b><br>
+  Star a channel to add it here. On the All tab, press the star next to a
+  channel in the guide.
+</div>
 {% else %}
 {# Grid guide: channels down, time across. Both axes load more as you reach
    the edge, and stop when the data runs out. #}
@@ -94,7 +124,7 @@
   <span><i class="ce" style="opacity:.45"></i> Live broadcast</span>
 </div>
 <div class="gridwrap" id="gw" data-day="{{ day }}" data-overlay="{{ 1 if overlay else 0 }}"
-     data-sports="{{ 1 if sports else 0 }}" data-channel="{{ channel }}">
+     data-tab="{{ tab }}" data-channel="{{ channel }}">
   <div class="gridinner" id="gi">
     <div class="ghead" id="ghead">
       <div class="gcorner">Channel</div>
@@ -142,6 +172,9 @@
   });
 
   inp.addEventListener('keydown', function (e) {
+    // The filter box is a second text field in this form, and with two the
+    // browser does not submit on Enter by itself.
+    if (e.key === 'Enter') { e.preventDefault(); if (inp.value.trim()) form.submit(); }
     if (e.key === 'Escape') { inp.value = ''; close(); inp.blur(); }
   });
 
@@ -256,7 +289,7 @@
       CH_PAGE = 10,            // ten channels at a time
       ROW_H = cssNum('--rowh', 62);
 
-  var sports  = wrap.dataset.sports === '1',
+  var tab     = wrap.dataset.tab || '',
       channel = wrap.dataset.channel || '',
       day     = wrap.dataset.day || '';
 
@@ -294,7 +327,9 @@
   }
 
   function addChannel(c) {
+    if (rowByVcn[c.vcn]) return;      // already on screen
     var row = document.createElement('div');
+    row.dataset.vcn = c.vcn;
     row.className = 'growr';
     var label = document.createElement('div');
     label.className = 'gch' + (c.logo ? '' : ' nologo');
@@ -312,9 +347,42 @@
         if (e.key === 'Enter') CE.Player.watch(c.vcn);
       });
     }
+    // A star keeps the channel in Favorites, for every device in the house.
+    var star = document.createElement('button');
+    star.type = 'button';
+    star.className = 'gstar' + (c.favorite ? ' on' : '');
+    star.setAttribute('aria-label', (c.favorite ? 'Remove ' : 'Add ') + c.vcn + ' ' +
+                      (c.call_sign || '') + (c.favorite ? ' from favorites' : ' to favorites'));
+    star.title = c.favorite ? 'Remove from favorites' : 'Add to favorites';
+    star.textContent = c.favorite ? '\u2605' : '\u2606';
+    star.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var on = !star.classList.contains('on');
+      fetch('/api/tv/favorites/' + (on ? 'add' : 'remove'), {
+        method: 'POST', body: new URLSearchParams({vcn: c.vcn})
+      }).then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        c.favorite = on;
+        star.classList.toggle('on', on);
+        star.textContent = on ? '\u2605' : '\u2606';
+        star.title = on ? 'Remove from favorites' : 'Add to favorites';
+        star.setAttribute('aria-label', (on ? 'Remove ' : 'Add ') + c.vcn + ' ' +
+                          (c.call_sign || '') + (on ? ' from favorites' : ' to favorites'));
+        // Taking a star off on the Favorites tab takes the channel off it.
+        if (!on && tab === 'favorites') location.reload();
+      }).catch(function (err) {
+        status.textContent = 'Could not save that favorite. ' + err.message;
+        status.style.display = 'block';
+      });
+    });
     var lane = document.createElement('div');
     lane.className = 'glane';
-    row.appendChild(label); row.appendChild(lane); rowsEl.appendChild(row);
+    // The star is beside the channel button, not inside it: a button in a
+    // button, and its Enter would also reach the channel's own key handler.
+    var col = document.createElement('div');
+    col.className = 'gchcol';
+    col.appendChild(label); col.appendChild(star);
+    row.appendChild(col); row.appendChild(lane); rowsEl.appendChild(row);
     rowByVcn[c.vcn] = lane;
     channels.push(c);
   }
@@ -369,9 +437,12 @@
   // Keep it moving without a reload.
   setInterval(marker, 60000);
 
-  function fetchWindow(s, e, off, limit) {
+  // `since` is where the guide on screen begins, so a tab picks its channels
+  // once for the whole guide. `vcns` asks for the rows already drawn, for more time.
+  function fetchWindow(s, e, off, limit, vcns) {
     var u = '/api/grid?start=' + s + '&end=' + e + '&choffset=' + off + '&chlimit=' + limit +
-            (sports ? '&sports=1' : '') + (channel ? '&channel=' + encodeURIComponent(channel) : '');
+            '&since=' + startTs + (vcns ? '&vcns=' + encodeURIComponent(vcns) : '') +
+            (tab ? '&tab=' + encodeURIComponent(tab) : '') + (channel ? '&channel=' + encodeURIComponent(channel) : '');
     return fetch(u).then(function (r) { return r.json(); });
   }
 
@@ -415,7 +486,8 @@
     if (guideEnd && endTs >= guideEnd) { moreTime = false; return Promise.resolve(); }
     busy = true; busyH(true);
     var from = endTs, to = endTs + CHUNK;
-    return fetchWindow(from, to, 0, chOffset).then(function (d) {
+    return fetchWindow(from, to, 0, channels.length,
+                       channels.map(function (c) { return c.vcn; }).join(',')).then(function (d) {
       endTs = to;
       drawTicks(from, to);
       d.airings.forEach(place);

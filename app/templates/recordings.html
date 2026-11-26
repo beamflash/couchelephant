@@ -1448,9 +1448,24 @@ window.passTab = 'sports';
                          screen: 'recordings'}) + '</div>'; return; }
       rows = d.recorded || [];
       canDelete = !!d.can_delete;
+      // A link from guide search names the recording to show: open its group
+      // and mark it.
+      var want = new URLSearchParams(location.search).get('rec');
+      var hit = want && rows.filter(function (x) { return String(x.id) === want; })[0];
+      if (hit) { cat = 'all'; open[hit.group] = true; }
       draw();
+      if (hit) {
+        var el = wrap.querySelector('[data-rec="' + want + '"]');
+        if (el) { el.classList.add('hit'); el.scrollIntoView({block: 'center'}); }
+      }
     });
   };
+
+  // A link from guide search opens on this list.
+  if (/[?&]rec=/.test(location.search)) {
+    var recTab = document.querySelector('.subtab[data-sub="recorded"]');
+    if (recTab) recTab.click();
+  }
 
   bar.addEventListener('click', function (e) {
     var b = e.target.closest('[data-cat]');

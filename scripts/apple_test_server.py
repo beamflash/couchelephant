@@ -87,6 +87,23 @@ def _longest_on_now():
                      ORDER BY a.ends_at DESC LIMIT 1""", (now, now))
 
 
+def _add_news():
+    """A half hour of news at the end of two channels' day. The demo's own news
+    slot is long over by the time a test runs, and the News tab needs some."""
+    with db.tx() as c:
+        c.execute("""INSERT OR REPLACE INTO programs (guid, title, grandparent_title, summary,
+                         type, section, genres, teams, year)
+                     VALUES ('plex://episode/demo-news-late', 'Late News', 'Local News',
+                             'The day in review.', 'episode', 'shows', '["News"]', '[]', 2026)""")
+        for vcn in ("9.1", "41.1"):
+            last = db.one("SELECT MAX(ends_at) e FROM airings WHERE channel_vcn = ?", (vcn,))["e"]
+            call, title = demo_guide.CHANNELS[vcn]
+            c.execute("""INSERT OR REPLACE INTO airings (id, program_guid, channel_vcn,
+                             channel_call_sign, channel_title, begins_at, ends_at, drm)
+                         VALUES (?, 'plex://episode/demo-news-late', ?, ?, ?, ?, ?, 0)""",
+                      (f"demo-late-news-{vcn}", vcn, call, title, last, last + 1800))
+
+
 def _ticking():
     """The recorder's own loop, without the ones that reach other servers."""
     while True:
@@ -166,6 +183,7 @@ def main():
     if not ok:
         raise SystemExit(f"the demo guide would not sync: {detail}")
     print("guide:", detail, flush=True)
+    _add_news()
 
     @web.app.get("/test/reports")
     def _reports():
@@ -216,6 +234,22 @@ def main():
                 c.execute("DELETE FROM passes WHERE id = ?", (pid,))
         return {"pass_id": pid, "booked": len(made)}
 
+    @web.app.post("/test/seed-recording")
+    def _seed_recording(title: str):
+        """Test only: a finished recording with this title, so a search for a
+        recording has one whatever earlier tests deleted. It is two days old, so it is not in
+        today's calendar, where the first item is the recording under way."""
+        now = int(time.time())
+        with db.tx() as c:
+            # One seeded recording at a time, so tests do not pile them up.
+            c.execute("DELETE FROM recordings WHERE uid = ?", ("5eed" * 8,))
+            c.execute("""INSERT INTO recordings (uid, kind, state, title, show_title, section,
+                             channel_vcn, channel_title, begins_at, ends_at)
+                         VALUES (?, 'recording', 'finished', ?, ?, 'shows', '9.1', ?, ?, ?)""",
+                      ("5eed" * 8, title, title, demo_guide.CHANNELS["9.1"][1],
+                       now - 172800, now - 169200))
+        return {"ok": True}
+
     from app.routes import passes as _pass_routes
     _real_tuner_total = _pass_routes._tuner_total
 
@@ -257,12 +291,20 @@ def main():
               f"ad break {AD_BREAK}", flush=True)
 
     print(f"CouchElephant for the Apple tests on port {PORT}, scratch {SCRATCH}", flush=True)
+    # A simulator under load reuses a kept-alive connection a little after the
+    # server's default idle close (uvicorn closes at 5 s, oneport at 10 s), and
+    # a POST on a connection that has just been closed fails with "The network
+    # connection was lost". A tap lands there by chance. The tests' server never
+    # closes an idle connection inside a run, so the race cannot happen.
+    oneport.HEADER_SECONDS = 3600
     config = uvicorn.Config(web.app, host="0.0.0.0", port=PORT, log_level="warning",
-                            proxy_headers=False, server_header=False)
+                            proxy_headers=False, server_header=False,
+                            timeout_keep_alive=3600)
     if AWAY:
         # A second address for the same install: plain HTTP on its own port.
         alias = uvicorn.Server(uvicorn.Config(web.app, host="0.0.0.0", port=ALIAS_PORT, log_level="warning",
-                                              proxy_headers=False, server_header=False))
+                                              proxy_headers=False, server_header=False,
+                                              timeout_keep_alive=3600))
         threading.Thread(target=alias.run, daemon=True).start()
         oneport.serve(config)       # HTTP and HTTPS on the one port
     else:
