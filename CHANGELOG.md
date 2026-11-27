@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- The wiki at couchelephant.app/wiki. It is written in the GitHub wiki and rebuilt by the Site workflow, with search and an "Edit this page" link.
+
 ## 1.5.41 - 2026-11-26
 
 ### Changed
