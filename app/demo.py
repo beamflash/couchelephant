@@ -338,6 +338,9 @@ MAX_RECORDING_SECONDS = 30 * 60        # a recording they make stops after this
 MAX_LIVE_SECONDS = 30 * 60             # a live session, however it is kept alive
 MAX_DISK_BYTES = 3 * 1024 ** 3         # the recordings folder, all told
 SEED_KEY = "demo_seed_max_id"          # recordings up to this id are the seeded ones
+# The demo's own rolling recording (tests/demo_world.keep_one_under_way) is not
+# a visitor's: none of the limits below count it.
+OWN_SOURCE = "demo-under-way"
 _disk_checked = [0.0]
 
 
@@ -371,20 +374,25 @@ def enforce_limits(now: int | None = None) -> None:
         recorder.stop_live(rec["id"])
     # At most MAX_BOOKINGS of a visitor's bookings: the earliest stay.
     mine = db.query("SELECT id FROM recordings WHERE kind = 'recording' AND id > ? "
+                    "AND COALESCE(source, '') != ? "
                     "AND state IN ('scheduled', 'recording') ORDER BY COALESCE(starts_at, begins_at), id",
-                    (seed,))
+                    (seed, OWN_SOURCE))
     for row in mine[MAX_BOOKINGS:]:
         recorder.cancel(row["id"])
     # A recording they make stops after half an hour.
     with db.tx() as c:
         c.execute("UPDATE recordings SET stops_at = COALESCE(started_at, starts_at) + ? "
                   "WHERE kind = 'recording' AND id > ? AND state IN ('scheduled', 'recording') "
+                  "AND COALESCE(source, '') != ? "
                   "AND starts_at IS NOT NULL AND stops_at > COALESCE(started_at, starts_at) + ?",
-                  (MAX_RECORDING_SECONDS, seed, MAX_RECORDING_SECONDS))
+                  (MAX_RECORDING_SECONDS, seed, OWN_SOURCE, MAX_RECORDING_SECONDS))
     # The folder has a ceiling: the oldest finished recording of theirs goes first.
     if time.monotonic() - _disk_checked[0] > 60:
         _disk_checked[0] = time.monotonic()
-        size = _folder_bytes(recorder.REC_DIR)
+        # The demo's own recording is not the visitor's to pay for.
+        own = sum(_folder_bytes(recorder.rec_dir(r["uid"])) for r in db.query(
+            "SELECT uid FROM recordings WHERE source = ?", (OWN_SOURCE,)))
+        size = _folder_bytes(recorder.REC_DIR) - own
         if size > MAX_DISK_BYTES:
             for rec in db.query("SELECT id, uid FROM recordings WHERE kind = 'recording' "
                                 "AND id > ? AND state = 'finished' ORDER BY id", (seed,)):
@@ -392,7 +400,7 @@ def enforce_limits(now: int | None = None) -> None:
                 with db.tx() as c:
                     c.execute("DELETE FROM ad_breaks WHERE recording_id = ?", (rec["id"],))
                     c.execute("DELETE FROM recordings WHERE id = ?", (rec["id"],))
-                size = _folder_bytes(recorder.REC_DIR)
+                size = _folder_bytes(recorder.REC_DIR) - own
                 if size <= MAX_DISK_BYTES:
                     break
 

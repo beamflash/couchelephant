@@ -24,8 +24,11 @@ services:
       # Caddy has the one fixed address below, and is the only proxy believed
       # (not the gateway, which is where an IPv6 visitor's connection comes from).
       DEMO_TRUSTED_PROXIES: 172.29.0.2/32
-      # Two streams at once, live and recording together.
-      DEMO_TUNERS: "2"
+      # Three streams at once: the demo's own recording under way, and two
+      # for the visitor, live and recording together.
+      DEMO_TUNERS: "3"
+      # The show pictures are served by Caddy at https://DEMO_HOST/demo-art.
+      DEMO_HOST: ${DEMO_HOST:-demo.couchelephant.app}
     volumes:
       - demo-data:/data
     networks:
@@ -59,6 +62,7 @@ services:
       - "${HTTPS_PORT:-443}:443/udp"
     volumes:
       - ${CADDYFILE:-./Caddyfile}:/etc/caddy/Caddyfile:ro
+      - ./art:/srv/demo-art:ro
       - caddy-data:/data
       - caddy-config:/config
     networks:

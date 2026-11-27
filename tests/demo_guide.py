@@ -123,6 +123,22 @@ if os.environ.get("COUCHELEPHANT_DEMO_INVENTED") == "1":
         ("Bend in the Willow", ["Western"], "PG-13", 108),
     ]
 
+# Where the demo's pictures are served, one per show, film and league
+# (deploy/demo/art, served by the demo's Caddy). Unset, the guide has none and
+# every tile is the app's own title card, as before.
+ART_BASE = os.environ.get("COUCHELEPHANT_DEMO_ART", "").rstrip("/")
+
+
+def art_for(name):
+    """{"thumb", "art"} for a show, film or league name, or {} with no ART_BASE."""
+    if not ART_BASE or not name:
+        return {}
+    slug = "".join(ch if ch.isalnum() else "-" for ch in name.lower().replace("'", ""))
+    slug = "-".join(part for part in slug.split("-") if part)
+    url = f"{ART_BASE}/{slug}.jpg"
+    return {"thumb": url, "art": url}
+
+
 # How far ahead of the anchor the guide is filled.
 HOURS_AHEAD = int(os.environ.get("COUCHELEPHANT_DEMO_GUIDE_HOURS", "14"))
 NEWS_EVERY = 6 * 3600
@@ -178,7 +194,7 @@ def build(anchor, media):
             "guid": _key("news", n), "ratingKey": _rk(_key("news", n)),
             "type": "episode", "title": "Evening News", "grandparentTitle": "Local News",
             "summary": "The day's news.", "year": 2026, "contentRating": "TV-G",
-            "duration": 30 * 60_000, "Genre": [{"tag": "News"}],
+            "duration": 30 * 60_000, "Genre": [{"tag": "News"}], **art_for("Local News"),
             "Media": [media(vcn, start_of_day - 1800, premiere=True, res="1080")],
         })
         clock = start_of_day
@@ -196,6 +212,7 @@ def build(anchor, media):
                     "grandparentTitle": "Local News",
                     "summary": "The day's news.", "year": 2026, "contentRating": "TV-G",
                     "duration": 30 * 60_000, "Genre": [{"tag": "News"}],
+                    **art_for("Local News"),
                     "Media": [media(vcn, clock, premiere=True, res="1080")],
                 })
                 clock += 1800
@@ -215,7 +232,7 @@ def build(anchor, media):
                 item = {
                     "guid": guid, "ratingKey": _rk(guid), "type": "episode",
                     "title": title, "grandparentTitle": series,
-                    "summary": f"{title}. Live coverage.", "year": 2026,
+                    "summary": f"{title}. Live coverage.", "year": 2026, **art_for(series),
                     "duration": mins * 60_000,
                     "Genre": [{"tag": g} for g in genres],
                     # The live broadcast, and the repeat two days later on a
@@ -230,7 +247,7 @@ def build(anchor, media):
                 shows.append({
                     "guid": guid, "ratingKey": _rk(guid), "type": "episode",
                     "title": title, "grandparentTitle": series,
-                    "summary": f"{title}. An episode of {series}.", "year": 2026,
+                    "summary": f"{title}. An episode of {series}.", "year": 2026, **art_for(series),
                     "contentRating": rating, "duration": mins * 60_000,
                     "Genre": [{"tag": g} for g in genres],
                     "Media": [media(vcn, clock, premiere=live,
@@ -240,7 +257,7 @@ def build(anchor, media):
                 title, genres, rating, mins = MOVIES[n % len(MOVIES)]
                 movies.append({
                     "guid": guid, "ratingKey": _rk(guid), "type": "movie",
-                    "title": title, "summary": f"{title}. A film.",
+                    "title": title, "summary": f"{title}. A film.", **art_for(title),
                     "year": 2019 + (n % 5),
                     "contentRating": rating, "duration": mins * 60_000,
                     "Genre": [{"tag": g} for g in genres],

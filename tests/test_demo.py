@@ -835,3 +835,185 @@ def test_the_reset_is_held_back_at_most_three_nights(tmp_path):
     """, tmp_path)
     days, n, n2 = out.split()
     assert float(days) == 3.0 and int(n) == 72 and int(n2) == 2
+
+
+# ---------- the demo's own recording under way, and its pictures ----------
+
+def _own(uid, stops):
+    rid = _add("recording", "recording", uid, started=int(time.time()) - 600,
+               begins=int(time.time()) - 600, stops=stops)
+    with db.tx() as c:
+        c.execute("UPDATE recordings SET source = ? WHERE id = ?", (demo.OWN_SOURCE, rid))
+    return rid
+
+
+def test_the_demos_own_recording_is_not_counted_as_a_visitors(on):
+    seed = _add("recording", "finished", "seed")
+    db.set_setting(demo.SEED_KEY, seed)
+    now = int(time.time())
+    own = _own("own", now + 3 * 3600)
+    mine = [_add("recording", "scheduled", f"mine{i}", begins=now + 600 * (i + 1)) for i in range(2)]
+    demo.enforce_limits()
+    left = {r["id"] for r in db.query("SELECT id FROM recordings")}
+    # Both of the visitor's bookings stay: the demo's own does not use one up.
+    assert {own, *mine} <= left
+    # And it is not cut to half an hour.
+    assert db.one("SELECT stops_at s FROM recordings WHERE id = ?", (own,))["s"] == now + 3 * 3600
+
+
+def _on_now(vcn, guid, begins, ends):
+    with db.tx() as c:
+        c.execute("INSERT OR REPLACE INTO programs (guid, title, grandparent_title, type, section) "
+                  "VALUES (?, 'The Quiet Part', 'Marrowbrook', 'episode', 'shows')", (guid,))
+        c.execute("INSERT OR REPLACE INTO airings (id, program_guid, channel_vcn, channel_title, "
+                  "begins_at, ends_at, drm) VALUES (?, ?, ?, ?, ?, ?, 0)",
+                  (f"a-{guid}", guid, vcn, vcn, begins, ends))
+
+
+def test_one_name_for_the_demos_own_recording():
+    from tests import demo_world
+    assert demo.OWN_SOURCE == demo_world.UNDER_WAY_SOURCE
+
+
+def test_while_in_use_something_is_always_being_recorded(on):
+    from app import recorder
+    from tests import demo_world
+    now = int(time.time())
+    _on_now(demo_world.UNDER_WAY_CHANNEL, "g1", now - 600, now + 1800)
+    _on_now("5.1", "g2", now - 600, now + 9000)          # another channel: never picked
+    first = demo_world.keep_one_under_way(True, now)
+    rec = recorder.get(first)
+    assert rec["source"] == demo.OWN_SOURCE and rec["channel_vcn"] == demo_world.UNDER_WAY_CHANNEL
+    assert rec["stops_at"] == now + 1800                   # to the end of the programme, no more
+    assert demo_world.keep_one_under_way(True, now) is None      # one at a time
+    # It ends, and the next programme on the channel is booked. The finished
+    # one is never deleted here: someone may be watching it.
+    with db.tx() as c:
+        c.execute("UPDATE recordings SET state = 'finished', ended_at = ? WHERE id = ?",
+                  (now + 1800, first))
+    _on_now(demo_world.UNDER_WAY_CHANNEL, "g3", now + 1800, now + 5400)
+    second = demo_world.keep_one_under_way(True, now + 1801)
+    assert second and recorder.get(second)["program_guid"] == "g3"
+    demo_world.keep_one_under_way(False, now + 99999)
+    assert recorder.get(first) is not None
+
+
+def test_an_idle_demo_ends_its_recording_and_deletes_nothing(on):
+    from app import recorder
+    from tests import demo_world
+    now = int(time.time())
+    _on_now(demo_world.UNDER_WAY_CHANNEL, "g1", now - 600, now + 1800)
+    first = demo_world.keep_one_under_way(True, now)
+    with db.tx() as c:
+        c.execute("UPDATE recordings SET state = 'recording', started_at = ? WHERE id = ?",
+                  (now - 300, first))
+    visitor = _add("recording", "scheduled", "visitor", begins=now + 600)
+    assert demo_world.keep_one_under_way(False, now) is None
+    # Ended now, as if the programme had ended: the recorder stops it on its
+    # next tick and it stays, playable.
+    assert recorder.get(first)["stops_at"] == now
+    assert recorder.get(visitor)["stops_at"] == now + 4000          # a visitor's is left alone
+
+
+def test_an_idle_demo_also_ends_one_still_waiting_for_a_tuner(on):
+    from app import recorder
+    from tests import demo_world
+    now = int(time.time())
+    _on_now(demo_world.UNDER_WAY_CHANNEL, "g1", now - 600, now + 1800)
+    first = demo_world.keep_one_under_way(True, now)
+    assert recorder.get(first)["state"] == "scheduled"
+    demo_world.keep_one_under_way(False, now)
+    assert recorder.get(first)["stops_at"] == now
+
+
+def test_back_in_use_during_the_same_programme_it_records_again(on):
+    from app import recorder
+    from tests import demo_world
+    now = int(time.time())
+    _on_now(demo_world.UNDER_WAY_CHANNEL, "g1", now - 600, now + 5400)
+    first = demo_world.keep_one_under_way(True, now)
+    demo_world.keep_one_under_way(False, now + 60)
+    with db.tx() as c:
+        c.execute("UPDATE recordings SET state = 'finished', ended_at = ? WHERE id = ?",
+                  (now + 60, first))
+    again = demo_world.keep_one_under_way(True, now + 2400)
+    assert again and recorder.get(again)["state"] == "scheduled"
+    assert recorder.get(again)["stops_at"] == now + 5400
+
+
+def test_a_cut_short_recording_someone_watched_is_never_replaced(on):
+    from app import recorder
+    from tests import demo_world
+    now = int(time.time())
+    _on_now(demo_world.UNDER_WAY_CHANNEL, "g1", now - 600, now + 5400)
+    first = demo_world.keep_one_under_way(True, now)
+    demo_world.keep_one_under_way(False, now + 60)
+    with db.tx() as c:
+        c.execute("UPDATE recordings SET state = 'finished', ended_at = ?, position = 40 "
+                  "WHERE id = ?", (now + 60, first))
+    assert demo_world.keep_one_under_way(True, now + 2400) is None
+    assert recorder.get(first) is not None
+
+
+def test_the_demos_own_recordings_stay_under_their_own_ceiling(on, monkeypatch):
+    from app import recorder
+    from tests import demo_world
+    now = int(time.time())
+    monkeypatch.setattr(demo_world, "UNDER_WAY_MAX_BYTES", 2500)
+    ids = []
+    # A day of an app left open: one finished recording an hour.
+    for h in range(24):
+        rid = _add("recording", "finished", f"{h:032x}")
+        with db.tx() as c:
+            c.execute("UPDATE recordings SET source = ?, ended_at = ? WHERE id = ?",
+                      (demo.OWN_SOURCE, now - 3600 * (24 - h), rid))
+        os.makedirs(recorder.rec_dir(f"{h:032x}"), exist_ok=True)
+        with open(os.path.join(recorder.rec_dir(f"{h:032x}"), "x.ts"), "wb") as f:
+            f.write(b"0" * 1000)
+        ids.append(rid)
+    demo_world.keep_one_under_way(True, now)
+    left = [r["id"] for r in db.query("SELECT id FROM recordings WHERE source = ?", (demo.OWN_SOURCE,))]
+    # The oldest go first; the last two hours stay whatever the ceiling says.
+    assert ids[-1] in left and ids[-2] in left and ids[0] not in left
+    gone = [i for i in ids if i not in left]
+    assert gone == ids[:len(gone)]
+    sizes = sum(demo._folder_bytes(recorder.rec_dir(r["uid"])) for r in db.query(
+        "SELECT uid FROM recordings WHERE source = ? AND COALESCE(ended_at, 0) < ?",
+        (demo.OWN_SOURCE, now - demo_world.UNDER_WAY_GRACE)))
+    assert sizes <= 2500
+
+
+def test_the_disk_ceiling_does_not_count_the_demos_own_recording(on, monkeypatch):
+    from app import recorder
+    seed = _add("recording", "finished", "seed" * 8)
+    db.set_setting(demo.SEED_KEY, seed)
+    own = _own("0" * 31 + "a", int(time.time()) + 3600)
+    mine = _add("recording", "finished", "0" * 31 + "b")
+    for r in db.query("SELECT id, uid FROM recordings"):
+        os.makedirs(recorder.rec_dir(r["uid"]), exist_ok=True)
+        with open(os.path.join(recorder.rec_dir(r["uid"]), "x.ts"), "wb") as f:
+            f.write(b"0" * (5000 if r["id"] == own else 1000))
+    monkeypatch.setattr(demo, "MAX_DISK_BYTES", 2500)
+    monkeypatch.setattr(demo, "_disk_checked", [0.0])
+    demo.enforce_limits()
+    left = {r["id"] for r in db.query("SELECT id FROM recordings")}
+    assert {seed, own, mine} <= left          # 2000 of the visitor's is under 2500
+
+
+def test_every_invented_show_film_and_league_has_a_picture(monkeypatch):
+    from tests import demo_guide
+    monkeypatch.setattr(demo_guide, "ART_BASE", "https://demo.example.com/demo-art")
+    assert demo_guide.art_for("The Mapmaker's Lantern")["art"] == \
+        "https://demo.example.com/demo-art/the-mapmakers-lantern.jpg"
+    # The invented names live behind COUCHELEPHANT_DEMO_INVENTED; read them from the source.
+    src = open(os.path.join(ROOT, "tests", "demo_guide.py")).read()
+    invented = src[src.index('if os.environ.get("COUCHELEPHANT_DEMO_INVENTED") == "1":'):
+                   src.index("# Where the demo's pictures are served")]
+    import re as _re
+    names = set(_re.findall(r'"([A-Z][^"]+)", \["', invented))             # films
+    names |= set(_re.findall(r'\("[^"]+", "([^"]+)", \["', invented))       # series and leagues
+    names.add("Local News")
+    art = os.path.join(ROOT, "deploy", "demo", "art")
+    missing = [n for n in names
+               if not os.path.exists(os.path.join(art, demo_guide.art_for(n)["art"].rsplit("/", 1)[1]))]
+    assert len(names) >= 19 and missing == []

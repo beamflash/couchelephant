@@ -63,6 +63,76 @@ def ticking(stop=None, each=None):
         time.sleep(3)
 
 
+UNDER_WAY_SOURCE = "demo-under-way"     # the demo's own rolling recording
+UNDER_WAY_CHANNEL = "19.1"                # shows and films, never a game
+UNDER_WAY_MAX_BYTES = 2 * 1024 ** 3       # what the demo's own may hold on disk
+UNDER_WAY_GRACE = 2 * 3600                # a finished one is kept at least this long
+
+
+def keep_one_under_way(in_use, now=None):
+    """While someone is using the demo, something is always being recorded, so
+    Home's Live now has a recording to open and watch while it records.
+
+    It is the demo's own: one channel, whatever is on it, booked again as each
+    programme ends. When nobody has used the demo for a while the one under way
+    is ended early, as if its programme had ended, so an idle server records
+    nothing and the small machine gets its CPU back. What it made stays (someone
+    may be watching it, or a season pass may count it as its own) until the
+    nightly reset, or until they pass a ceiling of their own (_trim_own). A
+    visitor's limits never count it (app/demo.py)."""
+    now = now or int(time.time())
+    if not in_use:
+        # Waiting for a tuner or recording, it ends now, as if its programme
+        # had ended; the recorder finishes it on its next tick.
+        with db.tx() as c:
+            c.execute("UPDATE recordings SET stops_at = ? WHERE source = ? "
+                      "AND state IN ('scheduled', 'recording') AND stops_at > ?",
+                      (now, UNDER_WAY_SOURCE, now))
+        return None
+    _trim_own(now)
+    if db.one("SELECT 1 FROM recordings WHERE source = ? AND state IN ('scheduled', 'recording') "
+              "AND stops_at > ?", (UNDER_WAY_SOURCE, now)):
+        return None
+    airing = db.one("""SELECT a.*, p.title, p.grandparent_title, p.rating_key, p.teams
+                       FROM airings a JOIN programs p ON p.guid = a.program_guid
+                       WHERE a.channel_vcn = ? AND a.begins_at <= ? AND a.ends_at > ? + 60
+                       AND a.drm = 0 ORDER BY a.begins_at DESC LIMIT 1""",
+                    (UNDER_WAY_CHANNEL, now, now))
+    if not airing:
+        return None
+    held = recorder.booked(airing)
+    if (held and held["source"] == UNDER_WAY_SOURCE
+            and held["state"] not in ("scheduled", "recording")
+            and not held["watched_at"] and not held["position"]):
+        # Ours, cut short when the demo went idle, nobody ever watched it, and
+        # someone is back while the programme is still on: record it again
+        # from here. One that was watched stays, and Live now waits for the
+        # next programme.
+        recorder.cancel(held["id"])
+    elif held:
+        return None
+    return recorder.book(airing, source=UNDER_WAY_SOURCE, lead_minutes=0, trail_minutes=0)
+
+
+def _trim_own(now):
+    """The demo's own recordings have a ceiling of their own: an app left open
+    keeps the demo in use for days, and the nightly reset waits for it. Past
+    UNDER_WAY_MAX_BYTES the oldest finished one goes, if it ended at least
+    UNDER_WAY_GRACE ago, so nothing is deleted under someone who just watched it."""
+    from app import demo
+    rows = db.query("SELECT id, uid, state, COALESCE(ended_at, stops_at) ended FROM recordings "
+                    "WHERE source = ? ORDER BY id", (UNDER_WAY_SOURCE,))
+    total = sum(demo._folder_bytes(recorder.rec_dir(r["uid"])) for r in rows)
+    for r in rows:
+        if total <= UNDER_WAY_MAX_BYTES:
+            break
+        if r["state"] in ("scheduled", "recording") or (r["ended"] or 0) > now - UNDER_WAY_GRACE:
+            continue
+        size = demo._folder_bytes(recorder.rec_dir(r["uid"]))
+        recorder.cancel(r["id"])
+        total -= size
+
+
 def seed_pass(title, n=3, lost=0, section="tv", after=7200):
     """A season pass with n bookings of ours ahead, from airings later in the
     demo week. With lost=1 the pass is deleted straight away, which leaves the
@@ -233,17 +303,18 @@ def seed_recordings(media_dir):
         _link_tree(os.path.join(media_dir, key), recorder.view_dir(uid))
         seconds = max(8, int(minutes * 60 * scale))
         began = now - 86400 * (i + 1) - 3600
+        pic = demo_guide.art_for(show or title)
         with db.tx() as c:
             cur = c.execute(
                 """INSERT INTO recordings (uid, kind, state, title, show_title, ptype,
                        season, episode, section, channel_vcn, channel_title, begins_at,
                        ends_at, started_at, ended_at, source, position, ads_final,
-                       created_at, updated_at)
+                       created_at, updated_at, art, thumb)
                    VALUES (?, 'recording', 'finished', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                           'manual', ?, 1, ?, ?)""",
+                           'manual', ?, 1, ?, ?, ?, ?)""",
                 (uid, title, show, ptype, season, ep, section, vcn,
                  demo_guide.CHANNELS[vcn][1], began, began + seconds, began,
-                 began + seconds, pos * scale, began, began))
+                 began + seconds, pos * scale, began, began, pic.get("art"), pic.get("thumb")))
             for a, b in breaks:
                 c.execute("INSERT INTO ad_breaks (recording_id, start_s, end_s, final) "
                           "VALUES (?, ?, ?, 1)", (cur.lastrowid, a * scale, b * scale))

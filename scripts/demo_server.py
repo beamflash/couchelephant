@@ -26,7 +26,11 @@ Settings, all from the environment:
                        172.29.0.2 and trusts only that; the default, Docker's
                        bridge networks 172.16.0.0/12, is for trying it by hand)
   DEMO_TIMEZONE        the timezone the guide is shown in (default America/Los_Angeles)
-  DEMO_TUNERS          streams at once, live and recording together (default 2)
+  DEMO_TUNERS          streams at once, live and recording together (default 3: one
+                       is the demo's own rolling recording, two are the visitor's)
+  DEMO_ART             where the show pictures are served (default
+                       https://DEMO_HOST/demo-art when DEMO_HOST is set; unset, the
+                       apps draw title cards)
   DEMO_RESET_HOUR      hour of the nightly reset, 0 to 23 (default 4)
   PORT                 default 8710
 """
@@ -79,6 +83,11 @@ os.environ.update({
 })
 # A small picture, so a small server can make a couple at once.
 os.environ.setdefault("FAKE_TUNER_SIZE", "640x360")
+# The pictures, from deploy/demo/art, served by the demo's Caddy at /demo-art.
+_art = os.environ.get("DEMO_ART") or (
+    f"https://{os.environ['DEMO_HOST']}/demo-art" if os.environ.get("DEMO_HOST") else "")
+if _art:
+    os.environ["COUCHELEPHANT_DEMO_ART"] = _art
 os.environ.setdefault("FAKE_TUNER_RATE", "24")
 os.environ.setdefault("FAKE_TUNER_BITRATE", "1M")
 os.environ.setdefault("COUCHELEPHANT_FAKE_ANCHOR", str(int(time.time()) // 3600 * 3600))
@@ -142,13 +151,29 @@ def nightly(do_reset):
             time.sleep(60)
 
 
+_under_way_checked = [0.0]
+
+
+def each_tick():
+    """Before each recorder tick: the visitor's limits, and every few seconds
+    the demo's own recording under way (never during a reset). It runs only
+    while the demo is in use: an idle server records nothing."""
+    demo.enforce_limits()
+    if not demo.RESETTING.is_set() and time.monotonic() - _under_way_checked[0] > 5:
+        _under_way_checked[0] = time.monotonic()
+        try:
+            demo_world.keep_one_under_way(demo.recently_used())
+        except Exception as e:  # noqa: BLE001
+            print("recording under way:", e, flush=True)
+
+
 def main():
     if MEDIA_ONLY:
         demo_world.ensure_media(MEDIA)
         print("viewing copies made in", MEDIA, flush=True)
         return
     import uvicorn
-    plex_url, tuner_url = demo_world.start_fakes(int(os.environ.get("DEMO_TUNERS", "2")))
+    plex_url, tuner_url = demo_world.start_fakes(int(os.environ.get("DEMO_TUNERS", "3")))
     db.init()
     conf = settings(plex_url, tuner_url)
 
@@ -157,7 +182,7 @@ def main():
 
     do_reset()
     print(f"demo seeded, resets daily at {RESET_HOUR:02d}:00, port {PORT}", flush=True)
-    threading.Thread(target=demo_world.ticking, kwargs={"each": demo.enforce_limits},
+    threading.Thread(target=demo_world.ticking, kwargs={"each": each_tick},
                      daemon=True).start()
     threading.Thread(target=nightly, args=(do_reset,), daemon=True).start()
     uvicorn.run(web.app, host="0.0.0.0", port=PORT, log_level="warning",

@@ -5,11 +5,20 @@
 # set otherwise in .env. A plain "localhost" makes Caddy use its own internal
 # certificate, which is how the demo is tried without a domain.
 {$DEMO_HOST:demo.couchelephant.app} {
+	# The invented shows' pictures (deploy/demo/art), public like any poster
+	# on the web: nothing in them belongs to anybody.
+	handle_path /demo-art/* {
+		root * /srv/demo-art
+		header Cache-Control "public, max-age=86400"
+		file_server
+	}
 	# HLS segments and the pictures are already compressed; the apps' JSON is
 	# small. Nothing to gain from encoding, and it would only cost CPU.
-	reverse_proxy demo:8710 {
-		# Caddy sends X-Forwarded-For and X-Forwarded-Proto itself. The demo
-		# believes them only from this one proxy (DEMO_TRUSTED_PROXIES).
-		flush_interval -1
+	handle {
+		reverse_proxy demo:8710 {
+			# Caddy sends X-Forwarded-For and X-Forwarded-Proto itself. The demo
+			# believes them only from this one proxy (DEMO_TRUSTED_PROXIES).
+			flush_interval -1
+		}
 	}
 }

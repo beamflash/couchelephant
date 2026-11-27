@@ -105,8 +105,11 @@ Things to try:
 - Search: the magnifier in the Guide (try "lantern" or a channel number).
 - Settings: Report an issue opens the report screen as in the shipping app.
 
-The demo allows two video streams at once. If a live channel says every tuner is
-in use, wait a minute and try again.
+- Home: "Live now" has a recording being made (a few seconds after the app
+  opens). Open it to watch a programme while it is still recording.
+
+The demo allows two video streams of your own at once. If a live channel says
+every tuner is in use, wait a minute and try again.
 ```
 
 ## Putting it on a server
@@ -115,8 +118,8 @@ A fresh Ubuntu 22.04 or 24.04 VPS with 1 to 2 vCPU and 2 GB, x86_64 or arm64.
 This is known to work on a Google Cloud e2-small (2 shared vCPU, 2 GB, x86_64,
 Ubuntu 24.04) with the DNS record not proxied, so Caddy's Let's Encrypt check
 reaches the server directly. A shared-core machine like that has a low sustained
-CPU allowance and bursts above it on credits, so set `DEMO_TUNERS` to 1 in the
-compose file if it ever runs short.
+CPU allowance and bursts above it on credits. The demo's own recording under way
+runs only while someone uses the demo, so an idle server earns its credits back.
 
 1. Point DNS at it. Make an `A` record for `demo` in the `couchelephant.app` zone, with the server's address.
    Caddy cannot get a certificate until this resolves, so check
@@ -213,7 +216,8 @@ internet reaches only what a paired app or the signed-in `reviewer` may.
   single address) is believed.
 - Nothing opens without the code, the web session cookie is marked Secure, and
   the sign-in settings cannot be unset by anything the database holds.
-- At most two video streams at once (the fake tuner has two tuners). A live
+- At most two video streams of the visitor's own at once (the fake tuner has
+  three tuners, and the demo's own recording under way holds one). A live
   channel stops a minute after the app stops playing it, five minutes after a
   pause, and 30 minutes at the very most however it is kept alive.
 - Disk: a visitor can have two bookings at a time, a recording they make stops
@@ -252,11 +256,33 @@ of the server and every ffmpeg it started, over 30 seconds:
 | Two live channels (the most the demo allows) | about 0.85 of one core |
 
 The viewing copy is software x264 at 640x360, 24 frames a second. The fake
-tuner has two tuners (`DEMO_TUNERS`), and a recording that starts on schedule
-takes one, so at most two ffmpeg pairs ever run. A third request is answered
-"Every tuner is in use". A live channel stops a minute after the app stops
-playing it, and five minutes after a pause.
-On disk the demo is about 200 MB of recordings plus the guide.
+tuner has three tuners (`DEMO_TUNERS`). One is the demo's own recording under
+way, so at most three ffmpeg pairs run, and only while the demo is in use. A
+fourth request is answered "Every tuner is in use". A live channel stops a
+minute after the app stops playing it, and five minutes after a pause.
+On disk the demo is about 200 MB of seeded recordings plus the guide, plus the
+recordings the demo made while in use (about 0.8 GB an hour of use, at most
+2 GB plus the last two hours, cleared by the nightly reset) and whatever a visitor records (capped at 3 GB).
+
+## The recording under way and the pictures
+
+So Home's "Live now" is never empty while someone looks, the demo records
+channel 19.1 by itself (`tests/demo_world.keep_one_under_way`). It books what
+is on, and the next programme when that one ends. It runs only while the demo
+is in use (anyone signed in within the last half hour), so it shows in Live now
+a few seconds after an app first opens (Home reads again every 15 seconds).
+When the demo is idle the one under way is ended early, as if its programme had
+ended, so an idle server records nothing. Someone back while that programme is
+still on gets it recorded again from there. What it made stays until the nightly
+reset (someone may be watching it, or a season pass may count it as its own),
+with a ceiling of its own: past 2 GB the oldest one that ended over two hours
+ago goes, so an app left open for days cannot fill the disk. The visitor's
+limits and the 3 GB ceiling do not count it.
+
+Every invented show, film, league and the local news has a picture in
+`deploy/demo/art`. Caddy serves them at `https://DEMO_HOST/demo-art/`, and the
+guide and the seeded recordings point at them. They are made up for the demo
+and show nothing real.
 
 ## Behind a proxy: what the apps expect
 
