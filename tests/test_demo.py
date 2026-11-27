@@ -350,6 +350,8 @@ RESET_SCRIPT = """
         }
 
     demo_world.reset(conf, s.MEDIA, "reviewer", os.environ["DEMO_CODE"])
+    from app import paths
+    ident = (paths.install_id(), db.get_setting("report_install_id") or "made")
     first = look()
     seed = int(db.get_setting(demo.SEED_KEY))
     # A reviewer was let in, signed in on the web, and made a mess.
@@ -363,6 +365,9 @@ RESET_SCRIPT = """
                   (now,))
         c.execute("INSERT INTO favorite_channels (vcn) VALUES ('9.1')")
     db.set_setting("timezone", "UTC")
+    db.set_setting("report_consent", "1")
+    db.set_setting("report_install_id", "made")
+    ident = (paths.install_id(), "made")
     uid = auth._con().execute("SELECT id FROM users").fetchone()[0]
     token = auth.create_session(uid)
     # Is the demo ever without sign-in while it resets?
@@ -391,7 +396,8 @@ RESET_SCRIPT = """
         "password_is_the_code": auth.verify("reviewer", os.environ["DEMO_CODE"]) is not None,
         "bad": bad, "was_resetting": any(during), "now_resetting": demo.RESETTING.is_set(),
         "seed_moved": int(db.get_setting(demo.SEED_KEY)) >= seed,
-        "no_junk_settings": db.get_setting("report_consent"),
+        "same_identity": ident == (paths.install_id(), db.get_setting("report_install_id") or "made"),
+        "report_consent_gone": db.get_setting("report_consent") != "1",
     }))
 """
 
@@ -417,6 +423,8 @@ def test_reset_puts_the_content_back_and_keeps_who_is_in(tmp_path, stub):
     # The sign-in settings were never missing, not for a moment.
     assert got["bad"] == [] and got["now_resetting"] is False
     assert got["seed_moved"]
+    # The server is the same server to the apps: its install id survived.
+    assert got["same_identity"] and got["report_consent_gone"]
 
 
 def test_the_nightly_reset_waits_for_the_next_four_oclock(tmp_path):
@@ -751,3 +759,79 @@ def test_a_busy_demo_is_not_reset(on):
     with db.tx() as c:
         c.execute("UPDATE tv_devices SET last_seen = ?, approved_at = ?", (now - 7200, now - 7200))
     assert demo.recently_used() is False
+
+
+def test_hello_id_is_the_same_after_a_reset_in_place(on):
+    """The wipe must not drop install_id: the apps would say "not the one this
+    device was set up with"."""
+    from app import paths
+    before = visitor().get("/api/tv/hello").json()["id"]
+    assert before == paths.install_id()
+    with db.tx() as c:
+        c.execute("DELETE FROM settings WHERE key = ?", ("report_consent",))
+    assert visitor().get("/api/tv/hello").json()["id"] == before
+
+
+# ---------- the code stays good for a day for the address that used it ----------
+
+def _clock(monkeypatch):
+    now = [1000.0]
+    monkeypatch.setattr(demo.time, "monotonic", lambda: now[0])
+    return now
+
+
+def test_a_right_code_keeps_working_for_a_day_after_the_budget_ran_out(on, monkeypatch):
+    now = _clock(monkeypatch)
+    assert demo.check_code(OUT, CODE) == (True, 0)
+    for i in range(demo.GUESS_BUDGET):
+        demo.check_code(OUT, f"wrong{i}")
+    # Out of budget: a wrong code waits, the code it already got right does not.
+    assert demo.check_code(OUT, "wrongagain")[0] is False
+    assert demo.check_code(OUT, CODE) == (True, 0)
+    # Only for that address.
+    assert demo.check_code("9.9.9.9", CODE) == (True, 0)
+    for i in range(demo.GUESS_BUDGET):
+        demo.check_code("7.7.7.7", f"wrong{i}")
+    assert demo.check_code("7.7.7.7", CODE)[0] is False
+    # Not for ever, and not without limit.
+    for _ in range(demo.GOOD_BUDGET - 1):
+        assert demo.check_code(OUT, CODE)[0] is True
+    assert demo.check_code(OUT, CODE)[0] is False
+    now[0] += demo.GOOD_SECONDS + demo.GUESS_WINDOW + 1
+    assert demo.check_code(OUT, CODE) == (True, 0)           # budget is new by then
+
+
+def test_the_day_pass_is_for_that_exact_code_only(on, monkeypatch):
+    now = _clock(monkeypatch)
+    assert demo.check_code(OUT, CODE)[0] is True
+    for i in range(demo.GUESS_BUDGET):
+        demo.check_code(OUT, f"wrong{i}")
+    monkeypatch.setenv("DEMO_CODE", "a-new-code-after-the-change")
+    assert demo.check_code(OUT, "a-new-code-after-the-change")[0] is False
+    assert now[0]
+
+
+def test_an_address_that_never_got_it_right_has_no_day_pass(on, monkeypatch):
+    _clock(monkeypatch)
+    for i in range(demo.GUESS_BUDGET):
+        demo.check_code(OUT, f"wrong{i}")
+    assert demo.check_code(OUT, CODE)[0] is False
+
+
+def test_the_reset_is_held_back_at_most_three_nights(tmp_path):
+    out = _run("""
+        import sys
+        sys.argv = ["demo_server.py"]
+        sys.path.insert(0, "scripts")
+        import demo_server as s
+        clock = [0.0]; slept = []
+        def sleep(n): slept.append(n); clock[0] += n
+        s.wait_for_quiet(lambda: True, sleep=sleep, now=lambda: clock[0])
+        busy_then_quiet = iter([True, True, False])
+        clock2 = [0.0]; slept2 = []
+        s.wait_for_quiet(lambda: next(busy_then_quiet), sleep=lambda n: (slept2.append(n), clock2.__setitem__(0, clock2[0] + n)),
+                         now=lambda: clock2[0])
+        print(clock[0] / 86400, len(slept), len(slept2))
+    """, tmp_path)
+    days, n, n2 = out.split()
+    assert float(days) == 3.0 and int(n) == 72 and int(n2) == 2

@@ -171,23 +171,48 @@ _guesses: dict = {}
 _guess_lock = threading.Lock()
 
 
+# An address that has entered the right code keeps being let in with it for a
+# day, even after its wrong-try budget has run out (a mistyping colleague on
+# the same address must not lock the reviewer out), but only with that exact
+# code and with a looser limit of its own.
+GOOD_SECONDS = 24 * 3600
+GOOD_BUDGET = 60
+_good: dict = {}
+_loose: dict = {}
+
+
+def _digest(typed: str) -> bytes:
+    return hashlib.sha256(typed.strip().lower().encode()).digest()
+
+
 def check_code(addr, typed: str):
     """(ok, wait): is `typed` the review code. A right code always passes while
     the address is inside its budget, whatever it got wrong before. `wait` is
     the seconds to wait when the address is out of budget, else 0."""
     key = ratelimit.addr_key(addr)
     now = time.monotonic()
+    want = code().lower()
+    right = bool(want) and hmac.compare_digest(typed.strip().lower().encode(), want.encode())
     with _guess_lock:
         fails = [t for t in _guesses.get(key, ()) if now - t < GUESS_WINDOW]
+        _guesses[key] = fails
         if len(fails) >= GUESS_BUDGET:
-            _guesses[key] = fails
-            return False, fails[0] + GUESS_WINDOW - now
-        want = code().lower()
-        if want and hmac.compare_digest(typed.strip().lower().encode(), want.encode()):
-            _guesses[key] = fails
+            wait = fails[0] + GUESS_WINDOW - now
+            seen = _good.get(key)
+            if right and seen and now - seen[0] < GOOD_SECONDS and hmac.compare_digest(
+                    seen[1], _digest(typed)):
+                loose = [t for t in _loose.get(key, ()) if now - t < GUESS_WINDOW]
+                if len(loose) < GOOD_BUDGET:
+                    loose.append(now)
+                    _loose[key] = loose
+                    return True, 0
+            return False, wait
+        if right:
+            _good[key] = (now, _digest(typed))
+            if len(_good) > 10000:
+                del _good[min(_good, key=lambda k: _good[k][0])]
             return True, 0
         fails.append(now)
-        _guesses[key] = fails
         if len(_guesses) > 10000:
             for k in sorted(_guesses, key=lambda k: _guesses[k][-1] if _guesses[k] else 0)[:2000]:
                 del _guesses[k]
@@ -197,6 +222,8 @@ def check_code(addr, typed: str):
 def reset_guesses() -> None:
     with _guess_lock:
         _guesses.clear()
+        _good.clear()
+        _loose.clear()
 
 
 # ---------- the review sign-in ----------

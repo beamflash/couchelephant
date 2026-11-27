@@ -278,6 +278,8 @@ def _tables(conn):
 # with none would read as "no sign-in"), and a reviewer who has been let in
 # stays let in. Only content is reset.
 KEEP_TABLES = ("settings", "tv_devices")
+# The settings a visitor can change from the apps or the web page.
+VISITOR_SETTINGS = ("report_consent",)
 
 
 def wipe():
@@ -320,10 +322,12 @@ def reset(settings, media_dir, review_user=None, review_password=None):
         try:
             wipe()
             anchor = reanchor()
-            # Rewritten in one go, never emptied.
+            # Settings are never emptied, and only what a visitor can set is
+            # dropped: install_id (what the apps know the server by) and the
+            # rest stay as they are. What the demo writes is written again below.
             with db.tx() as c:
-                keep = ",".join("?" * len(settings))
-                c.execute(f"DELETE FROM settings WHERE key NOT IN ({keep})", tuple(settings))
+                keep = ",".join("?" * len(VISITOR_SETTINGS))
+                c.execute(f"DELETE FROM settings WHERE key IN ({keep})", VISITOR_SETTINGS)
             for k, v in settings.items():
                 db.set_setting(k, v)
             ok, detail = guide_sync.full_sync()

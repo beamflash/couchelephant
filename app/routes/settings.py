@@ -457,7 +457,7 @@ def away_domain_state():
 
 
 @router.post("/settings/away/account")
-def settings_away_account(username: str = Form(""), password: str = Form("")):
+def settings_away_account(request: Request, username: str = Form(""), password: str = Form("")):
     """The fix for a switch with no sign-in: Local accounts on, and the first
     account made, with this browser signed in to it."""
     if auth.mode() == "cloudflare" or (auth.mode() == "local" and auth.user_count()):
@@ -469,7 +469,8 @@ def settings_away_account(username: str = Form(""), password: str = Form("")):
     db.set_setting("auth_mode", "local")
     resp = JSONResponse({"ok": True})
     resp.set_cookie(auth.SESSION_COOKIE, auth.create_session(uid), httponly=True,
-                    samesite="lax", max_age=auth.SESSION_TTL, path="/")
+                    samesite="lax", max_age=auth.SESSION_TTL, path="/",
+                    secure=exposure.request_is_https(request))
     return resp
 
 

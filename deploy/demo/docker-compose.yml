@@ -30,6 +30,9 @@ services:
       - demo-data:/data
     networks:
       demo:
+        # Fixed, and outside the range Docker hands out by itself, so neither
+        # container can be given the other's address by starting first.
+        ipv4_address: 172.29.0.3
     # A runaway ffmpeg cannot use all the memory. (No cpus cap: it is refused
     # on a one-core server.)
     mem_limit: 1280m
@@ -55,7 +58,7 @@ services:
       - "${HTTPS_PORT:-443}:443"
       - "${HTTPS_PORT:-443}:443/udp"
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ${CADDYFILE:-./Caddyfile}:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
       - caddy-config:/config
     networks:
@@ -67,6 +70,9 @@ networks:
     ipam:
       config:
         - subnet: 172.29.0.0/24
+          # Addresses given out automatically come from here; 172.29.0.2 (Caddy)
+          # and 172.29.0.3 (the demo) are named, so they are never taken first.
+          ip_range: 172.29.0.128/25
 
 volumes:
   demo-data:

@@ -56,7 +56,9 @@ key, as an approved pairing does. A wrong one makes nothing and counts against
 the sender's address: the access code has its own budget of 20 wrong tries per
 address in ten minutes (an office on one address may mistype now and then, and a
 right code always works inside the budget; the code is far too long to guess in
-20 tries). Past it even the right code waits. On a normal install that route answers 404 and `hello` never
+20 tries). Past it even the right code waits, except that an address which has entered the
+right code keeps being let in with that exact code for 24 hours (up to 60 tries
+in ten minutes), so a mistyping colleague cannot lock the reviewer out. On a normal install that route answers 404 and `hello` never
 says `code_signin`. The older way still works too: the app's six letter code
 can be approved with the review code at `/demo`.
 
@@ -175,10 +177,12 @@ The content (the guide, the recordings, bookings, passes, favorites, the
 settings) goes back to the seeded state when the demo starts and at 04:00 every
 night on the container's clock (`TZ`, Pacific by default). Nobody has to do
 anything. Two things are kept across a reset on purpose, so a reviewer is not
-thrown out: the apps that were let in (and their keys) and the web sessions.
+thrown out: the apps that were let in (and their keys), the web sessions, and the server's
+identity (its install id, so the apps do not say "not the server you paired with").
 
 The nightly reset is skipped if anyone with a key or a session was seen in the
-last 30 minutes. It asks again every hour. While a reset runs (a few seconds to
+last 30 minutes. It asks again every hour, but never holds out past three nights:
+then it goes ahead (devices, sessions and the server's identity are still kept). While a reset runs (a few seconds to
 a minute) every request but `/healthz` answers 503, and the sign-in settings are
 rewritten in place, never cleared, so the demo is never open for a moment.
 
@@ -270,3 +274,13 @@ Two things the server had to learn for this, both in demo mode only:
 - The away rule "pair at home first" lets an outsider pair only over HTTPS to a
   domain whose certificate the server itself holds. Caddy holds this one, so the
   demo lets pairing through and gates it with the review code instead.
+
+## Trying it on a LAN without a domain
+
+Set `DEMO_HOST` in `.env` to a name that points at the machine (for example
+`192.168.1.20.sslip.io`) and `CADDYFILE` to a Caddyfile that says `tls internal`
+for it. Caddy then makes its own certificate, and its root, in the `caddy-data`
+volume at `caddy/pki/authorities/local/root.crt`, can be trusted by a test
+device (`xcrun simctl keychain <device> add-root-cert root.crt` for a simulator).
+The apps only send the access code to `https://` addresses, so a plain-http demo
+cannot be used for the sign-in.

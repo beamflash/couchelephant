@@ -116,14 +116,24 @@ def seconds_until_reset(now=None):
     return (at - now).total_seconds()
 
 
+MAX_POSTPONE = 3 * 24 * 3600     # three nights in a row
+
+
+def wait_for_quiet(used, sleep=time.sleep, now=time.time, every=3600):
+    """Hold the reset back while someone is using the demo, asking again every
+    hour, but never past three nights: then it goes ahead anyway. (Devices,
+    sessions and the install id stay across a reset, so a forced one only
+    resets the content.)"""
+    first = now()
+    while used() and now() - first < MAX_POSTPONE:
+        print("reset waits: the demo is in use", flush=True)
+        sleep(every)
+
+
 def nightly(do_reset):
     while True:
         time.sleep(seconds_until_reset())
-        # Not while someone is looking: a reviewer with a key in the last half
-        # hour keeps the demo as it is, and it asks again every hour.
-        while demo.recently_used():
-            print("reset waits: the demo is in use", flush=True)
-            time.sleep(3600)
+        wait_for_quiet(demo.recently_used)
         try:
             do_reset()
             print("reset done", flush=True)

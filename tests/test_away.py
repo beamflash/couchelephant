@@ -728,3 +728,14 @@ def test_forwarded_proto_counts_only_from_a_trusted_proxy():
     c = at(HOME)
     c.headers.update({"X-Forwarded-Proto": "http", "X-Forwarded-For": "8.8.8.8"})
     assert "secure" not in _cookie_header(c)
+
+
+def test_the_first_account_cookie_is_secure_over_https_too():
+    for scheme, want in (("https", True), ("http", False)):
+        db.set_setting("auth_mode", "none")
+        auth._con().execute("DELETE FROM users")
+        auth._con().commit()
+        r = at(HOME, scheme=scheme).post("/settings/away/account",
+                                         data={"username": "owner", "password": "a-good-password"})
+        assert r.json()["ok"] is True, r.text
+        assert ("secure" in r.headers["set-cookie"].lower()) is want, scheme
