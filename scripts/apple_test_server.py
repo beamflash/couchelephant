@@ -66,7 +66,14 @@ os.makedirs(os.environ["COUCHELEPHANT_LIBRARY"])
 os.environ.setdefault("COUCHELEPHANT_FAKE_ANCHOR", str(int(time.time()) // 3600 * 3600))
 
 sys.path.insert(0, ROOT)
-from tests import demo_guide, fake_firestore, fake_plex, fake_tuner, isolation  # noqa: E402
+from tests import (  # noqa: E402
+    demo_guide,
+    demo_world,
+    fake_firestore,
+    fake_plex,
+    fake_tuner,
+    isolation,
+)
 
 isolation.assert_isolated()
 
@@ -76,43 +83,6 @@ PORT = int(os.environ.get("PORT", "8790"))
 ALIAS_PORT = int(os.environ.get("ALIAS_PORT", "8791"))
 FIRESTORE_PORT = int(os.environ.get("FIRESTORE_PORT", "8792"))
 AD_BREAK = (20.0, 50.0)
-
-
-def _longest_on_now():
-    """What is on now and runs on longest, so the recording made of it lasts
-    through a whole test run."""
-    now = int(time.time())
-    return db.one("""SELECT a.*, p.title, p.grandparent_title, p.rating_key, p.teams
-                     FROM airings a JOIN programs p ON p.guid = a.program_guid
-                     WHERE a.begins_at <= ? AND a.ends_at > ? AND a.drm = 0
-                     ORDER BY a.ends_at DESC LIMIT 1""", (now, now))
-
-
-def _add_news():
-    """A half hour of news at the end of two channels' day. The demo's own news
-    slot is long over by the time a test runs, and the News tab needs some."""
-    with db.tx() as c:
-        c.execute("""INSERT OR REPLACE INTO programs (guid, title, grandparent_title, summary,
-                         type, section, genres, teams, year)
-                     VALUES ('plex://episode/demo-news-late', 'Late News', 'Local News',
-                             'The day in review.', 'episode', 'shows', '["News"]', '[]', 2026)""")
-        for vcn in ("9.1", "41.1"):
-            last = db.one("SELECT MAX(ends_at) e FROM airings WHERE channel_vcn = ?", (vcn,))["e"]
-            call, title = demo_guide.CHANNELS[vcn]
-            c.execute("""INSERT OR REPLACE INTO airings (id, program_guid, channel_vcn,
-                             channel_call_sign, channel_title, begins_at, ends_at, drm)
-                         VALUES (?, 'plex://episode/demo-news-late', ?, ?, ?, ?, ?, 0)""",
-                      (f"demo-late-news-{vcn}", vcn, call, title, last, last + 1800))
-
-
-def _ticking():
-    """The recorder's own loop, without the ones that reach other servers."""
-    while True:
-        try:
-            recorder.tick()
-        except Exception as e:  # noqa: BLE001
-            print("recorder:", e, flush=True)
-        time.sleep(3)
 
 
 def main():
@@ -184,7 +154,7 @@ def main():
     if not ok:
         raise SystemExit(f"the demo guide would not sync: {detail}")
     print("guide:", detail, flush=True)
-    _add_news()
+    demo_world.add_news()
 
     @web.app.get("/test/reports")
     def _reports():
@@ -207,33 +177,7 @@ def main():
         """Test only: a season pass with n bookings of ours ahead, from airings
         later in the demo week. With lost=1 the pass is deleted straight away,
         which leaves the bookings behind as the owner found them."""
-        now = int(time.time())
-        rows = db.query(
-            """SELECT a.*, p.title, p.grandparent_title FROM airings a
-               JOIN programs p ON p.guid = a.program_guid
-               WHERE a.begins_at > ? AND a.drm = 0 AND a.channel_vcn = ?
-               ORDER BY a.begins_at""", (now + 7200, next(iter(demo_guide.CHANNELS))))
-        uid = f"seed-{title}-{now}"
-        with db.tx() as c:
-            c.execute("INSERT INTO passes (kind, series_title, series_guid, uid, recorder, "
-                      "enabled, created_at) VALUES ('series', ?, ?, ?, 'couchelephant', 1, ?)",
-                      (title, title, uid, now))
-            pid = c.execute("SELECT last_insert_rowid()").fetchone()[0]
-        made = []
-        for row in rows:
-            if len(made) >= n:
-                break
-            if recorder.booked(row):
-                continue
-            rid = recorder.book(row, "pass", pass_id=pid, pass_uid=uid)
-            with db.tx() as c:
-                c.execute("UPDATE recordings SET show_title = ?, section = ? WHERE id = ?",
-                          (title, section, rid))
-            made.append(rid)
-        if lost:
-            with db.tx() as c:
-                c.execute("DELETE FROM passes WHERE id = ?", (pid,))
-        return {"pass_id": pid, "booked": len(made)}
+        return demo_world.seed_pass(title, n, lost, section)
 
     @web.app.post("/test/seed-recording")
     def _seed_recording(title: str):
@@ -370,8 +314,8 @@ def main():
                 "scheduled": db.one("SELECT COUNT(*) c FROM recordings WHERE show_title = ? "
                                     "AND state = 'scheduled'", (title,))["c"]}
 
-    threading.Thread(target=_ticking, daemon=True).start()
-    airing = _longest_on_now()
+    threading.Thread(target=demo_world.ticking, daemon=True).start()
+    airing = demo_world.longest_on_now()
     if airing:
         rec_id = recorder.book(airing, trail_minutes=0)
         with db.tx() as c:

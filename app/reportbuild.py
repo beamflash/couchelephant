@@ -12,7 +12,7 @@ import secrets
 import shutil
 import time
 
-from . import db, health, logring, paths, recorder, sealing
+from . import db, demo, health, logring, paths, recorder, sealing
 from .reportscrub import HOST_SETTINGS, SECRET_SETTINGS_ALL, Scrubber
 from .version import VERSION
 
@@ -96,7 +96,7 @@ def server_part(scrub: Scrubber) -> dict:
                       "id DESC LIMIT 10"):
         fails.append({"title": scrub.text(r["title"] or ""), "time": r["begins_at"],
                       "error": scrub.text(r["error"] or "")})
-    return {
+    part = {
         "version": VERSION,
         "uptime_seconds": int(time.time() - _STARTED),
         "os": scrub.text(platform.platform()),
@@ -114,6 +114,11 @@ def server_part(scrub: Scrubber) -> dict:
         "notices": [scrub.text(n["code"]) for n in health.open_notices()],
         "disk": _disk(),
     }
+    if demo.enabled():
+        # The apps send their own reports straight to the owner, so a report
+        # that came from the public demo can be told apart and thrown away.
+        part["demo"] = True
+    return part
 
 
 def _walk(v, scrub):

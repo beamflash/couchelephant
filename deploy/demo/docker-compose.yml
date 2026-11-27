@@ -1,0 +1,75 @@
+# The public CouchElephant demo for the App Store reviewer, behind Caddy.
+# docs/demo.md says how to put it on a fresh server.
+#
+#   cp .env.example .env      # then set DEMO_CODE
+#   docker compose up -d --build
+#
+# Caddy gets and renews the Let's Encrypt certificate for the demo's name by
+# itself. The demo container publishes no port: only Caddy can reach it.
+services:
+  demo:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.demo
+    image: couchelephant-demo:latest
+    container_name: couchelephant-demo
+    restart: unless-stopped
+    environment:
+      # The review code, from .env. The server will not start without it.
+      DEMO_CODE: ${DEMO_CODE:?set DEMO_CODE in .env}
+      # The container's clock: the nightly reset is at DEMO_RESET_HOUR on it.
+      TZ: ${TZ:-America/Los_Angeles}
+      DEMO_TIMEZONE: ${TZ:-America/Los_Angeles}
+      DEMO_RESET_HOUR: "4"
+      # Only Caddy sits on this network, and it is the one proxy to believe.
+      DEMO_TRUSTED_PROXIES: 172.29.0.0/24
+      # Two streams at once, live and recording together.
+      DEMO_TUNERS: "2"
+    volumes:
+      - demo-data:/data
+    networks:
+      demo:
+    # A runaway ffmpeg cannot use all the memory. (No cpus cap: it is refused
+    # on a one-core server.)
+    mem_limit: 1280m
+    pids_limit: 200
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+  caddy:
+    image: caddy:2
+    container_name: couchelephant-caddy
+    restart: unless-stopped
+    depends_on:
+      - demo
+    environment:
+      DEMO_HOST: ${DEMO_HOST:-demo.couchelephant.app}
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+      - "${HTTPS_PORT:-443}:443/udp"
+      # Plain HTTP for an app address typed without https:// (the apps add
+      # this port to a bare name). See the Caddyfile.
+      - "8710:8710"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      demo:
+
+networks:
+  demo:
+    ipam:
+      config:
+        - subnet: 172.29.0.0/24
+
+volumes:
+  demo-data:
+  caddy-data:
+  caddy-config:

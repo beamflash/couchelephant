@@ -18,6 +18,7 @@ from . import (
     backingstore,
     backups,
     db,
+    demo,
     exposure,
     folders,
     handover,
@@ -129,7 +130,7 @@ def _admin_only(path, method):
 
 def _is_open(path):
     """A prefix match let /loginanything past the gate. Match the path itself."""
-    return path in _OPEN_EXACT or path.startswith(_OPEN_PREFIX)
+    return path in _OPEN_EXACT or path.startswith(_OPEN_PREFIX) or demo.is_open(path)
 
 
 @app.middleware("http")
@@ -218,6 +219,8 @@ def pairing_open_to_outsiders(request) -> bool:
     who it is talking to with the system's own trust. The name is the Host
     header: uvicorn's ASGI scope carries no TLS transport, so the SNI is out
     of reach without patching its protocol classes, and a client picks both."""
+    if demo.enabled():
+        return True             # the demo's own sign-in decides (app/demo.py)
     host = (request.headers.get("host") or "").split(":")[0]
     return request.url.scheme == "https" and acme_tls.trusted_for(host)
 
@@ -253,7 +256,7 @@ async def _away_gate(request: Request, call_next):
             return await call_next(request)
         return JSONResponse({"ok": False, "error": "Pair this device at home first."},
                             status_code=403)
-    if path in _OUT_EXACT or path.startswith(_OPEN_PREFIX):
+    if path in _OUT_EXACT or path.startswith(_OPEN_PREFIX) or demo.is_open(path):
         return await call_next(request)
     if _device_may(path) and tv.device_for(request):
         return await call_next(request)
@@ -271,6 +274,11 @@ async def _away_gate(request: Request, call_next):
     if path.startswith("/api/") or path.startswith("/partial/") or auth.mode() == "none":
         return JSONResponse({"ok": False, "error": "sign in required"}, status_code=401)
     return RedirectResponse("/login", status_code=303)
+
+
+# Demo mode only (app/demo.py): refuses what a visitor to the public demo must
+# not do. It runs before the gates above.
+app.middleware("http")(demo.lock)
 
 
 # What the pages need and no more: their own scripts and styles (some are
@@ -304,6 +312,10 @@ async def _headers(request: Request, call_next):
     if _BAD_HOST.search(request.headers.get("host") or ""):
         return _secure(PlainTextResponse("Bad request", status_code=400), request)
     return _secure(await call_next(request), request)
+
+
+# Outermost: the scheme a trusted proxy reports, before anything reads it.
+app.add_middleware(demo.ProxyScheme)
 
 
 @app.exception_handler(Exception)
@@ -472,6 +484,8 @@ async def backingstore_loop():
 
 @app.get("/healthz")
 def healthz():
+    if demo.enabled():
+        return JSONResponse({"ok": True})      # nothing about the demo is shown unsigned
     last = db.one("SELECT * FROM sync_log ORDER BY id DESC LIMIT 1")
     return JSONResponse({
         "ok": True,
@@ -484,6 +498,6 @@ def healthz():
     })
 
 
-for r in (account, art, data, guide, notices, record, report, pass_routes, settings, tv, tv_settings,
+for r in (demo, account, art, data, guide, notices, record, report, pass_routes, settings, tv, tv_settings,
           update_routes):
     app.include_router(r.router)

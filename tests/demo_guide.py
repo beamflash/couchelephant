@@ -11,7 +11,14 @@ means they can be remade whenever the interface changes, and they never show
 one person's viewing.
 
 Set COUCHELEPHANT_DEMO_GUIDE=1 before importing fake_plex.
+
+The public demo for the App Store reviewer sets COUCHELEPHANT_DEMO_INVENTED=1
+as well: every network, team, league, show and film then has an invented name,
+so nothing on screen belongs to anybody. COUCHELEPHANT_DEMO_GUIDE_HOURS sets how
+far ahead the guide runs (14 by default; the demo keeps a day and a half so it
+is never empty between its nightly resets).
 """
+import os
 
 # The call signs are invented. A real lineup names one person's market and
 # their tuner, which is not the demo's business.
@@ -67,6 +74,60 @@ MOVIES = [
 ]
 
 
+# The same shapes with invented names, for a guide anyone may be shown. The
+# channel numbers, call signs and every count stay as they are.
+if os.environ.get("COUCHELEPHANT_DEMO_INVENTED") == "1":
+    CHANNELS = {
+        "2.1": ("KQAADT", "2.1 KQAADT (Maple TV)"),
+        "4.1": ("WQBBDT", "4.1 WQBBDT (Maple TV)"),
+        "5.1": ("KQCCDT", "5.1 KQCCDT (Heron TV)"),
+        "9.1": ("WQDDDT", "9.1 WQDDDT (Cedar TV)"),
+        "19.1": ("KQEEDT", "19.1 KQEEDT (Public Square)"),
+        "38.1": ("WQFFDT", "38.1 WQFFDT (Independent)"),
+        "41.1": ("KQGGDT", "41.1 KQGGDT (Willow TV)"),
+        "62.1": ("WQHHDT", "62.1 WQHHDT (Independent)"),
+    }
+    TEAMS = [
+        (236, "Harbor City Gulls"), (237, "Lakeshore Otters"),
+        (238, "Highland Elk"), (239, "Desert Foxes"),
+        (240, "Riverside Herons"), (241, "Bayview Lanterns"),
+        (301, "Prairie State"), (302, "Cedar Valley"), (303, "North Ridge"),
+    ]
+    SPORT = [
+        ("Gulls at Otters", "Prairie League Football", ["Football"], None, 180, (236, 237)),
+        ("Elk at Gulls", "Prairie League Football", ["Football"], None, 180, (238, 236)),
+        ("Foxes at Elk", "Prairie League Football", ["Football"], None, 180, (239, 238)),
+        ("Herons at Lanterns", "Coastal Baseball", ["Baseball"], None, 180, (240, 241)),
+        ("Prairie State at Cedar Valley", "Campus Football", ["Football"], None, 210, (301, 302)),
+        ("North Ridge at Prairie State", "Campus Basketball", ["Basketball"], None, 120, (303, 301)),
+    ]
+    SHOWS = [
+        ("Round One", "Brightside Auditions", ["Reality"], "TV-PG", 120),
+        ("The Long Way Home", "Lanternfall", ["Drama"], "TV-14", 60),
+        ("A Study in Salt", "Pepperkettle", ["Cooking"], "TV-G", 30),
+        ("Under the Ice", "Deep Lantern", ["Documentary"], "TV-G", 60),
+        ("The Second Door", "Marrowbrook", ["Drama", "Mystery"], "TV-14", 60),
+        ("Eighteen Across", "Wordwheel", ["Game Show"], "TV-G", 30),
+        ("Sparks", "Tinker Shed", ["Comedy"], "TV-PG", 30),
+        ("The Quiet Part", "Marrowbrook", ["Drama", "Mystery"], "TV-14", 60),
+        ("Harvest", "Pepperkettle", ["Cooking"], "TV-G", 30),
+        ("Night Shift", "Fennel Street Clinic", ["Drama"], "TV-14", 60),
+        ("The Bell", "Lanternfall", ["Drama"], "TV-14", 60),
+        ("Anything Goes", "Laugh Barn", ["Comedy"], "TV-MA", 60),
+    ]
+    MOVIES = [
+        ("The Weather on Mars Hill", ["Drama", "Romance"], "PG-13", 118),
+        ("Cold Anchorage", ["Thriller"], "R", 132),
+        ("Three Left Shoes", ["Comedy"], "PG", 96),
+        ("The Mapmaker's Lantern", ["Drama"], "PG-13", 141),
+        ("Bend in the Willow", ["Western"], "PG-13", 108),
+    ]
+
+# How far ahead of the anchor the guide is filled.
+HOURS_AHEAD = int(os.environ.get("COUCHELEPHANT_DEMO_GUIDE_HOURS", "14"))
+NEWS_EVERY = 6 * 3600
+
+
 def _key(kind, n):
     return f"plex://episode/demo-{kind}-{n}"
 
@@ -102,7 +163,7 @@ def build(anchor, media):
     guide with three programmes in it photographs like a broken app.
     """
     start_of_day = anchor - 2 * 3600
-    end_of_day = anchor + 14 * 3600
+    end_of_day = anchor + HOURS_AHEAD * 3600
 
     sports, shows, movies, team_tags = [], [], [], []
     names = dict(TEAMS)
@@ -122,7 +183,24 @@ def build(anchor, media):
         })
         clock = start_of_day
         turn = 0
+        # A long guide (the public demo's) has the news again every six hours,
+        # so the News tab has something on at any time of day.
+        next_news = start_of_day + NEWS_EVERY if HOURS_AHEAD > 14 else None
         while clock < end_of_day:
+            if next_news is not None and clock >= next_news:
+                n = counters["news"]
+                counters["news"] += 1
+                shows.append({
+                    "guid": _key("news", n), "ratingKey": _rk(_key("news", n)),
+                    "type": "episode", "title": "Evening News",
+                    "grandparentTitle": "Local News",
+                    "summary": "The day's news.", "year": 2026, "contentRating": "TV-G",
+                    "duration": 30 * 60_000, "Genre": [{"tag": "News"}],
+                    "Media": [media(vcn, clock, premiere=True, res="1080")],
+                })
+                clock += 1800
+                next_news += NEWS_EVERY
+                continue
             kind = rotation[turn % len(rotation)]
             turn += 1
             n = counters[kind]

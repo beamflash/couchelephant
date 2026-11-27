@@ -9,7 +9,7 @@ import re
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import JSONResponse
 
-from .. import db, plextv, reportbuild, reportsend
+from .. import db, demo, plextv, reportbuild, reportsend
 from ..reportscrub import cut_take
 from ..version import VERSION
 
@@ -60,6 +60,7 @@ NOT_SENT = {
     "too_large": "This report is too large to send.",
     "not_configured": "Reports are not set up on this server.",
     "rejected": "The report could not be sent.",
+    "demo": demo.REPORT_NOTE,
 }
 
 

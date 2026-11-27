@@ -1,0 +1,19 @@
+# For Dockerfile.demo only: unlike .dockerignore, tests/ and scripts/ are
+# needed here (the fakes and the demo entry point).
+.env
+.git
+__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+.venv
+clients
+dist
+docs
+packaging
+site
+data
+*.db
+*.db-wal
+*.db-shm
+dev-logos

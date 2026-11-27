@@ -1,0 +1,27 @@
+# Caddy in front of the demo. It gets and renews the certificate for the name
+# (Let's Encrypt, no setup beyond DNS pointing here and ports 80 and 443 open).
+#
+# DEMO_HOST comes from the compose file; it is demo.couchelephant.app unless
+# set otherwise in .env. A plain "localhost" makes Caddy use its own internal
+# certificate, which is how the demo is tried without a domain.
+{$DEMO_HOST:demo.couchelephant.app} {
+	# HLS segments and the pictures are already compressed; the apps' JSON is
+	# small. Nothing to gain from encoding, and it would only cost CPU.
+	reverse_proxy demo:8710 {
+		# Caddy sends X-Forwarded-For and X-Forwarded-Proto itself. The demo
+		# believes them only from this one proxy (DEMO_TRUSTED_PROXIES).
+		flush_interval -1
+	}
+}
+
+# Plain HTTP on the app's own default port. The apps turn a bare
+# "demo.couchelephant.app" into http://demo.couchelephant.app:8710, so this
+# makes that work too. It is not redirected on purpose: the apps refuse a
+# redirect to another origin. Everything on the demo is invented, and the
+# apps' key for it is worth nothing, so plain HTTP costs nothing here.
+# Delete this block to allow https:// only.
+http://{$DEMO_HOST:demo.couchelephant.app}:8710 {
+	reverse_proxy demo:8710 {
+		flush_interval -1
+	}
+}

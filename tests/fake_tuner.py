@@ -40,15 +40,21 @@ LINEUP = [("5.1", "KCTV"), ("9.1", "KMBC"), ("41.1", "KSHB")]
 # pattern made by ffmpeg as it is sent, a different colour per channel, at
 # the speed of a broadcast. The unit tests keep the cheap empty packets.
 VIDEO = os.environ.get("FAKE_TUNER_VIDEO") == "1"
+# How big a picture it is. The defaults are a broadcast's own; the public demo
+# turns them down (FAKE_TUNER_SIZE=640x360, FAKE_TUNER_RATE=24,
+# FAKE_TUNER_BITRATE=1M) so a small server can make a few at once.
+SIZE = os.environ.get("FAKE_TUNER_SIZE", "1280x720")
+RATE = os.environ.get("FAKE_TUNER_RATE", "30000/1001")
+BITRATE = os.environ.get("FAKE_TUNER_BITRATE", "4M")
 
 
 def _pattern(vcn):
     hue = (sum(map(ord, vcn)) * 47) % 360
     return subprocess.Popen(
         [shutil.which("ffmpeg") or "ffmpeg", "-hide_banner", "-loglevel", "error", "-re",
-         "-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=30000/1001",
+         "-f", "lavfi", "-i", f"testsrc2=size={SIZE}:rate={RATE}",
          "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000",
-         "-vf", f"hue=h={hue}", "-c:v", "mpeg2video", "-b:v", "4M", "-g", "15",
+         "-vf", f"hue=h={hue}", "-c:v", "mpeg2video", "-b:v", BITRATE, "-g", "15",
          "-c:a", "ac3", "-b:a", "192k", "-f", "mpegts", "pipe:1"],
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
 

@@ -9,7 +9,7 @@ from typing import TypedDict
 
 import httpx
 
-from . import db, reportbuild, reportconfig
+from . import db, demo, reportbuild, reportconfig
 from .version import VERSION
 
 log = logging.getLogger("couchelephant")
@@ -128,8 +128,11 @@ def _sent_recently(now: int) -> int:
 
 
 def submit(report: dict, source: str) -> SendResult:
-    cfg = reportconfig.config()
     rid = report.get("reportId", "")
+    if demo.enabled():
+        # The public demo never sends a report anywhere, whatever is configured.
+        return _result(rid, reason="demo")
+    cfg = reportconfig.config()
     if cfg is None:
         return _result(rid, reason="not_configured")
     with _lock:
