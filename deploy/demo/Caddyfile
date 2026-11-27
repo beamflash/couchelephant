@@ -13,15 +13,3 @@
 		flush_interval -1
 	}
 }
-
-# Plain HTTP on the app's own default port. The apps turn a bare
-# "demo.couchelephant.app" into http://demo.couchelephant.app:8710, so this
-# makes that work too. It is not redirected on purpose: the apps refuse a
-# redirect to another origin. Everything on the demo is invented, and the
-# apps' key for it is worth nothing, so plain HTTP costs nothing here.
-# Delete this block to allow https:// only.
-http://{$DEMO_HOST:demo.couchelephant.app}:8710 {
-	reverse_proxy demo:8710 {
-		flush_interval -1
-	}
-}

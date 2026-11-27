@@ -696,3 +696,35 @@ def test_report_send_and_consent_for_signed_in_person_from_away():
     r = k.post("/api/report/send", json={"trigger": {"kind": "support"}, "message": "x",
                                          "email": ""})
     assert r.status_code != 403 and r.status_code != 404
+
+
+# ---------- the session cookie's Secure flag ----------
+
+def _cookie_header(c):
+    r = c.post("/login", data={"username": "owner", "password": "a-good-password"})
+    assert r.status_code == 303, r.text
+    return r.headers["set-cookie"].lower()
+
+
+def test_the_session_cookie_is_secure_over_https_and_not_over_http():
+    _local_with_account()
+    assert "secure" in _cookie_header(at(HOME, scheme="https"))
+    assert "secure" not in _cookie_header(at(HOME, scheme="http"))
+
+
+def test_a_spoofed_forwarded_proto_from_an_untrusted_peer_changes_nothing():
+    _local_with_account()
+    c = at(HOME)
+    c.headers["X-Forwarded-Proto"] = "https"
+    assert "secure" not in _cookie_header(c)
+
+
+def test_forwarded_proto_counts_only_from_a_trusted_proxy():
+    _local_with_account()
+    db.set_setting("trusted_proxies", "192.168.1.5")
+    c = at(HOME)
+    c.headers.update({"X-Forwarded-Proto": "https", "X-Forwarded-For": "8.8.8.8"})
+    assert "secure" in _cookie_header(c)
+    c = at(HOME)
+    c.headers.update({"X-Forwarded-Proto": "http", "X-Forwarded-For": "8.8.8.8"})
+    assert "secure" not in _cookie_header(c)

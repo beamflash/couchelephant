@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import sys
 import textwrap
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -26,9 +27,11 @@ def _pinned(monkeypatch):
     monkeypatch.setattr(exposure, "_route_files", lambda: [])
     exposure.clear_cache()
     ratelimit.reset()
+    demo.reset_guesses()
     yield
     exposure.clear_cache()
     ratelimit.reset()
+    demo.reset_guesses()
 
 
 @pytest.fixture
@@ -50,7 +53,7 @@ def visitor(addr=OUT, proto="https", via_proxy=True):
         if scope["type"] == "http":
             scope = {**scope, "client": (PROXY if via_proxy else addr, 4321)}
         await app(scope, receive, send)
-    c = TestClient(shim, base_url="http://testserver", follow_redirects=False)
+    c = TestClient(shim, base_url=f"{proto}://testserver", follow_redirects=False)
     c.headers.update({"Host": "demo.test", "Origin": f"{proto}://demo.test"})
     if via_proxy:
         c.headers.update({"X-Forwarded-For": addr, "X-Forwarded-Proto": proto})
@@ -146,12 +149,29 @@ def test_guessing_the_review_code_is_limited(on):
     c = visitor()
     got = c.post("/api/tv/pair", data={"name": "x"}).json()
     seen = [c.post("/demo/pair", data={"review_code": f"guess-{i}", "code": got["code"]}
-                   ).status_code for i in range(7)]
-    # The pairing ask above already counted once from this address.
-    assert seen[0] == 403 and seen[-1] == 429 and seen.count(403) >= 3
-    # Even the right one waits out the lock.
+                   ).status_code for i in range(demo.GUESS_BUDGET + 2)]
+    assert seen[:demo.GUESS_BUDGET] == [403] * demo.GUESS_BUDGET
+    assert seen[-1] == 429
+    # Past the budget even the right one waits.
     assert c.post("/demo/pair", data={"review_code": CODE, "code": got["code"]}
                   ).status_code == 429
+
+
+def test_a_right_code_still_works_after_some_wrong_ones_from_the_same_address(on):
+    c = visitor()
+    for i in range(demo.GUESS_BUDGET - 1):
+        assert c.post("/api/tv/pair/code", data={"code": f"wrong{i}"}).status_code == 403
+    assert c.post("/api/tv/pair/code", data={"code": CODE}).status_code == 200
+    # And again: a right answer is not a strike.
+    assert c.post("/api/tv/pair/code", data={"code": CODE}).status_code == 200
+
+
+def test_the_guess_budget_is_per_address(on):
+    c = visitor()
+    for i in range(demo.GUESS_BUDGET + 1):
+        c.post("/api/tv/pair/code", data={"code": f"wrong{i}"})
+    assert visitor(addr="9.9.9.9").post("/api/tv/pair/code", data={"code": CODE}
+                                        ).status_code == 200
 
 
 def test_an_app_pairs_and_then_reads_the_guide(on):
@@ -223,8 +243,11 @@ def test_a_paired_app_cannot_change_settings_either(on, path, form):
                                   "/api/backups/jobs", "/api/away/check", "/api/connect.svg",
                                   "/api/tv/devices", "/api/update", "/api/recorder/library-suggest"])
 def test_the_admin_pages_cannot_be_read(on, path):
-    assert signed_in(visitor()).get(path).status_code in (403, 404)
-    assert paired().get(path).status_code in (403, 404)
+    for c in (signed_in(visitor()), paired()):
+        r = c.get(path)
+        # The settings pages send a visitor to a short page that says what to do.
+        assert r.status_code in (403, 404) or (
+            r.status_code == 303 and r.headers["location"] == "/demo"), (path, r.status_code)
 
 
 def test_what_the_apps_do_is_not_locked(on):
@@ -262,7 +285,7 @@ def test_the_scheme_is_believed_only_from_the_trusted_proxy(on):
     rid = _recording()
     key = pair(visitor())
     # The same header from anywhere else changes nothing.
-    stranger = visitor(via_proxy=False)
+    stranger = visitor(via_proxy=False, proto="http")
     stranger.headers.update({"X-Forwarded-Proto": "https", "Authorization": f"Bearer {key}"})
     got = stranger.get(f"/api/tv/recordings/{rid}").json()["recording"]
     assert got["playlist"].startswith("http://demo.test/hls/"), got["playlist"]
@@ -282,7 +305,7 @@ HAVE_FFMPEG = shutil.which("ffmpeg") is not None
 
 def _run(code, tmp_path):
     env = {k: v for k, v in os.environ.items() if not k.startswith("COUCHELEPHANT_")}
-    env.update(PYTHONPATH=ROOT, DEMO_CODE=CODE, DEMO_DATA=str(tmp_path / "data"),
+    env.update(PYTHONPATH=ROOT, DEMO_CODE="k7m3xq9ntw4h2p", DEMO_DATA=str(tmp_path / "data"),
                DEMO_MEDIA=str(tmp_path / "media"), DEMO_MEDIA_SCALE="0.02")
     if shutil.which("ffmpeg"):
         env["COUCHELEPHANT_FFMPEG"] = shutil.which("ffmpeg")
@@ -292,57 +315,108 @@ def _run(code, tmp_path):
     return done.stdout.strip().splitlines()[-1]
 
 
-@pytest.mark.skipif(not HAVE_FFMPEG, reason="makes the demo's viewing copies with ffmpeg")
-def test_reset_puts_the_seeded_state_back(tmp_path):
-    out = _run("""
-        import json, os, sys
-        sys.argv = ["demo_server.py"]
-        sys.path.insert(0, "scripts")
-        import demo_server as s
-        from tests import demo_world
-        from app import auth, db, recorder
-        plex, tuner = demo_world.start_fakes(2)
-        db.init()
-        conf = s.settings(plex, tuner)
+RESET_SCRIPT = """
+    import json, os, sys, threading, time
+    sys.argv = ["demo_server.py"]
+    sys.path.insert(0, "scripts")
+    import demo_server as s
+    from tests import demo_world
+    from app import auth, db, demo, recorder
+    if os.environ.get("STUB_MEDIA"):
+        def stub(media_dir, spec):
+            out = os.path.join(media_dir, spec[0])
+            os.makedirs(out, exist_ok=True)
+            open(os.path.join(out, "seg00000.ts"), "wb").write(b"\\x47" + b"\\0" * 187)
+            open(os.path.join(out, "index.m3u8"), "w").write(
+                "#EXTM3U\\n#EXT-X-TARGETDURATION:4\\n#EXTINF:4.0,\\nseg00000.ts\\n#EXT-X-ENDLIST\\n")
+        demo_world._make_one = stub
+    plex, tuner = demo_world.start_fakes(2)
+    db.init()
+    conf = s.settings(plex, tuner)
 
-        def look():
-            n = lambda q: db.one(q)["n"]
-            return {
-                "finished": n("SELECT COUNT(*) n FROM recordings WHERE state='finished'"),
-                "scheduled": n("SELECT COUNT(*) n FROM recordings WHERE state='scheduled'"),
-                "passes": n("SELECT COUNT(*) n FROM passes"),
-                "breaks": n("SELECT COUNT(*) n FROM ad_breaks"),
-                "airings": n("SELECT COUNT(*) n FROM airings") > 100,
-                "logos": n("SELECT COUNT(*) n FROM channels WHERE logo_path != ''"),
-                "devices": n("SELECT COUNT(*) n FROM tv_devices"),
-                "users": [u["username"] for u in auth.list_users()],
-                "resume": db.one("SELECT COUNT(*) n FROM recordings WHERE position > 0")["n"],
-                "viewable": all(os.path.exists(recorder.playlist_path(r["uid"]))
-                                for r in db.query("SELECT uid FROM recordings WHERE state='finished'")),
-            }
+    def look():
+        n = lambda q: db.one(q)["n"]
+        return {
+            "finished": n("SELECT COUNT(*) n FROM recordings WHERE state='finished'"),
+            "scheduled": n("SELECT COUNT(*) n FROM recordings WHERE state='scheduled'"),
+            "passes": n("SELECT COUNT(*) n FROM passes"),
+            "breaks": n("SELECT COUNT(*) n FROM ad_breaks"),
+            "airings": n("SELECT COUNT(*) n FROM airings") > 100,
+            "logos": n("SELECT COUNT(*) n FROM channels WHERE logo_path != ''"),
+            "users": [u["username"] for u in auth.list_users()],
+            "resume": n("SELECT COUNT(*) n FROM recordings WHERE position > 0"),
+            "viewable": all(os.path.exists(recorder.playlist_path(r["uid"]))
+                            for r in db.query("SELECT uid FROM recordings WHERE state='finished'")),
+        }
 
-        demo_world.reset(conf, s.MEDIA, "reviewer", os.environ["DEMO_CODE"])
-        first = look()
-        # A visitor makes a mess.
-        with db.tx() as c:
-            c.execute("DELETE FROM recordings WHERE state='finished'")
-            c.execute("DELETE FROM passes")
-            c.execute("INSERT INTO tv_devices (name, approved_at, created_at) VALUES ('x', 1, 1)")
-            c.execute("INSERT INTO favorite_channels (vcn) VALUES ('9.1')")
-        db.set_setting("timezone", "UTC")
-        auth.create_user("intruder", "an-intruder-password")
-        demo_world.reset(conf, s.MEDIA, "reviewer", os.environ["DEMO_CODE"])
-        second = look()
-        print(json.dumps([first, second, db.get_setting("timezone"),
-                          db.one("SELECT COUNT(*) n FROM favorite_channels")["n"]]))
-    """, tmp_path)
-    first, second, tz, favs = json.loads(out)
+    demo_world.reset(conf, s.MEDIA, "reviewer", os.environ["DEMO_CODE"])
+    first = look()
+    seed = int(db.get_setting(demo.SEED_KEY))
+    # A reviewer was let in, signed in on the web, and made a mess.
+    now = int(time.time())
+    with db.tx() as c:
+        c.execute("DELETE FROM recordings WHERE state='finished'")
+        c.execute("DELETE FROM passes")
+        c.execute("INSERT INTO tv_devices (name, key_hash, approved_at, created_at, last_seen) "
+                  "VALUES ('kept', 'abc', ?, ?, ?)", (now, now, now))
+        c.execute("INSERT INTO tv_devices (name, code, created_at) VALUES ('pending', 'ZZZZZZ', ?)",
+                  (now,))
+        c.execute("INSERT INTO favorite_channels (vcn) VALUES ('9.1')")
+    db.set_setting("timezone", "UTC")
+    uid = auth._con().execute("SELECT id FROM users").fetchone()[0]
+    token = auth.create_session(uid)
+    # Is the demo ever without sign-in while it resets?
+    bad = []
+    stop = threading.Event()
+    def watch():
+        while not stop.is_set():
+            if db.get_setting("auth_mode") != "local" or db.get_setting("away_mode") != "1":
+                bad.append("settings read open")
+            if not demo.RESETTING.is_set() and False:
+                bad.append("x")
+            time.sleep(0.001)
+    t = threading.Thread(target=watch); t.start()
+    during = []
+    t2 = threading.Thread(target=lambda: [during.append(demo.RESETTING.is_set()) or time.sleep(0.01)
+                                         for _ in range(200)])
+    t2.start()
+    demo_world.reset(conf, s.MEDIA, "reviewer", os.environ["DEMO_CODE"])
+    stop.set(); t.join(); t2.join()
+    second = look()
+    print(json.dumps({
+        "first": first, "second": second, "tz": db.get_setting("timezone"),
+        "favs": db.one("SELECT COUNT(*) n FROM favorite_channels")["n"],
+        "devices": [r["name"] for r in db.query("SELECT name FROM tv_devices ORDER BY id")],
+        "session_kept": auth.session_user(token) is not None,
+        "password_is_the_code": auth.verify("reviewer", os.environ["DEMO_CODE"]) is not None,
+        "bad": bad, "was_resetting": any(during), "now_resetting": demo.RESETTING.is_set(),
+        "seed_moved": int(db.get_setting(demo.SEED_KEY)) >= seed,
+        "no_junk_settings": db.get_setting("report_consent"),
+    }))
+"""
+
+
+@pytest.mark.parametrize("stub", [True, pytest.param(False, marks=pytest.mark.skipif(
+    not HAVE_FFMPEG, reason="makes the demo's viewing copies with ffmpeg"))])
+def test_reset_puts_the_content_back_and_keeps_who_is_in(tmp_path, stub):
+    if stub:
+        os.environ["STUB_MEDIA"] = "1"
+    try:
+        out = _run(RESET_SCRIPT, tmp_path)
+    finally:
+        os.environ.pop("STUB_MEDIA", None)
+    got = json.loads(out)
+    first, second = got["first"], got["second"]
     assert first == second
     assert first["finished"] == 6 and first["passes"] == 1 and first["scheduled"] >= 3
     assert first["breaks"] == 5 and first["airings"] and first["logos"] == 8
-    assert first["users"] == ["reviewer"] and first["devices"] == 0 and first["viewable"]
-    assert first["resume"] >= 2
-    assert tz == "America/Los_Angeles" and favs == 0
+    assert first["users"] == ["reviewer"] and first["viewable"] and first["resume"] >= 2
+    assert got["tz"] == "America/Los_Angeles" and got["favs"] == 0
+    # The reviewer who was let in is still in; a code nobody approved is gone.
+    assert got["devices"] == ["kept"] and got["session_kept"] and got["password_is_the_code"]
+    # The sign-in settings were never missing, not for a moment.
+    assert got["bad"] == [] and got["now_resetting"] is False
+    assert got["seed_moved"]
 
 
 def test_the_nightly_reset_waits_for_the_next_four_oclock(tmp_path):
@@ -365,10 +439,10 @@ def test_the_demo_refuses_to_start_without_a_code(tmp_path):
     done = subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "demo_server.py")],
                           env=env, cwd=ROOT, capture_output=True, text=True, timeout=60)
     assert done.returncode != 0 and "DEMO_CODE" in done.stderr
-    env["DEMO_CODE"] = "elevenchars"
+    env["DEMO_CODE"] = "abcdefghjkm0"
     done = subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "demo_server.py")],
                           env=env, cwd=ROOT, capture_output=True, text=True, timeout=60)
-    assert done.returncode != 0 and "12 characters" in done.stderr
+    assert done.returncode != 0 and "lowercase letters and digits" in done.stderr
 
 
 # ---------- nothing opens without the code ----------
@@ -379,8 +453,9 @@ def test_the_demo_refuses_to_start_without_a_code(tmp_path):
 OPEN_UNSIGNED = {
     ("GET", "/login"), ("POST", "/login"), ("POST", "/logout"),
     ("GET", "/demo"), ("POST", "/demo/pair"),
-    ("GET", "/healthz"),
+    ("GET", "/healthz"), ("HEAD", "/healthz"),
     ("GET", "/api/tv/hello"), ("POST", "/api/tv/pair"), ("POST", "/api/tv/pair/poll"),
+    ("POST", "/api/tv/pair/code"),
 }
 
 
@@ -392,22 +467,83 @@ def _fill(path):
                   path)
 
 
-def test_every_route_refuses_a_visitor_without_the_code(on):
+def _walk(make):
+    """Every route of the app, asked by a visitor with no real credential. Each
+    must say no (401, 403) or send them to sign in, bar the short allowlist."""
     seen = 0
-    for r in app.routes:
-        methods = getattr(r, "methods", None)
-        if not methods:
-            continue
-        for m in sorted(methods - {"HEAD"}):
-            if (m, r.path) in OPEN_UNSIGNED:
+    paths = [(r.path, getattr(r, "methods", None)) for r in app.routes]
+    paths = [(p, m) for p, m in paths if m] + [("/static/x.css", {"GET"}), ("/static/", {"GET"})]
+    for path, ms in paths:
+        for m in sorted(ms | {"HEAD", "OPTIONS"}):
+            if (m, path) in OPEN_UNSIGNED:
                 continue
-            c = visitor()
-            res = c.request(m, _fill(r.path), data={"x": "1"} if m != "GET" else None)
+            res = make().request(m, _fill(path), data={"x": "1"} if m not in ("GET", "HEAD", "OPTIONS") else None)
             seen += 1
-            assert res.status_code in (401, 403, 303, 307, 308), (m, r.path, res.status_code)
-            if res.status_code in (303, 307, 308):
-                assert "/login" in res.headers["location"], (m, r.path, res.headers["location"])
-    assert seen > 150
+            where = res.headers.get("location", "")
+            if path.startswith("/static/"):
+                assert res.status_code in (404, 200, 405, 307, 308), (m, path, res.status_code)
+                continue
+            if m == "OPTIONS" and res.status_code in (200, 204, 405):
+                continue
+            ok = res.status_code in (401, 403, 405) or (
+                res.status_code in (303, 307, 308) and where in ("/login", "/demo"))
+            assert ok, (m, path, res.status_code, where)
+    return seen
+
+
+def test_every_route_refuses_a_visitor_without_the_code(on):
+    assert _walk(visitor) > 400
+
+
+def test_every_route_refuses_a_junk_authorization_header(on):
+    def junk():
+        c = visitor()
+        c.headers["Authorization"] = "Bearer not-a-real-key-at-all"
+        return c
+    assert _walk(junk) > 400
+
+
+def test_every_route_refuses_a_junk_session_cookie(on):
+    def junk():
+        c = visitor()
+        c.cookies.set(auth.SESSION_COOKIE, "a-session-nobody-made")
+        return c
+    assert _walk(junk) > 400
+
+
+def test_every_route_still_refuses_after_the_settings_are_wiped(on):
+    """What the nightly reset used to do for a moment: no settings at all must
+    not read as "no sign-in"."""
+    with db.tx() as c:
+        c.execute("DELETE FROM settings")
+    auth._con().execute("DELETE FROM users")
+    auth._con().commit()
+    assert auth.mode() == "local" and exposure.away_on()
+    def junk():
+        c = visitor()
+        c.headers["Authorization"] = "Bearer not-a-real-key-at-all"
+        c.cookies.set(auth.SESSION_COOKIE, "nothing")
+        return c
+    assert _walk(junk) > 400
+    # Asking to pair is not approved, and nothing is shown with the key it hands out.
+    c = visitor()
+    got = c.post("/api/tv/pair", data={"name": "x"}).json()
+    polled = c.post("/api/tv/pair/poll", data={"secret": got["secret"]}).json()
+    assert polled["approved"] is False and "key" not in polled
+    assert db.one("SELECT COUNT(*) n FROM tv_devices WHERE approved_at IS NOT NULL")["n"] == 0
+    assert c.get("/api/tv/home", headers={"Authorization": "Bearer junk"}).status_code in (401, 303)
+
+
+def test_a_request_during_a_reset_gets_503_except_the_health_check(on):
+    demo.RESETTING.set()
+    try:
+        c = visitor()
+        assert c.get("/healthz").status_code == 200
+        for path in ("/api/tv/hello", "/api/tv/home", "/login", "/demo", "/"):
+            assert c.get(path).status_code == 503, path
+        assert c.post("/api/tv/pair/code", data={"code": CODE}).status_code == 503
+    finally:
+        demo.RESETTING.clear()
 
 
 def test_what_stays_open_shows_nothing(on):
@@ -426,3 +562,192 @@ def test_a_wrong_web_password_is_limited_too(on):
     seen = [c.post("/login", data={"username": "reviewer", "password": f"wrong-{i}"}
                    ).status_code for i in range(8)]
     assert seen[0] == 303 and seen[-1] == 429
+
+
+# ---------- the access code, typed in the app ----------
+
+def test_hello_advertises_code_signin_only_in_the_demo(on, monkeypatch):
+    assert visitor().get("/api/tv/hello").json()["code_signin"] is True
+    monkeypatch.setenv("COUCHELEPHANT_DEMO", "0")
+    assert "code_signin" not in visitor().get("/api/tv/hello").json()
+
+
+def test_the_right_code_makes_a_paired_device_and_its_key_works(on):
+    c = visitor()
+    got = c.post("/api/tv/pair/code", data={"code": CODE.upper(), "name": "Apple TV"})
+    assert got.status_code == 200, got.text
+    key = got.json()["key"]
+    c.headers["Authorization"] = "Bearer " + key
+    assert c.get("/api/tv/hello").json()["paired"] is True
+    assert c.get("/api/tv/recordings").status_code == 200
+    assert db.one("SELECT COUNT(*) n FROM tv_devices WHERE approved_at IS NOT NULL")["n"] == 1
+
+
+def test_a_wrong_or_missing_code_makes_nothing(on):
+    c = visitor()
+    for bad in ("", "nope", CODE + "x"):
+        r = c.post("/api/tv/pair/code", data={"code": bad})
+        assert r.status_code == 403 and "key" not in r.json()
+    assert db.one("SELECT COUNT(*) n FROM tv_devices")["n"] == 0
+
+
+def test_an_unset_review_code_never_matches(on, monkeypatch):
+    monkeypatch.setenv("DEMO_CODE", "")
+    assert visitor().post("/api/tv/pair/code", data={"code": ""}).status_code == 403
+
+
+def test_the_device_list_does_not_grow_without_end(on, monkeypatch):
+    monkeypatch.setattr(demo, "MAX_DEVICES", 3)
+    for _ in range(6):
+        ratelimit.reset()
+        assert visitor().post("/api/tv/pair/code", data={"code": CODE}).status_code == 200
+    assert db.one("SELECT COUNT(*) n FROM tv_devices")["n"] == 3
+
+
+def test_a_normal_install_has_no_code_route(monkeypatch):
+    monkeypatch.delenv("COUCHELEPHANT_DEMO", raising=False)
+    db.set_setting("auth_mode", "local")
+    r = visitor(via_proxy=False, addr="192.168.1.5").post("/api/tv/pair/code",
+                                                          data={"code": CODE})
+    assert r.status_code in (404, 401, 303) and "key" not in r.text
+    assert db.one("SELECT COUNT(*) n FROM tv_devices")["n"] == 0
+    monkeypatch.setenv("DEMO_CODE", CODE)
+    db.set_setting("auth_mode", "none")
+    r = visitor(via_proxy=False, addr="192.168.1.5").post("/api/tv/pair/code",
+                                                          data={"code": CODE})
+    assert r.status_code == 404
+    assert "code_signin" not in visitor(via_proxy=False, addr="192.168.1.5").get(
+        "/api/tv/hello").json()
+
+
+@pytest.mark.parametrize("code,ok", [
+    ("k7m3xq9ntw4h2p", True), ("abcdefghjkmn", True), ("abcdefghjkmnpqrs", True),
+    ("abcdefghjkm", False), ("abcdefghjkmnpqrst", False), ("abcdefghjkm0", False),
+    ("abcdefghjkmo", False), ("abcdefghjkm1", False), ("abcdefghjkml", False),
+    ("abcdefghjkmi", False), ("ABCDEFGHJKMN", False), ("abcdefghjkm-", False),
+])
+def test_the_demo_only_starts_with_a_code_a_remote_can_type(code, ok, tmp_path):
+    env = {k: v for k, v in os.environ.items() if not k.startswith("COUCHELEPHANT_")}
+    env.update(DEMO_CODE=code, DEMO_DATA=str(tmp_path), PORT="1")
+    # Valid codes go on to start; stop them at once by making the port unusable
+    # is not needed: only the check is asked about, by importing the module.
+    done = subprocess.run([sys.executable, "-c",
+                           "import sys; sys.argv=['x']; sys.path.insert(0,'scripts'); "
+                           "import demo_server"], env={**env, "PYTHONPATH": ROOT}, cwd=ROOT,
+                          capture_output=True, text=True, timeout=120)
+    assert (done.returncode == 0) is ok, done.stderr[-300:]
+
+
+# ---------- what an app's screens may read ----------
+
+def test_an_apps_settings_screen_does_not_get_the_servers_addresses(on):
+    db.set_setting("plex_url", "http://10.9.8.7:32400")
+    db.set_setting("tuner_url", "http://10.9.8.8")
+    got = paired().get("/api/tv/settings")
+    assert got.status_code == 200
+    text = got.text
+    assert "10.9.8" not in text and "plex_url" not in text and "tuner_url" not in text
+
+
+def test_the_report_reads_are_minimal_and_never_ask_plex_tv(on, monkeypatch):
+    from app import plextv
+    monkeypatch.setattr(plextv, "account_email",
+                        lambda t: (_ for _ in ()).throw(AssertionError("asked plex.tv")))
+    c = paired()
+    assert c.get("/api/report/email").json() == {"ok": True, "email": ""}
+    server = c.get("/api/report/server").json()["server"]
+    assert server == {"version": server["version"], "demo": True}
+
+
+def test_the_settings_pages_send_a_visitor_to_a_short_page(on):
+    c = visitor()
+    r = c.get("/settings")
+    assert r.status_code == 303 and r.headers["location"] == "/demo"
+    assert "Settings" in c.get("/demo").text or "demo" in c.get("/demo").text.lower()
+
+
+def test_the_session_cookie_is_secure_in_the_demo(on):
+    c = visitor()
+    r = c.post("/login", data={"username": demo.REVIEW_USER, "password": CODE})
+    assert "secure" in r.headers["set-cookie"].lower()
+
+
+# ---------- what a visitor may fill the disk with ----------
+
+def _add(kind, state, uid, started=None, stops=None, created=None, begins=None):
+    now = int(time.time())
+    with db.tx() as c:
+        cur = c.execute(
+            "INSERT INTO recordings (uid, kind, state, title, channel_vcn, begins_at, ends_at, "
+            "starts_at, stops_at, started_at, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (uid, kind, state, uid, "9.1", begins or now + 600, (stops or now + 4000),
+             begins or now + 600, stops or now + 4000, started, created or now))
+        return cur.lastrowid
+
+
+def test_a_visitor_has_at_most_two_bookings_and_the_seeded_ones_stay(on):
+    from app import recorder
+    seeded = [_add("recording", "scheduled", f"seed{i}") for i in range(3)]
+    db.set_setting(demo.SEED_KEY, max(seeded))
+    mine = [_add("recording", "scheduled", f"mine{i}", begins=int(time.time()) + 600 * (i + 1))
+            for i in range(4)]
+    demo.enforce_limits()
+    left = {r["id"] for r in db.query("SELECT id FROM recordings")}
+    assert set(seeded) <= left
+    assert left - set(seeded) == set(mine[:2])        # the earliest two stay
+    assert recorder.get(mine[3]) is None
+
+
+def test_a_recording_a_visitor_makes_stops_after_thirty_minutes(on):
+    seed = _add("recording", "finished", "seed")
+    db.set_setting(demo.SEED_KEY, seed)
+    now = int(time.time())
+    long = _add("recording", "scheduled", "long", begins=now + 100, stops=now + 100 + 4 * 3600)
+    seeded_long = db.one("SELECT stops_at FROM recordings WHERE id = ?", (seed,))["stops_at"]
+    demo.enforce_limits()
+    assert db.one("SELECT stops_at s FROM recordings WHERE id = ?", (long,))["s"] == \
+        now + 100 + demo.MAX_RECORDING_SECONDS
+    assert db.one("SELECT stops_at FROM recordings WHERE id = ?", (seed,))["stops_at"] == seeded_long
+
+
+def test_a_live_session_ends_after_half_an_hour_however_it_is_kept_alive(on):
+    now = int(time.time())
+    old = _add("live", "recording", "old", created=now - demo.MAX_LIVE_SECONDS - 5)
+    fresh = _add("live", "recording", "fresh", created=now - 60)
+    demo.enforce_limits()
+    ids = {r["id"] for r in db.query("SELECT id FROM recordings")}
+    assert old not in ids and fresh in ids
+
+
+def test_the_recordings_folder_has_a_ceiling_and_only_visitor_recordings_go(on, monkeypatch):
+    from app import recorder
+    seed = _add("recording", "finished", "seed" * 8)
+    db.set_setting(demo.SEED_KEY, seed)
+    mine = [_add("recording", "finished", f"{i:032x}") for i in range(3)]
+    for r in db.query("SELECT uid FROM recordings"):
+        os.makedirs(recorder.rec_dir(r["uid"]), exist_ok=True)
+        with open(os.path.join(recorder.rec_dir(r["uid"]), "x.ts"), "wb") as f:
+            f.write(b"0" * 1000)
+    monkeypatch.setattr(demo, "MAX_DISK_BYTES", 2500)
+    monkeypatch.setattr(demo, "_disk_checked", [0.0])
+    demo.enforce_limits()
+    left = {r["id"] for r in db.query("SELECT id FROM recordings")}
+    assert seed in left                       # never
+    assert mine[0] not in left and mine[-1] in left    # the oldest of theirs first
+    assert _folder_size(recorder.REC_DIR) <= 2500
+
+
+def _folder_size(path):
+    return demo._folder_bytes(path)
+
+
+def test_a_busy_demo_is_not_reset(on):
+    assert demo.recently_used() is False
+    now = int(time.time())
+    with db.tx() as c:
+        c.execute("INSERT INTO tv_devices (name, key_hash, approved_at, created_at, last_seen) "
+                  "VALUES ('x', 'k', ?, ?, ?)", (now - 7200, now - 7200, now - 600))
+    assert demo.recently_used() is True
+    with db.tx() as c:
+        c.execute("UPDATE tv_devices SET last_seen = ?, approved_at = ?", (now - 7200, now - 7200))
+    assert demo.recently_used() is False

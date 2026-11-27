@@ -18,9 +18,13 @@ What it changes:
     taken from the trusted proxy's X-Forwarded-Proto. Without it the
     server hands out http:// picture links the apps would not send their key to.
 """
+import hashlib
 import hmac
 import os
 import re
+import secrets
+import shutil
+import threading
 import time
 
 from fastapi import APIRouter, Form, Request
@@ -31,11 +35,15 @@ from . import db, exposure, ratelimit
 ENV = "COUCHELEPHANT_DEMO"
 REVIEW_USER = "reviewer"
 # Paths the open gates let through. The handlers answer 404 when demo is off.
-OPEN_PATHS = ("/demo", "/demo/pair", "/healthz")
+OPEN_PATHS = ("/demo", "/demo/pair", "/healthz", "/api/tv/pair/code")
 # A pairing code nobody approved is forgotten after this long (tv.PAIR_SECONDS).
 PAIR_SECONDS = 600
 
 router = APIRouter()
+
+# Set while the nightly reset rebuilds the demo. Everything but /healthz
+# answers 503 meanwhile, so nothing is served half made.
+RESETTING = threading.Event()
 
 
 def enabled() -> bool:
@@ -58,7 +66,7 @@ def is_open(path: str) -> bool:
 # apps or the web page do while someone looks around.
 _MAY_WRITE = tuple(re.compile(p + r"$") for p in (
     r"/login", r"/logout", r"/api/theme", r"/demo/pair",
-    r"/api/tv/pair", r"/api/tv/pair/poll",
+    r"/api/tv/pair", r"/api/tv/pair/poll", r"/api/tv/pair/code",
     # the web page's own recording and pass screens
     r"/api/record", r"/api/record/cancel", r"/api/pass", r"/api/rules",
     r"/api/rules/\d+", r"/api/channels-preview", r"/api/filter/preview",
@@ -74,7 +82,7 @@ _MAY_WRITE = tuple(re.compile(p + r"$") for p in (
 
 # Reads that show the owner's own machine or its settings. A plain reviewer
 # has no use for them, and the web pages for them stay shut.
-_NO_READ = ("/settings", "/partial/settings", "/api/export", "/api/backups",
+_NO_READ = ("/settings", "/partial/settings", "/api/export", "/api/tv/settings/test", "/api/import", "/api/backups",
             "/api/backingstore", "/api/away", "/api/connect.svg", "/api/tv/devices",
             "/api/recorder/library-suggest", "/api/update", "/welcome", "/setup",
             "/docs", "/openapi.json", "/redoc")
@@ -96,6 +104,12 @@ async def lock(request: Request, call_next):
     if not enabled():
         return await call_next(request)
     path = request.scope["path"]
+    if RESETTING.is_set() and path != "/healthz":
+        return JSONResponse({"ok": False, "error": "The demo is resetting. Try again in a minute."},
+                            status_code=503, headers={"Retry-After": "60"})
+    if request.method in ("GET", "HEAD") and (path == "/settings" or path.startswith("/settings/")
+                                              or path == "/partial/settings"):
+        return RedirectResponse("/demo", status_code=303)
     if blocked(request.method, path):
         if path.startswith(("/api/", "/partial/")) or request.method != "GET":
             return JSONResponse({"ok": False, "error": NOT_HERE}, status_code=403)
@@ -143,6 +157,46 @@ class ProxyScheme:
                                          else {"http": "ws", "https": "wss"}[proto])
                         break
         await self.app(scope, receive, send)
+
+
+# ---------- the review code's own guess budget ----------
+
+# Wrong guesses from one address, in the last WINDOW seconds. An office of
+# reviewers on one address may mistype now and then, so the budget is far wider
+# than the sign-in limit; the code is long enough that 20 guesses in ten
+# minutes find nothing. Past the budget even the right code waits.
+GUESS_BUDGET = 20
+GUESS_WINDOW = 600
+_guesses: dict = {}
+_guess_lock = threading.Lock()
+
+
+def check_code(addr, typed: str):
+    """(ok, wait): is `typed` the review code. A right code always passes while
+    the address is inside its budget, whatever it got wrong before. `wait` is
+    the seconds to wait when the address is out of budget, else 0."""
+    key = ratelimit.addr_key(addr)
+    now = time.monotonic()
+    with _guess_lock:
+        fails = [t for t in _guesses.get(key, ()) if now - t < GUESS_WINDOW]
+        if len(fails) >= GUESS_BUDGET:
+            _guesses[key] = fails
+            return False, fails[0] + GUESS_WINDOW - now
+        want = code().lower()
+        if want and hmac.compare_digest(typed.strip().lower().encode(), want.encode()):
+            _guesses[key] = fails
+            return True, 0
+        fails.append(now)
+        _guesses[key] = fails
+        if len(_guesses) > 10000:
+            for k in sorted(_guesses, key=lambda k: _guesses[k][-1] if _guesses[k] else 0)[:2000]:
+                del _guesses[k]
+        return False, 0
+
+
+def reset_guesses() -> None:
+    with _guess_lock:
+        _guesses.clear()
 
 
 # ---------- the review sign-in ----------
@@ -197,17 +251,13 @@ def demo_page():
 def demo_pair(request: Request, review_code: str = Form(""), code_shown: str = Form("", alias="code")):
     if not enabled():
         return PlainTextResponse("Not found", status_code=404)
-    key = ratelimit.addr_key(exposure.client_address(request))
-    wait = ratelimit.reserve([key])
+    ok, wait = check_code(exposure.client_address(request), review_code)
     if wait:
         resp = _page(ratelimit.say(wait), ok=False, status=429)
         resp.headers["Retry-After"] = str(int(wait) + 1)
         return resp
-    want = code()
-    if not want or not hmac.compare_digest(review_code.strip().encode(), want.encode()):
+    if not ok:
         return _page("That review code is not right.", ok=False, status=403)
-    # The right review code is not a guess, so a mistyped app code costs nothing.
-    ratelimit.refund(key)
     shown = code_shown.strip().upper()
     row = db.one("SELECT * FROM tv_devices WHERE code = ? AND approved_at IS NULL "
                  "AND created_at > ?", (shown, int(time.time()) - PAIR_SECONDS))
@@ -220,7 +270,127 @@ def demo_pair(request: Request, review_code: str = Form(""), code_shown: str = F
     return _page("Done. Go back to the app: it comes in within a few seconds.")
 
 
+# ---------- the access code, typed in the app ----------
+
+# The apps show an "Access code" field when hello says code_signin, and send
+# the code here. It is the review code (DEMO_CODE): a right one makes a paired
+# device and answers its key, as an approved pairing does. Without the right
+# code nothing is made. Not in a normal install: 404 there, and hello never
+# says code_signin.
+MAX_DEVICES = 200
+
+
+@router.post("/api/tv/pair/code")
+def pair_by_code(request: Request, code_typed: str = Form("", alias="code"),
+                 name: str = Form("Apple TV")):
+    if not enabled():
+        return PlainTextResponse("Not found", status_code=404)
+    ok, wait = check_code(exposure.client_address(request), code_typed)
+    if wait:
+        return JSONResponse({"ok": False, "error": ratelimit.say(wait)}, status_code=429,
+                            headers={"Retry-After": str(int(wait) + 1)})
+    if not ok:
+        return JSONResponse({"ok": False, "error": "That access code is not right."},
+                            status_code=403)
+    device_key = secrets.token_urlsafe(32)
+    now = int(time.time())
+    with db.tx() as c:
+        # A demo does not collect devices for ever.
+        c.execute("DELETE FROM tv_devices WHERE id IN (SELECT id FROM tv_devices "
+                  "ORDER BY id DESC LIMIT -1 OFFSET ?)", (MAX_DEVICES - 1,))
+        c.execute("INSERT INTO tv_devices (name, key_hash, approved_at, created_at) "
+                  "VALUES (?, ?, ?, ?)",
+                  (name[:60], hashlib.sha256(device_key.encode()).hexdigest(), now, now))
+    return {"ok": True, "key": device_key}
+
+
+# ---------- limits on what a visitor can fill the disk with ----------
+
+MAX_BOOKINGS = 2                       # things a visitor has set to record at once
+MAX_RECORDING_SECONDS = 30 * 60        # a recording they make stops after this
+MAX_LIVE_SECONDS = 30 * 60             # a live session, however it is kept alive
+MAX_DISK_BYTES = 3 * 1024 ** 3         # the recordings folder, all told
+SEED_KEY = "demo_seed_max_id"          # recordings up to this id are the seeded ones
+_disk_checked = [0.0]
+
+
+def _seed_max() -> int:
+    try:
+        return int(db.get_setting(SEED_KEY) or 0)
+    except ValueError:
+        return 0
+
+
+def _folder_bytes(path: str) -> int:
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        for f in files:
+            try:
+                total += os.path.getsize(os.path.join(root, f))
+            except OSError:
+                pass
+    return total
+
+
+def enforce_limits(now: int | None = None) -> None:
+    """Called every few seconds by the demo's own loop. Only what a visitor
+    made is ever touched: the seeded recordings (ids up to SEED_KEY) never are."""
+    from . import recorder
+    now = now or int(time.time())
+    seed = _seed_max()
+    # Live sessions end after half an hour, whatever keeps them alive.
+    for rec in db.query("SELECT * FROM recordings WHERE kind = 'live' AND created_at < ?",
+                        (now - MAX_LIVE_SECONDS,)):
+        recorder.stop_live(rec["id"])
+    # At most MAX_BOOKINGS of a visitor's bookings: the earliest stay.
+    mine = db.query("SELECT id FROM recordings WHERE kind = 'recording' AND id > ? "
+                    "AND state IN ('scheduled', 'recording') ORDER BY COALESCE(starts_at, begins_at), id",
+                    (seed,))
+    for row in mine[MAX_BOOKINGS:]:
+        recorder.cancel(row["id"])
+    # A recording they make stops after half an hour.
+    with db.tx() as c:
+        c.execute("UPDATE recordings SET stops_at = COALESCE(started_at, starts_at) + ? "
+                  "WHERE kind = 'recording' AND id > ? AND state IN ('scheduled', 'recording') "
+                  "AND starts_at IS NOT NULL AND stops_at > COALESCE(started_at, starts_at) + ?",
+                  (MAX_RECORDING_SECONDS, seed, MAX_RECORDING_SECONDS))
+    # The folder has a ceiling: the oldest finished recording of theirs goes first.
+    if time.monotonic() - _disk_checked[0] > 60:
+        _disk_checked[0] = time.monotonic()
+        size = _folder_bytes(recorder.REC_DIR)
+        if size > MAX_DISK_BYTES:
+            for rec in db.query("SELECT id, uid FROM recordings WHERE kind = 'recording' "
+                                "AND id > ? AND state = 'finished' ORDER BY id", (seed,)):
+                shutil.rmtree(recorder.rec_dir(rec["uid"]), ignore_errors=True)
+                with db.tx() as c:
+                    c.execute("DELETE FROM ad_breaks WHERE recording_id = ?", (rec["id"],))
+                    c.execute("DELETE FROM recordings WHERE id = ?", (rec["id"],))
+                size = _folder_bytes(recorder.REC_DIR)
+                if size <= MAX_DISK_BYTES:
+                    break
+
+
+def recently_used(seconds: int = 1800) -> bool:
+    """Has anyone with a key or a session been here lately. The nightly reset
+    waits for a quiet half hour, so a reviewer is never cut off mid-look."""
+    from . import auth
+    since = int(time.time()) - seconds
+    seen = db.one("SELECT MAX(MAX(COALESCE(last_seen, 0), COALESCE(approved_at, 0))) AS t "
+                  "FROM tv_devices")
+    web = auth._con().execute("SELECT MAX(created_at) FROM sessions").fetchone()[0] or 0
+    return max((seen["t"] if seen and seen["t"] else 0), web) > since
+
+
 # ---------- reports ----------
+
+def scrub_tv_settings(values: dict) -> dict:
+    """The settings an app's screen reads, without the addresses and keys the
+    demo's own machinery uses."""
+    from .reportscrub import HOST_SETTINGS, SECRET_SETTINGS_ALL
+    hide = set(HOST_SETTINGS) | set(SECRET_SETTINGS_ALL) | {"plex_url", "tuner_url",
+                                                          "trusted_proxies", "away_domain"}
+    return {k: v for k, v in values.items() if k not in hide}
+
 
 REPORT_NOTE = ("This is a demo, so your report was not sent anywhere. "
                "Thank you for trying it.")

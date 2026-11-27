@@ -50,10 +50,13 @@ def add_news():
                       (f"demo-late-news-{vcn}", vcn, call, title, last, last + 1800))
 
 
-def ticking(stop=None):
-    """The recorder's own loop, without the ones that reach other servers."""
+def ticking(stop=None, each=None):
+    """The recorder's own loop, without the ones that reach other servers.
+    `each` is called before every tick (the demo's limits)."""
     while not (stop and stop.is_set()):
         try:
+            if each:
+                each()
             recorder.tick()
         except Exception as e:  # noqa: BLE001
             print("recorder:", e, flush=True)
@@ -271,23 +274,30 @@ def _tables(conn):
         "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
 
 
+# What a reset keeps: the settings are rewritten rather than emptied (a moment
+# with none would read as "no sign-in"), and a reviewer who has been let in
+# stays let in. Only content is reset.
+KEEP_TABLES = ("settings", "tv_devices")
+
+
 def wipe():
-    """Back to nothing: every running stream stopped, every row and every
-    recording gone, every account and every sign-in forgotten. The guide
-    comes back with the next sync, the rest with the seeds."""
+    """Back to nothing but who is signed in: every running stream stopped, every
+    row of content and every recording gone. Accounts, sessions and the devices
+    that were let in stay. The guide comes back with the next sync, the rest
+    with the seeds."""
     recorder.shutdown()
     adskip.shutdown()
     # The connection is this thread's own and stays open.
     conn = db.connect()
     conn.execute("PRAGMA foreign_keys=OFF")
     for table in _tables(conn):
-        conn.execute(f"DELETE FROM {table}")
+        if table not in KEEP_TABLES:
+            conn.execute(f"DELETE FROM {table}")
+    conn.execute("DELETE FROM tv_devices WHERE approved_at IS NULL")
     conn.commit()
     conn.execute("PRAGMA foreign_keys=ON")
-    con = auth._con()
-    con.executescript("DELETE FROM users; DELETE FROM sessions; "
-                      "DELETE FROM email_map; DELETE FROM prefs;")
-    con.commit()
+    auth._con().execute("DELETE FROM sessions WHERE expires_at < ?", (int(time.time()),))
+    auth._con().commit()
     rec = recorder.REC_DIR
     if os.path.isdir(rec):
         for name in os.listdir(rec):
@@ -300,21 +310,39 @@ _reset_lock = threading.Lock()
 
 
 def reset(settings, media_dir, review_user=None, review_password=None):
-    """The demo as it was on its first day. `settings` is what the demo sets
-    (the fake servers' addresses and the like). One reset at a time."""
+    """The demo as it was on its first day, for its content. `settings` is what
+    the demo sets (the fake servers' addresses and the like). One reset at a
+    time. While it runs the demo answers 503 to everything but /healthz."""
+    from app import demo
     from app import sync as guide_sync
     with _reset_lock:
-        wipe()
-        anchor = reanchor()
-        for k, v in settings.items():
-            db.set_setting(k, v)
-        ok, detail = guide_sync.full_sync()
-        if not ok:
-            raise RuntimeError(f"the demo guide would not sync: {detail}")
-        make_logos()
-        ensure_media(media_dir)
-        seed_recordings(media_dir)
-        seed_schedule()
-        if review_user:
-            auth.create_user(review_user, review_password, role="user")
-        return anchor
+        demo.RESETTING.set()
+        try:
+            wipe()
+            anchor = reanchor()
+            # Rewritten in one go, never emptied.
+            with db.tx() as c:
+                keep = ",".join("?" * len(settings))
+                c.execute(f"DELETE FROM settings WHERE key NOT IN ({keep})", tuple(settings))
+            for k, v in settings.items():
+                db.set_setting(k, v)
+            ok, detail = guide_sync.full_sync()
+            if not ok:
+                raise RuntimeError(f"the demo guide would not sync: {detail}")
+            make_logos()
+            ensure_media(media_dir)
+            seed_recordings(media_dir)
+            seed_schedule()
+            # Everything up to here is the demo's own; a visitor's comes after.
+            db.set_setting(demo.SEED_KEY, db.one("SELECT COALESCE(MAX(id), 0) m FROM recordings")["m"])
+            if review_user:
+                if auth.user_exists(review_user):
+                    uid = auth._con().execute(
+                        "SELECT id FROM users WHERE username=? COLLATE NOCASE",
+                        (review_user,)).fetchone()[0]
+                    auth.set_password(uid, review_password)
+                else:
+                    auth.create_user(review_user, review_password, role="user")
+            return anchor
+        finally:
+            demo.RESETTING.clear()

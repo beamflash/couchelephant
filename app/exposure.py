@@ -326,5 +326,22 @@ def _addr_is_home(addr) -> bool:
     return any(addr.version == n.version and addr in n for n in nets)
 
 
+def request_is_https(request) -> bool:
+    """Did this request arrive over HTTPS. The request's own scheme (the app's
+    own TLS listener says https), or X-Forwarded-Proto https from a peer in
+    Trusted proxies and from nobody else, so a spoofed header changes nothing."""
+    if request.url.scheme == "https":
+        return True
+    peer = _parse(getattr(getattr(request, "client", None), "host", None))
+    trusted = _trusted()
+    if peer is None or not trusted or not _is_trusted(peer, trusted):
+        return False
+    proto = request.headers.get("x-forwarded-proto") or ""
+    return proto.split(",")[0].strip().lower() == "https"
+
+
 def away_on() -> bool:
+    from . import demo
+    if demo.enabled():
+        return True         # the public demo is always "away", whatever the database says
     return db.get_setting("away_mode") == "1"

@@ -107,6 +107,9 @@ def _tok_hash(token):
 # ---------- mode ----------
 
 def mode() -> str:
+    from . import demo
+    if demo.enabled():
+        return "local"      # the public demo is never open, whatever the database says
     m = db.get_setting("auth_mode") or "none"
     return m if m in MODES else "none"
 

@@ -239,6 +239,14 @@ def _out_never(path):
                (p == "/settings" and path.startswith(p)) for p in _OUT_NEVER)
 
 
+def _not_found(request):
+    """What the away gate answers for what is home only. The public demo says
+    "sign in required" instead: nothing there is hidden, only locked."""
+    if demo.enabled():
+        return JSONResponse({"ok": False, "error": "sign in required"}, status_code=401)
+    return PlainTextResponse("Not found", status_code=404)
+
+
 @app.middleware("http")
 async def _away_gate(request: Request, call_next):
     """Registered after the sign-in gate, so it runs before it."""
@@ -265,10 +273,10 @@ async def _away_gate(request: Request, call_next):
     # TV settings change the Plex connection: a paired device with its
     # key, or at home. A signed-in person outside has Settings at home.
     if path.startswith("/api/tv/settings"):
-        return PlainTextResponse("Not found", status_code=404)
+        return _not_found(request)
     # Same for the report's server reads: a paired device from away, or home.
     if path in _REPORT_PARTS:
-        return PlainTextResponse("Not found", status_code=404)
+        return _not_found(request)
     if current_user(request):
         return await call_next(request)
     if path.startswith("/api/") or path.startswith("/partial/") or auth.mode() == "none":

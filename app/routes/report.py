@@ -25,6 +25,9 @@ def _build():
 
 @router.get("/api/report/server")
 async def report_server():
+    if demo.enabled():
+        # The demo's own machinery is nobody's business: the version and the mark.
+        return {"ok": True, "server": {"version": VERSION, "demo": True}}
     try:
         part = await asyncio.wait_for(asyncio.to_thread(_build), DEADLINE)
     except TimeoutError:
@@ -37,6 +40,8 @@ async def report_server():
 
 @router.get("/api/report/email")
 async def report_email():
+    if demo.enabled():
+        return {"ok": True, "email": ""}     # never asks plex.tv from the demo
     token = db.get_setting("plex_token")
     if not token:
         return {"ok": True, "email": ""}

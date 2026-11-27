@@ -21,8 +21,9 @@ services:
       TZ: ${TZ:-America/Los_Angeles}
       DEMO_TIMEZONE: ${TZ:-America/Los_Angeles}
       DEMO_RESET_HOUR: "4"
-      # Only Caddy sits on this network, and it is the one proxy to believe.
-      DEMO_TRUSTED_PROXIES: 172.29.0.0/24
+      # Caddy has the one fixed address below, and is the only proxy believed
+      # (not the gateway, which is where an IPv6 visitor's connection comes from).
+      DEMO_TRUSTED_PROXIES: 172.29.0.2/32
       # Two streams at once, live and recording together.
       DEMO_TUNERS: "2"
     volumes:
@@ -42,7 +43,7 @@ services:
       - no-new-privileges:true
 
   caddy:
-    image: caddy:2
+    image: caddy:2.8.4
     container_name: couchelephant-caddy
     restart: unless-stopped
     depends_on:
@@ -53,15 +54,13 @@ services:
       - "${HTTP_PORT:-80}:80"
       - "${HTTPS_PORT:-443}:443"
       - "${HTTPS_PORT:-443}:443/udp"
-      # Plain HTTP for an app address typed without https:// (the apps add
-      # this port to a bare name). See the Caddyfile.
-      - "8710:8710"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
       - caddy-config:/config
     networks:
       demo:
+        ipv4_address: 172.29.0.2
 
 networks:
   demo:

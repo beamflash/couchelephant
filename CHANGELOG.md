@@ -5,6 +5,11 @@
 ### Added
 
 - The wiki at couchelephant.app/wiki. It is written in the GitHub wiki and rebuilt by the Site workflow, with search and an "Edit this page" link.
+- A public demo for the App Store reviewer (docs/demo.md): the invented guide, tuner and recordings behind Caddy, signed in with an access code typed in the app, reset every night. The apps show an Access code field when a server says `code_signin`, and a bare host name typed in the apps is tried over https first.
+
+### Changed
+
+- The sign-in cookie is marked Secure when the request came over HTTPS (the app's own TLS listener, or a proxy listed under Trusted proxies). Plain-HTTP sign-in on a home network is unchanged.
 
 ## 1.5.41 - 2026-11-26
 

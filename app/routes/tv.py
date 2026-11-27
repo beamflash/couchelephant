@@ -35,6 +35,7 @@ from .. import (
     announce,
     auth,
     db,
+    demo,
     exposure,
     filters,
     handover,
@@ -193,7 +194,7 @@ def hello(request: Request):
     # `paired` is whether this television has a key, with sign-in on or off.
     # Every television gets one, because its own settings hang off it. With
     # sign-in off the key is handed over without anybody approving a code.
-    return {"ok": True, "name": "CouchElephant", "version": VERSION,
+    out = {"ok": True, "name": "CouchElephant", "version": VERSION,
             "id": paths.install_id(),
             "pairing_required": needs,
             "paired": bool(dev),
@@ -201,6 +202,11 @@ def hello(request: Request):
             "can_change_settings": bool(not needs or (dev and dev["allow_settings"])),
             "recorder": recorder.why_unavailable() is None,
             "recorder_note": recorder.why_unavailable()}
+    if demo.enabled():
+        # Only the public demo: the app shows an access code field instead of
+        # the six letters to approve (app/demo.py, POST /api/tv/pair/code).
+        out["code_signin"] = True
+    return out
 
 
 def _is_lan_host(host: str) -> bool:
@@ -302,7 +308,7 @@ def pair_start(request: Request, name: str = Form("Apple TV")):
         c.execute("INSERT INTO tv_devices (name, code, poll_hash, approved_at, created_at) "
                   "VALUES (?, ?, ?, ?, ?)",
                   (name[:60], code, _hash(secret),
-                   now if auth.mode() == "none" else None, now))
+                   now if auth.mode() == "none" and not demo.enabled() else None, now))
     return {"ok": True, "code": code, "secret": secret, "expires_in": PAIR_SECONDS}
 
 

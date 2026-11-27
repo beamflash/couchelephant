@@ -11,7 +11,7 @@ import os
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from .. import auth, db, handover, language, notify, passes, recorder, sync
+from .. import auth, db, demo, handover, language, notify, passes, recorder, sync
 from . import settings as web
 from ._shared import ZONES, current_user
 from .tv import device_for
@@ -67,6 +67,8 @@ def read(request: Request):
     s = db.all_settings()
     last = db.one("SELECT * FROM sync_log ORDER BY id DESC LIMIT 1")
     values = {k: str(s.get(k) or "") for k in web.KEYS if k != "plex_token"}
+    if demo.enabled():
+        values = demo.scrub_tv_settings(values)
     return {
         "ok": True,
         "may_change": may_change(request),

@@ -53,8 +53,8 @@ async def welcome_save(plex_url: str = Form(""), plex_token: str = Form(""),
 
 # ---------- sign in ----------
 
-def _set_session(resp, token):
-    resp.set_cookie(auth.SESSION_COOKIE, token, httponly=True, samesite="lax",
+def _set_session(resp, token, secure=False):
+    resp.set_cookie(auth.SESSION_COOKIE, token, httponly=True, samesite="lax", secure=secure,
                     max_age=auth.SESSION_TTL, path="/")
     return resp
 
@@ -67,7 +67,7 @@ def setup_form(request: Request, error: str = ""):
 
 
 @router.post("/setup")
-def setup_save(username: str = Form(""), password: str = Form("")):
+def setup_save(request: Request, username: str = Form(""), password: str = Form("")):
     if auth.mode() == "none" or not auth.needs_setup():
         return RedirectResponse("/", status_code=303)
     try:
@@ -75,7 +75,8 @@ def setup_save(username: str = Form(""), password: str = Form("")):
     except ValueError as e:
         return RedirectResponse(f"/setup?error={urllib.parse.quote(str(e))}",
                                 status_code=303)
-    return _set_session(RedirectResponse("/", status_code=303), auth.create_session(uid))
+    return _set_session(RedirectResponse("/", status_code=303), auth.create_session(uid),
+                        secure=exposure.request_is_https(request))
 
 
 @router.get("/login", response_class=HTMLResponse)
@@ -115,8 +116,10 @@ def login_save(request: Request, username: str = Form(""), password: str = Form(
     ratelimit.refund(keys[0])
     for k in keys[1:]:
         ratelimit.ok(k)
+    # Secure over HTTPS only: a plain-HTTP sign-in on the LAN must keep its cookie.
     return _set_session(RedirectResponse("/", status_code=303),
-                        auth.create_session(user["id"]))
+                        auth.create_session(user["id"]),
+                        secure=exposure.request_is_https(request))
 
 
 @router.post("/logout")

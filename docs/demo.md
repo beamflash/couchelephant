@@ -38,63 +38,74 @@ What is in it:
 
 ## How the reviewer signs in
 
-An app on the internet is "away from home", and the apps do not take a typed
-password. They show a six letter code and wait for somebody to approve it. At
-home that is done in the web Settings, but Settings is shut to anyone outside
-the home network, so the demo has its own page at `/demo` that takes the code
-the app shows plus the review code. The review code is `DEMO_CODE`, set in the
-server's environment and never in the source.
+The apps ask for an access code instead of the usual six letters to approve:
 
-The review code is also the web password for the user `reviewer`, if the
-reviewer wants to look at the web page at `https://demo.couchelephant.app`.
+1. Open the app and type `demo.couchelephant.app`.
+2. The app shows one field, "Access code". Type the code.
+3. It is in.
+
+The access code is `DEMO_CODE`, set in the server's environment and never in the
+source. It is 12 to 16 lowercase letters and digits with no look-alikes (no 0,
+o, 1, l or i), so it can be typed with a TV remote; the server will not start
+with any other kind. It is also the web password for the user `reviewer`.
+
+How it works: when the server is the demo, `GET /api/tv/hello` also says
+`"code_signin": true`, and the apps then show the field and send the code to
+`POST /api/tv/pair/code`. A right code makes a paired device and answers its
+key, as an approved pairing does. A wrong one makes nothing and counts against
+the sender's address: the access code has its own budget of 20 wrong tries per
+address in ten minutes (an office on one address may mistype now and then, and a
+right code always works inside the budget; the code is far too long to guess in
+20 tries). Past it even the right code waits. On a normal install that route answers 404 and `hello` never
+says `code_signin`. The older way still works too: the app's six letter code
+can be approved with the review code at `/demo`.
+
+A name typed on its own (a dot in it, not `.local`, not an IP address) is tried
+over `https://` first and only then as `http://name:8710`, so
+`demo.couchelephant.app` reaches the demo over HTTPS with no scheme typed. The
+demo is only reachable over HTTPS: the Caddyfile has no plain-HTTP block, and
+the access code never crosses the internet unencrypted.
 
 ## Reviewer notes for App Store Connect
 
-Paste this into App Review Information, Notes. Put the real review code where it
-says so. Nothing else is needed: there is no sign-in field to fill in, so leave
-the user name and password boxes empty and tick "Sign-in required" off.
+Paste this into App Review Information, Notes. Put the real access code where it
+says so. There is no user name or password field to fill in, so leave those
+boxes empty and "Sign-in required" off.
 
 ```
-CouchElephant is the client for a self-hosted TV recorder. It needs a server,
-so we run a public demo server for review at:
+CouchElephant is the client for a self-hosted TV recorder, so we run a public
+demo server for review. Everything on it (channels, shows, recordings, pictures)
+is invented, and it resets every night.
 
-    https://demo.couchelephant.app
+ACCESS CODE: <put the DEMO_CODE here>
 
-Everything on it (channels, shows, recordings, pictures) is invented. It resets
-every night, and it is safe to record, change channels and delete from the
-guide as much as you like.
+iPhone / iPad:
+1. Open CouchElephant and type  demo.couchelephant.app  in the address box, then
+   tap Connect.
+2. Type the access code in the "Access code" field and tap Sign in.
+3. You are in.
 
-REVIEW CODE: <put the DEMO_CODE here>
-
-To sign in, on iPhone or iPad:
-1. Open CouchElephant. In the address box type  https://demo.couchelephant.app
-   (with the https://) and tap Connect.
-2. The app shows a six letter code ("Let this phone in").
-3. In Safari (on the same phone, or on any computer) open
-   https://demo.couchelephant.app/demo
-   Type the review code above and the six letters, then tap "Let the app in".
-4. Go back to CouchElephant. It comes in by itself within a few seconds.
-
-On Apple TV, do the same: type https://demo.couchelephant.app with the on-screen
-keyboard, read the six letters off the TV, and approve them from a phone or
-computer at https://demo.couchelephant.app/demo.
+Apple TV:
+1. Open CouchElephant and type  demo.couchelephant.app  (Select on the box,
+   type on the remote's keyboard, then choose Connect).
+2. Select the "Access code" field, type the code, then choose Sign in.
+3. You are in.
 
 Things to try:
-- Home: "The Long Way Home" is left at 0:55. Press play: it resumes, and a
-  "Skip ad" button appears at 1:10 for the ad break.
-- Guide: open any channel to watch live TV (a moving test pattern). While it
-  plays, press down on the Apple TV remote, or swipe up on the iPhone, for the
-  guide over the picture and change channel.
-- Guide: open a programme and record it; it shows under Recordings, Set to record.
-- Recordings: Set to record has the scheduled recordings and a season pass.
-- Settings: Report an issue works as it does in the shipping app.
+- Live TV: Guide, open a channel (a moving test pattern). While it plays, press
+  down on the Apple TV remote, or swipe up on the iPhone, for the guide over the
+  picture and change channel.
+- Guide: look through the next day, open a programme, and record it.
+- Home: "The Long Way Home" is left at 0:55. Play it: it resumes, and a "Skip ad"
+  button shows at 1:10.
+- Recordings: Set to record has the scheduled recordings and a season pass
+  ("Marrowbrook").
+- Search: the magnifier in the Guide (try "lantern" or a channel number).
+- Settings: Report an issue opens the report screen as in the shipping app.
 
 The demo allows two video streams at once. If a live channel says every tuner is
 in use, wait a minute and try again.
 ```
-
-Wording to change if the first review comes back asking for more: Apple wants
-working credentials, so the notes say plainly why there is no user name field.
 
 ## Putting it on a server
 
@@ -105,15 +116,14 @@ reaches the server directly. A shared-core machine like that has a low sustained
 CPU allowance and bursts above it on credits, so set `DEMO_TUNERS` to 1 in the
 compose file if it ever runs short.
 
-1. Point DNS at it. Make an `A` record for `demo` (and an `AAAA` record if the
-   server has IPv6) in the `couchelephant.app` zone, with the server's address.
+1. Point DNS at it. Make an `A` record for `demo` in the `couchelephant.app` zone, with the server's address.
    Caddy cannot get a certificate until this resolves, so check
    `dig +short demo.couchelephant.app` from your own computer first.
-2. Open ports 80, 443 and 8710 (TCP) and 443 (UDP, for HTTP/3). With `ufw`:
+2. Open ports 80 and 443 (TCP) and 443 (UDP, for HTTP/3). With `ufw`:
 
    ```
    sudo ufw allow OpenSSH
-   sudo ufw allow 80,443,8710/tcp
+   sudo ufw allow 80,443/tcp
    sudo ufw allow 443/udp
    sudo ufw enable
    ```
@@ -134,8 +144,9 @@ compose file if it ever runs short.
    nano .env            # set DEMO_CODE to a long random string
    ```
 
-   `openssl rand -base64 18` makes a good one. It is at least 12 characters, and
-   it is also the web password for `reviewer`.
+   It must be 12 to 16 lowercase letters and digits without 0, o, 1, l or i.
+   This makes one:
+   `python3 -c "import secrets;print(''.join(secrets.choice('abcdefghjkmnpqrstuvwxyz23456789') for _ in range(14)))"`
 
 5. Start it:
 
@@ -158,20 +169,22 @@ compose file if it ever runs short.
 
 To update: `git pull`, then `docker compose up -d --build` again.
 
-## Resetting by hand
+## Resetting
 
-The demo puts itself back to the seeded state when it starts and at 04:00 every
+The content (the guide, the recordings, bookings, passes, favorites, the
+settings) goes back to the seeded state when the demo starts and at 04:00 every
 night on the container's clock (`TZ`, Pacific by default). Nobody has to do
-anything. To reset it right now:
+anything. Two things are kept across a reset on purpose, so a reviewer is not
+thrown out: the apps that were let in (and their keys) and the web sessions.
 
-```
-docker compose restart demo
-```
+The nightly reset is skipped if anyone with a key or a session was seen in the
+last 30 minutes. It asks again every hour. While a reset runs (a few seconds to
+a minute) every request but `/healthz` answers 503, and the sign-in settings are
+rewritten in place, never cleared, so the demo is never open for a moment.
 
-Everything a visitor made (devices that were let in, bookings, passes, deleted
-or watched positions, favorites) is gone after that, and so is every web
-session. To throw away even the data volume: `docker compose down -v`, then
-`docker compose up -d`.
+To reset the content right now: `docker compose restart demo`. To forget the
+apps that were let in as well, throw away the data volume with
+`docker compose down -v`, then `docker compose up -d`.
 
 ## What it does not let anyone do
 
@@ -181,17 +194,28 @@ internet reaches only what a paired app or the signed-in `reviewer` may.
 - No test routes. There is no `/test/...` anything, and no fake Firestore.
 - Writes are on an allow list (`app/demo.py`). The apps' own use is let
   through: favorites, recording, passes, live TV, resume positions. Everything
-  else answers 403: Settings, accounts, devices, backups, import and export,
-  updates, the Plex and tuner addresses and every button that makes the server
-  fetch an address. Deleting a recording is off too.
+  else answers 403: accounts, devices, backups, import and export, updates and
+  every button that makes the server fetch an address. Deleting a recording is
+  off too. The web Settings pages send a visitor to a short page at `/demo` that
+  says what to do. What an app's Settings screen reads has the server's own
+  addresses left out.
 - Reports are never sent from the server. The web page answers "This is a demo,
   so your report was not sent anywhere." See the first item below for the apps.
-- The sign-in limits stay on: five wrong passwords or review codes in ten
-  minutes lock that address for a minute, doubling up to an hour, and asking for
-  pairing codes counts the same way. The address is the real visitor's, read
-  from Caddy's `X-Forwarded-For`, and only Caddy is believed.
-- At most two video streams at once (the fake tuner has two tuners), every idle
-  live stream is stopped after a minute, and the container has a memory limit.
+- The sign-in limits stay on: five wrong web passwords in ten minutes lock that
+  address and account for a minute, doubling up to an hour, and asking for
+  pairing codes counts the same way. The review and access code has its own
+  budget (above). The address is the real visitor's, read from Caddy's
+  `X-Forwarded-For`, and only Caddy (a fixed address, 172.29.0.2, trusted as a
+  single address) is believed.
+- Nothing opens without the code, the web session cookie is marked Secure, and
+  the sign-in settings cannot be unset by anything the database holds.
+- At most two video streams at once (the fake tuner has two tuners). A live
+  channel stops a minute after the app stops playing it, five minutes after a
+  pause, and 30 minutes at the very most however it is kept alive.
+- Disk: a visitor can have two bookings at a time, a recording they make stops
+  after 30 minutes, the recordings folder is capped at 3 GB (the oldest recording
+  a visitor made goes first; the seeded ones never do), and the container has a
+  memory limit. The server this is meant for has a 20 GB disk.
 
 ## What could not be locked down
 
@@ -200,11 +224,6 @@ internet reaches only what a paired app or the signed-in `reviewer` may.
   review cannot be told otherwise. The server part of such a report carries
   `"demo": true`, so it can be told apart and thrown away. The web page's
   Report an issue is blocked as described above.
-- **The plain HTTP port 8710.** It is there so an address typed without
-  `https://` still works (the apps turn a bare name into `http://name:8710`).
-  The device key crosses the internet unencrypted on it. The key is worth nothing
-  outside this demo. Delete the second block of `deploy/demo/Caddyfile` to turn
-  it off.
 - **There is no per-address cap on connections** the way a home install has,
   because every visitor arrives from Caddy. Caddy's own open-source build has no
   rate limit either. A flood of requests costs CPU, and the container's memory
@@ -231,7 +250,8 @@ of the server and every ffmpeg it started, over 30 seconds:
 The viewing copy is software x264 at 640x360, 24 frames a second. The fake
 tuner has two tuners (`DEMO_TUNERS`), and a recording that starts on schedule
 takes one, so at most two ffmpeg pairs ever run. A third request is answered
-"Every tuner is in use". Live sessions nobody touches for five minutes are ended.
+"Every tuner is in use". A live channel stops a minute after the app stops
+playing it, and five minutes after a pause.
 On disk the demo is about 200 MB of recordings plus the guide.
 
 ## Behind a proxy: what the apps expect
