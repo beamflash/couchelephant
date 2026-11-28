@@ -11,7 +11,7 @@ import struct
 import threading
 import time
 import zlib
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait
 from urllib.parse import urlsplit
 
 import httpx
@@ -25,6 +25,7 @@ LINEUP_TTL = 600            # a lineup is trusted this long
 LINEUP_KEEP = 3600          # and a failed read keeps the last good one this long
 STATUS_TTL = 5              # one tick asks each box at most once
 STATUS_FAIL_TTL = 15        # a box that did not answer is left alone a while
+LINEUP_BUDGET = 6           # all the lineup reads of one call share this many seconds
 LINEUP_RETRY = 30           # a lineup that failed is asked again this soon
 SEEN_EVERY = 60             # last_seen is written at most this often
 
@@ -288,6 +289,30 @@ def lineup(box) -> tuple[list[dict], bool]:
         _lineups[key] = {"addr": box["address"], "rows": rows, "stale": False,
                          "tried_at": now, "good_at": now}
     return rows, False
+
+
+def lineups(boxes) -> dict:
+    """{box id: (channels, stale)} for every box, read together. The reads
+    share one time limit, so a hung box costs that and not its own timeout on
+    top of every other box's. A box that missed the limit shows what was
+    cached for it, stale, or nothing."""
+    boxes = list(boxes)
+    if len(boxes) < 2:
+        return {b["id"]: lineup(b) for b in boxes}
+    pool = ThreadPoolExecutor(max_workers=len(boxes))
+    futs = {b["id"]: pool.submit(lineup, b) for b in boxes}
+    wait(list(futs.values()), timeout=LINEUP_BUDGET)
+    pool.shutdown(wait=False)       # a hung read finishes on its own, into the cache
+    out = {}
+    for b in boxes:
+        f = futs[b["id"]]
+        if f.done() and not f.exception():
+            out[b["id"]] = f.result()
+            continue
+        with _lock:
+            c = _lineups.get(b["id"])
+            out[b["id"]] = (c["rows"] if c and c["addr"] == b["address"] else [], True)
+    return out
 
 
 def lineup_is_stale(box) -> bool:

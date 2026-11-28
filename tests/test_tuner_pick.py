@@ -186,3 +186,48 @@ def test_without_a_describer_a_live_hold_reads_live(two_boxes):
     finally:
         tuner.release(8)
     assert "Live: 5.1" in [t["label"] for t in got]
+
+
+def _slow_lineup(monkeypatch, delays):
+    real = tunerbox._read_lineup
+
+    def read(box):
+        time.sleep(delays.get(box["address"], 0))
+        return real(box)
+    monkeypatch.setattr(tunerbox, "_read_lineup", read)
+
+
+def test_lineups_of_several_boxes_are_read_together(two_boxes, monkeypatch):
+    a, b = two_boxes
+    _slow_lineup(monkeypatch, {a.url: 1.0, b.url: 1.0})
+    t = time.time()
+    assert len(tuner.pick("5.1")) == 2
+    assert time.time() - t < 1.7                      # not 2, one after the other
+
+
+def test_a_hung_lineup_is_waited_for_only_so_long(two_boxes, monkeypatch):
+    a, b = two_boxes
+    monkeypatch.setattr(tunerbox, "LINEUP_BUDGET", 0.4)
+    _slow_lineup(monkeypatch, {b.url: 3})
+    t = time.time()
+    got = tuner.pick("5.1")
+    assert time.time() - t < 1.5
+    # B has nothing cached yet: it is still tried, last, at the usual address.
+    assert _addr(got) == [a.url, b.url]
+    assert got[1][1] == f"{b.url}/auto/v5.1"
+
+
+def test_a_box_that_never_gave_a_lineup_is_listed_last(two_boxes, monkeypatch):
+    a, b = two_boxes
+    real = tunerbox._read_lineup
+
+    def read(box):
+        if box["address"] == b.url:
+            raise OSError("timed out")
+        return real(box)
+    monkeypatch.setattr(tunerbox, "_read_lineup", read)
+    got = tuner.pick("62.1")                          # only B's own lineup has it
+    assert _addr(got) == [b.url]
+    got = tuner.pick("5.1")
+    assert _addr(got) == [a.url, b.url]
+    assert got[1][1] == f"{b.url}/auto/v5.1"

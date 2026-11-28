@@ -196,3 +196,10 @@ def test_a_200_with_no_body_on_the_only_box_says_what_happened(two_boxes):
     recorder.tick()
     _until(lambda: (recorder.tick() or recorder.get(rec_id)["error"]))
     assert recorder.get(rec_id)["error"] == "The tuner sent nothing for channel 5.1."
+
+
+def test_overtime_ignores_a_waiting_recording_no_box_carries(two_boxes):
+    now = int(time.time())
+    game = recorder.get(_book("5.1", "game"))
+    _book("99.9")                                  # a channel nobody carries
+    assert not overtime._tuner_wanted(game, now)

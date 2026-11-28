@@ -323,8 +323,17 @@ def _tuner_wanted(rec, now) -> bool:
         # Each waiting recording needs a tuner on a box that carries its own
         # channel, so each channel is asked about.
         if waiting:
-            return any(tuner.free(r["channel_vcn"]) == 0 for r in waiting)
+            return any(_none_free(r["channel_vcn"]) for r in waiting)
         return tuner.free() == 0
+    except tuner.TunerError:
+        return False
+
+
+def _none_free(vcn) -> bool:
+    """No free tuner on a box that carries this channel. A channel no box
+    carries cannot be helped by ending the game early, so it is not asked for."""
+    try:
+        return tuner.free(vcn) == 0
     except tuner.TunerError:
         return False
 

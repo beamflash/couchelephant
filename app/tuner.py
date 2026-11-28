@@ -78,14 +78,19 @@ def _hand_built(box, vcn: str) -> str:
 
 def _carry(boxes, vcn: str):
     """The boxes that carry a channel: ([(box, stale, url)], refusals)."""
-    lineups = {b["id"]: tunerbox.lineup(b) for b in boxes}
+    lineups = tunerbox.lineups(boxes)
     if not any(rows for rows, _ in lineups.values()):
         # Nobody could say. Every box is tried at the usual address, so a box
         # with no lineup records as it always did.
         return [(b, False, _hand_built(b, vcn)) for b in boxes], []
-    carry, refusals = [], []
+    carry, refusals, unknown = [], [], []
     for b in boxes:
         rows, stale = lineups[b["id"]]
+        if stale and not rows:
+            # Never read, or not in the last hour: it may carry the channel,
+            # so it stays on the list, last, at the usual address.
+            unknown.append((b, True, _hand_built(b, vcn)))
+            continue
         row = next((r for r in rows if str(r.get("GuideNumber")) == str(vcn)), None)
         if not row:
             continue
@@ -94,7 +99,7 @@ def _carry(boxes, vcn: str):
             refusals.append(why)
             continue
         carry.append((b, stale, row.get("URL") or _hand_built(b, vcn)))
-    return carry, refusals
+    return carry + unknown, refusals
 
 
 def _answered(box) -> bool:
@@ -155,6 +160,8 @@ def free(vcn: str | None = None) -> int:
         raise TunerError(NO_ADDRESS)
     if vcn is not None:
         boxes = [b for b, _, _ in _carry(boxes, vcn)[0]]
+        if not boxes:
+            raise TunerError(f"No tuner carries channel {vcn}.")
     sts = tunerbox.statuses(boxes)
     return sum(_free_on(b, sts[b["id"]]) for b in boxes)
 
@@ -169,8 +176,10 @@ def total() -> int:
 def refused_channels() -> set[str]:
     """Channels every box that carries them refuses (encrypted, ATSC 3.0)."""
     carried, refused = set(), set()
-    for b in allowed_boxes():
-        for c in tunerbox.lineup(b)[0]:
+    boxes = allowed_boxes()
+    got = tunerbox.lineups(boxes)
+    for b in boxes:
+        for c in got[b["id"]][0]:
             vcn = str(c.get("GuideNumber"))
             if refusal(c):
                 refused.add(vcn)
