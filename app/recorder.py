@@ -377,6 +377,11 @@ class Capture(threading.Thread):
                         f.write(chunk)
                         self._note(len(chunk))
                         got = True
+                if not got and not self._halt.is_set():
+                    # A 200 that ends with nothing in it (Threadfin does this
+                    # for a channel it cannot tune): same as a refusal.
+                    vcn = rec["channel_vcn"] if rec else ""
+                    self.error = f"The tuner sent nothing for channel {vcn}."
         except Exception as e:
             if not self._halt.is_set():
                 self.error = f"The tuner stream stopped: {e}"

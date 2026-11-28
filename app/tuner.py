@@ -67,7 +67,12 @@ def refusal(c: dict) -> str | None:
 def _hand_built(box, vcn: str) -> str:
     """Where a channel streams from when the lineup cannot be asked, so a
     recording does not fail on a lineup request that timed out."""
-    host = box["address"].split("://", 1)[1].split(":")[0]
+    hostport = box["address"].split("://", 1)[1]
+    host, _, port = hostport.partition(":")
+    if port and port != "80":
+        # Not a real HDHomeRun (Threadfin, an emulator): it streams on the
+        # port it answers on.
+        return f"{box['address']}/auto/v{vcn}"
     return f"http://{host}:5004/auto/v{vcn}"
 
 

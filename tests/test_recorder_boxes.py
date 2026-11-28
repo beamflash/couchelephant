@@ -176,3 +176,23 @@ def test_a_dead_box_with_a_stale_lineup_is_not_counted_as_free(two_boxes, monkey
     _book("5.1")
     recorder.tick()
     assert recorder.get(live) is None
+
+
+def test_a_200_with_no_body_is_said_and_the_next_box_is_tried(two_boxes):
+    a, b = two_boxes
+    ida, idb = _ids()
+    a.empty = True
+    rec_id = _book("5.1")
+    _go(rec_id)
+    assert recorder.get(rec_id)["tuner_box"] == str(idb)
+
+
+def test_a_200_with_no_body_on_the_only_box_says_what_happened(two_boxes):
+    a, b = two_boxes
+    ida, idb = _ids()
+    tunerbox.set_enabled(idb, False)
+    a.empty = True
+    rec_id = _book("5.1")
+    recorder.tick()
+    _until(lambda: (recorder.tick() or recorder.get(rec_id)["error"]))
+    assert recorder.get(rec_id)["error"] == "The tuner sent nothing for channel 5.1."

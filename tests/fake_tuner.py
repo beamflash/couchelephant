@@ -29,6 +29,7 @@ class State:
         self.streams = []           # every channel number ever streamed, in order
         self.live = []              # channel numbers streaming right now
         self.silent = False         # connect, then send nothing
+        self.empty = False          # answer 200 with no body at all, like Threadfin
         self.extra = []             # lineup rows a test adds: DRM, ATSC 3.0
         self.device_id = "FAKE0001"
         self.name = "Fake HDHomeRun"
@@ -107,6 +108,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 return
             vcn = self.path[len("/auto/v"):]
+            if st.empty:
+                self.send_response(200)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             st.streams.append(vcn)
             st.live.append(vcn)
             maker = _pattern(vcn) if VIDEO else None

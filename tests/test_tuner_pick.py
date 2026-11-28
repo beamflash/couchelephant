@@ -71,8 +71,15 @@ def test_one_box_with_no_lineup_gets_the_hand_built_url(tuner, monkeypatch):
     box = tunerbox.rows()[0]
     got = tuner_mod.pick("5.1")
     assert len(got) == 1
-    host = box["address"].split("://", 1)[1].split(":")[0]
-    assert got[0][1] == f"http://{host}:5004/auto/v5.1"
+    # The fake answers on a port of its own, so that is where it streams.
+    assert got[0][1] == f"{box['address']}/auto/v5.1"
+
+
+def test_a_plain_address_streams_from_port_5004():
+    box = {"address": "http://192.0.2.9"}
+    assert tuner_mod._hand_built(box, "5.1") == "http://192.0.2.9:5004/auto/v5.1"
+    assert tuner_mod._hand_built({"address": "http://192.0.2.9:80"}, "5.1") \
+        == "http://192.0.2.9:5004/auto/v5.1"
 
 
 def test_a_refused_channel_is_refused_in_words(two_boxes):
