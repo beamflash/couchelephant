@@ -132,7 +132,8 @@ Plex. Type one only if that fails.
 
 A station sends MPEG-2 video, which a television app and most browsers cannot
 play. So each recording has two files: the broadcast, untouched, which is what
-Plex receives, and a copy made for watching (H.264, stereo). The copy is kept
+Plex receives, and a copy made for watching (H.264, with the station's own 5.1
+sound and a stereo track). The copy is kept
 for two days after Plex has the recording and is made again on demand.
 
 ### The Apple TV and iPhone apps

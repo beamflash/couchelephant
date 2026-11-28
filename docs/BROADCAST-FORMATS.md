@@ -17,6 +17,10 @@ tested with clips made from a real broadcast (see "Checking it again").
 ## How the copy is made
 
 - **Sound.** The first sound track is turned into stereo AAC, whatever it was.
+  When it is AC-3 (every ATSC 1.0 station), it is also kept untouched, as the
+  first track, ahead of the stereo one: an Apple TV passes 5.1 to a receiver,
+  and Safari plays it; browsers without AC-3 play the stereo track. E-AC-3 is
+  made stereo alone, because the web player stops at an E-AC-3 track.
   A subchannel with no sound at all is fine: the sound is optional.
 - **Timing.** Every picture keeps the broadcast's own time stamp. A constant
   rate filled gaps in a broadcast with copies of pictures, and each copy
