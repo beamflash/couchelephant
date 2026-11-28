@@ -37,6 +37,23 @@ def allowed_boxes():
     return tunerbox.rows(enabled_only=True)
 
 
+# Set by the recorder: called with (old box id, new box id) after a merge.
+box_merged = None
+
+
+def _moved(old_id: int, new_id: int) -> None:
+    """Two rows became one: our streams on the deleted row are on the kept one."""
+    with _hold_lock:
+        for j, (b, v) in list(_holds.items()):
+            if b == old_id:
+                _holds[j] = (new_id, v)
+    if box_merged:
+        box_merged(old_id, new_id)
+
+
+tunerbox.merged = _moved
+
+
 def hold(job_id: int, box_id: int, vcn: str) -> None:
     with _hold_lock:
         _holds[job_id] = (box_id, str(vcn))

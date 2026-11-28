@@ -29,6 +29,10 @@ LINEUP_BUDGET = 6           # all the lineup reads of one call share this many s
 LINEUP_RETRY = 30           # a lineup that failed is asked again this soon
 SEEN_EVERY = 60             # last_seen is written at most this often
 
+# Set by tuner.py: called with (deleted id, kept id) when two rows become one,
+# so what is streaming from the deleted one follows to the kept one.
+merged = None
+
 _lock = threading.Lock()
 _add_lock = threading.Lock()    # the check-then-insert of a typed row
 _lineups: dict = {}
@@ -127,9 +131,12 @@ def _merge_twins(device_id, count) -> None:
         if len(twins) < 2:
             return
         keep = {t["id"] for t in twins if t["found_by"] == "typed"} or {twins[0]["id"]}
-        for t in twins:
-            if t["id"] not in keep:
-                c.execute("DELETE FROM tuner_boxes WHERE id = ?", (t["id"],))
+        gone = [t["id"] for t in twins if t["id"] not in keep]
+        for box_id in gone:
+            c.execute("DELETE FROM tuner_boxes WHERE id = ?", (box_id,))
+    for box_id in gone:
+        if merged:
+            merged(box_id, min(keep))
 
 
 def add_typed(address: str) -> int:

@@ -7,7 +7,7 @@ import time
 import httpx
 import pytest
 
-from app import overtime, recorder, tunerbox
+from app import db, overtime, recorder, tuner, tunerbox
 from tests.test_recorder import _airing, _record, _until
 
 
@@ -213,3 +213,24 @@ def test_gaps_already_written_down_survive_a_restart(two_boxes):
     time.sleep(0.5)
     recorder.tick()
     assert json.loads(recorder.get(rec_id)["gaps"]) == old
+
+
+def test_merging_a_box_a_recording_streams_on_moves_the_hold(two_boxes):
+    a, _ = two_boxes
+    rec_id = _book("5.1")
+    _go(rec_id)
+    old_id = _ids()[0]
+    job = recorder._jobs[rec_id]
+    # A becomes a found row, and a typed twin of it turns up.
+    with db.tx() as c:
+        c.execute("UPDATE tuner_boxes SET found_by = 'plex' WHERE id = ?", (old_id,))
+        row = c.execute("SELECT * FROM tuner_boxes WHERE id = ?", (old_id,)).fetchone()
+        cur = c.execute("INSERT INTO tuner_boxes (device_id, address, tuner_count, found_by, "
+                        "enabled) VALUES (?, ?, ?, 'typed', 1)",
+                        (row["device_id"], row["address"], row["tuner_count"]))
+        new_id = cur.lastrowid
+    tunerbox._merge_twins(row["device_id"], row["tuner_count"])
+    assert tunerbox.get(old_id) is None
+    assert tuner._holds[rec_id][0] == new_id
+    assert recorder.get(rec_id)["tuner_box"] == str(new_id)
+    assert job.capture.box_id == new_id

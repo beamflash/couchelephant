@@ -580,6 +580,20 @@ def _describe_hold(job_id: int) -> str | None:
 tuner.describe_hold = _describe_hold
 
 
+def _box_merged(old_id: int, new_id: int) -> None:
+    """A box row was merged into another: recordings and running captures
+    that named the old id name the new one."""
+    with db.tx() as c:
+        c.execute("UPDATE recordings SET tuner_box = ? WHERE tuner_box = ?",
+                  (str(new_id), str(old_id)))
+    for job in list(_jobs.values()):
+        if job.capture and job.capture.box_id == old_id:
+            job.capture.box_id = new_id
+
+
+tuner.box_merged = _box_merged
+
+
 # ---------- rows ----------
 
 def get(rec_id: int):
