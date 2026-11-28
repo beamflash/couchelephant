@@ -73,6 +73,10 @@
       h += '<div class="tvlock">' + esc(r.error || 'It did not record.') + '</div>';
     } else {
       if (live) h += '<span class="dim tiny">' + clock(r.seconds) + ' recorded so far</span>';
+      // A hole the tuner left in it, one quiet line each.
+      (r.gap_note || []).forEach(function (n) {
+        h += '<span class="dim tiny gapnote">' + esc(n) + '</span>';
+      });
       // How far in somebody stopped, as a bar, when it is far enough to matter.
       if (!live && r.position > 60 && r.seconds > 0) {
         h += '<div class="tvbar"><i style="width:' +
