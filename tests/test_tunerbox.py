@@ -154,20 +154,21 @@ def test_two_quick_adds_of_one_address_make_one_row(monkeypatch):
     assert ids[0] == ids[1]
 
 
-OLD_TABLE = """CREATE TABLE tuner_boxes (
-    id INTEGER PRIMARY KEY, device_id TEXT, address TEXT NOT NULL, name TEXT, model TEXT,
-    firmware TEXT, tuner_count INTEGER, found_by TEXT NOT NULL, enabled INTEGER DEFAULT 1,
-    last_seen INTEGER, error TEXT, added_at INTEGER)"""
-
-
 def test_a_removed_boxs_id_is_never_given_to_another():
-    with db.tx() as c:
-        c.execute("DROP TABLE tuner_boxes")
-        c.execute(OLD_TABLE)
-        c.execute("INSERT INTO tuner_boxes (address, found_by, name) "
-                  "VALUES ('http://192.0.2.1', 'typed', 'keep me')")
-    db.init()                                           # an old install starting up
-    assert [r["name"] for r in tunerbox._rows()] == ["keep me"]
     first = tunerbox.add_typed("192.0.2.2")
     assert tunerbox.remove(first)
     assert tunerbox.add_typed("192.0.2.3") > first
+
+
+def test_a_database_cut_off_mid_rebuild_heals_on_init():
+    # The old code renamed the table and died before copying: the rows sit in
+    # tuner_boxes_old and a fresh empty tuner_boxes was made beside them.
+    conn = db.connect()
+    conn.execute("INSERT INTO tuner_boxes (id, address, found_by) "
+                 "VALUES (7, 'http://192.0.2.7', 'typed')")
+    conn.execute("ALTER TABLE tuner_boxes RENAME TO tuner_boxes_old")
+    conn.executescript(db.SCHEMA)
+    conn.commit()
+    db.init()
+    assert [r["id"] for r in tunerbox.rows()] == [7]
+    assert not conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'tuner_boxes_old'").fetchone()

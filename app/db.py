@@ -727,7 +727,7 @@ def init() -> None:
     _recorder_default_to_auto(conn)
     _reslot_airing_ids(conn)
     _timmyd_to_webhook(conn)
-    _tuner_boxes_autoincrement(conn)
+    _heal_tuner_boxes(conn)
     # After the migration and the backfill, not inside SCHEMA: on an existing
     # install the column does not exist until _migrate has run.
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS passes_uid ON passes(uid)")
@@ -737,20 +737,23 @@ def init() -> None:
     tunerbox.migrate_settings()
 
 
-def _tuner_boxes_autoincrement(conn):
-    """A recording names its box by id, so an id must never be handed out
-    twice. Tables made before AUTOINCREMENT are rebuilt, rows kept."""
-    row = conn.execute("SELECT sql FROM sqlite_master WHERE type = 'table' "
-                       "AND name = 'tuner_boxes'").fetchone()
-    if not row or "AUTOINCREMENT" in (row["sql"] or "").upper():
+def _heal_tuner_boxes(conn):
+    """Only a dev database can hold `tuner_boxes_old`: an earlier build
+    renamed the table to rebuild it and could die before copying. The rows
+    go back and the leftover goes, in one transaction."""
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' "
+                        "AND name = 'tuner_boxes_old'").fetchone():
         return
     cols = "id, device_id, address, name, model, firmware, tuner_count, found_by, " \
            "enabled, last_seen, error, added_at"
-    conn.execute("ALTER TABLE tuner_boxes RENAME TO tuner_boxes_old")
-    conn.executescript(SCHEMA)          # makes the new table, with AUTOINCREMENT
-    conn.execute(f"INSERT INTO tuner_boxes ({cols}) SELECT {cols} FROM tuner_boxes_old")
-    conn.execute("DROP TABLE tuner_boxes_old")
-    conn.commit()
+    try:
+        conn.execute(f"INSERT OR IGNORE INTO tuner_boxes ({cols}) "
+                     f"SELECT {cols} FROM tuner_boxes_old")
+        conn.execute("DROP TABLE tuner_boxes_old")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def _reslot_airing_ids(conn):
