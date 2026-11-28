@@ -400,14 +400,50 @@ def discover_packet() -> bytes:
     return head + payload + struct.pack("<I", zlib.crc32(head + payload))
 
 
+def _local_address() -> str | None:
+    """This machine's own address on the home network, or None."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("192.0.2.1", 9))     # sends nothing, only picks the route
+        return s.getsockname()[0]
+    except OSError:
+        return None
+    finally:
+        s.close()
+
+
+_HOME_NETS = ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
+
+
+def _neighbours() -> list[str]:
+    """Every other address on this machine's /24 of a home network. Asked one
+    by one as well as by broadcast, because a host firewall (ufw) drops the
+    answer to a broadcast but lets the answer to a direct question through."""
+    try:
+        me = ipaddress.ip_address(_local_address() or "")
+    except ValueError:
+        return []
+    if not any(me in ipaddress.ip_network(n) for n in _HOME_NETS):
+        return []
+    net = ipaddress.ip_network(f"{me}/24", strict=False)
+    return [str(h) for h in net.hosts() if h != me]
+
+
 def broadcast(timeout: float = 1.5) -> list[str]:
-    """Shout on the LAN and return the address of every box that answers.
-    Raises OSError when the socket cannot broadcast."""
+    """Shout on the LAN, ask every neighbour directly too, and return the
+    address of every box that answers. Raises OSError when the socket cannot
+    broadcast."""
     found: list[str] = []
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        s.sendto(discover_packet(), (DISCOVER_ADDR, DISCOVER_PORT))
+        pkt = discover_packet()
+        s.sendto(pkt, (DISCOVER_ADDR, DISCOVER_PORT))
+        for ip in _neighbours():
+            try:
+                s.sendto(pkt, (ip, DISCOVER_PORT))
+            except OSError:
+                pass                    # one unreachable neighbour is nothing
         end = time.time() + timeout
         while (left := end - time.time()) > 0:
             s.settimeout(left)
@@ -415,6 +451,8 @@ def broadcast(timeout: float = 1.5) -> list[str]:
                 _, (ip, _port) = s.recvfrom(2048)
             except TimeoutError:
                 break
+            except OSError:
+                continue                # an ICMP "unreachable" from a neighbour
             if ip not in found:
                 found.append(ip)
     finally:
@@ -423,17 +461,18 @@ def broadcast(timeout: float = 1.5) -> list[str]:
 
 
 def _on_docker_bridge() -> bool:
-    """True when the only way out is a Docker bridge, where a broadcast never
-    reaches the real network."""
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        s.connect(("192.0.2.1", 9))     # sends nothing, only picks the route
-        ip = ipaddress.ip_address(s.getsockname()[0])
-    except (OSError, ValueError):
+    """True inside a container on a Docker bridge, where the house network is
+    out of reach. Told by the interfaces: a bridge gives the container only
+    its own end (eth0), host networking shows the host's own. Not by the
+    address, since plenty of homes use 172.16 to 172.31 too."""
+    from . import paths
+    if not paths._in_container():
         return False
-    finally:
-        s.close()
-    return ip in ipaddress.ip_network("172.16.0.0/12")
+    try:
+        names = {n for _, n in socket.if_nameindex()}
+    except OSError:
+        return False
+    return names <= {"lo", "eth0"}
 
 
 def _plex_address(uri: str) -> str:

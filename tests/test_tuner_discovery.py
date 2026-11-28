@@ -126,3 +126,52 @@ def test_silence_on_a_docker_bridge_says_the_network_cannot_be_searched(monkeypa
     assert tunerbox.discover()["can_find_on_network"] is False
     monkeypatch.setattr(tunerbox, "_on_docker_bridge", lambda: False)
     assert tunerbox.discover()["can_find_on_network"] is True
+
+
+def test_a_box_behind_a_firewall_that_drops_broadcast_replies_is_asked_directly(monkeypatch):
+    # A host firewall (ufw) drops the answer to a broadcast, because it does
+    # not match anything sent to that box. The answer to a packet sent
+    # straight to the box gets through, so every neighbour is asked too.
+    srv = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    srv.bind(("127.0.0.1", 0))
+    port = srv.getsockname()[1]
+
+    def answer():
+        data, addr = srv.recvfrom(2048)
+        srv.sendto(b"reply", addr)
+
+    t = threading.Thread(target=answer, daemon=True)
+    t.start()
+    monkeypatch.setattr(tunerbox, "DISCOVER_ADDR", "127.0.0.3")   # nobody listens there
+    monkeypatch.setattr(tunerbox, "DISCOVER_PORT", port)
+    monkeypatch.setattr(tunerbox, "_neighbours", lambda: ["127.0.0.1"])
+    try:
+        assert tunerbox.broadcast(timeout=1) == ["127.0.0.1"]
+    finally:
+        t.join(2)
+        srv.close()
+
+
+def test_the_neighbours_are_the_rest_of_the_local_network(monkeypatch):
+    monkeypatch.setattr(tunerbox, "_local_address", lambda: "192.168.50.7")
+    got = tunerbox._neighbours()
+    assert len(got) == 253
+    assert "192.168.50.7" not in got and "192.168.50.0" not in got and "192.168.50.255" not in got
+    monkeypatch.setattr(tunerbox, "_local_address", lambda: None)
+    assert tunerbox._neighbours() == []
+    monkeypatch.setattr(tunerbox, "_local_address", lambda: "203.0.113.9")   # not a home network
+    assert tunerbox._neighbours() == []
+
+
+def test_a_home_network_in_172_is_not_taken_for_a_docker_bridge(monkeypatch):
+    from app import paths
+    monkeypatch.setattr(paths, "_in_container", lambda: True)
+    # Host networking: the container sees the host's own interfaces.
+    monkeypatch.setattr(socket, "if_nameindex",
+                        lambda: [(1, "lo"), (2, "enp47s0"), (3, "docker0")])
+    assert tunerbox._on_docker_bridge() is False
+    # A bridge: only its own end of the bridge.
+    monkeypatch.setattr(socket, "if_nameindex", lambda: [(1, "lo"), (2, "eth0")])
+    assert tunerbox._on_docker_bridge() is True
+    monkeypatch.setattr(paths, "_in_container", lambda: False)
+    assert tunerbox._on_docker_bridge() is False
