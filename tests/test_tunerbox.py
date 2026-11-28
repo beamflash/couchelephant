@@ -101,3 +101,37 @@ def test_the_fake_box_answers_discover_json(tuner_url):
     d = httpx.get(tuner_url + "/discover.json").json()
     assert d["DeviceID"] == "FAKE0001" and d["TunerCount"] == 4
     assert fake_tuner.STATE.url == tuner_url
+
+
+def _raw(address, found_by):
+    with db.tx() as c:
+        return c.execute("INSERT INTO tuner_boxes (address, found_by, enabled, added_at) "
+                         "VALUES (?, ?, 1, 0)", (address, found_by)).lastrowid
+
+
+INFO = {"DeviceID": "DUP00001", "TunerCount": 4, "FriendlyName": "Box"}
+
+
+def test_two_rows_that_turn_out_to_be_one_box_become_one_and_the_typed_stays():
+    found = _raw("http://192.0.2.7", "plex")
+    typed = _raw("http://box.example:80", "typed")
+    tunerbox._refresh(found, INFO)
+    assert len(tunerbox._rows()) == 2
+    tunerbox._refresh(typed, INFO)
+    assert [r["id"] for r in tunerbox._rows()] == [typed]
+
+
+def test_two_found_rows_of_one_box_keep_the_lower_id():
+    one = _raw("http://192.0.2.8", "network")
+    two = _raw("http://192.0.2.9", "plex")
+    tunerbox._refresh(two, INFO)
+    tunerbox._refresh(one, INFO)
+    assert [r["id"] for r in tunerbox._rows()] == [one]
+
+
+def test_a_box_with_a_different_tuner_count_is_not_merged():
+    one = _raw("http://192.0.2.8", "network")
+    two = _raw("http://192.0.2.9", "plex")
+    tunerbox._refresh(one, INFO)
+    tunerbox._refresh(two, dict(INFO, TunerCount=2))
+    assert len(tunerbox._rows()) == 2

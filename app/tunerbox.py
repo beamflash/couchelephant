@@ -111,6 +111,23 @@ def _refresh(box_id: int, info: dict) -> None:
                   "tuner_count = ?, last_seen = ?, error = NULL WHERE id = ?",
                   (f["device_id"], f["name"], f["model"], f["firmware"], f["tuner_count"],
                    int(time.time()), box_id))
+    _merge_twins(f["device_id"], f["tuner_count"])
+
+
+def _merge_twins(device_id, count) -> None:
+    """Rows that turn out to be one box (same DeviceID and tuner count) become
+    one. A typed row always stays; with none typed the lower id does."""
+    if not device_id:
+        return
+    with db.tx() as c:
+        twins = c.execute("SELECT id, found_by FROM tuner_boxes WHERE device_id = ? "
+                          "AND tuner_count IS ? ORDER BY id", (device_id, count)).fetchall()
+        if len(twins) < 2:
+            return
+        keep = {t["id"] for t in twins if t["found_by"] == "typed"} or {twins[0]["id"]}
+        for t in twins:
+            if t["id"] not in keep:
+                c.execute("DELETE FROM tuner_boxes WHERE id = ?", (t["id"],))
 
 
 def add_typed(address: str) -> int:
