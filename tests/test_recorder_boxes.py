@@ -203,3 +203,13 @@ def test_overtime_ignores_a_waiting_recording_no_box_carries(two_boxes):
     game = recorder.get(_book("5.1", "game"))
     _book("99.9")                                  # a channel nobody carries
     assert not overtime._tuner_wanted(game, now)
+
+
+def test_gaps_already_written_down_survive_a_restart(two_boxes):
+    rec_id = _book("5.1")
+    old = [{"at": 100, "seconds": 7}]
+    recorder._set(rec_id, gaps=json.dumps(old))
+    _go(rec_id)
+    time.sleep(0.5)
+    recorder.tick()
+    assert json.loads(recorder.get(rec_id)["gaps"]) == old

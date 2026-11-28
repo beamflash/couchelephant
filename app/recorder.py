@@ -321,8 +321,16 @@ class Capture(threading.Thread):
         self.error: str | None = None
         self.connected_at: int | None = None
         self.box_id: int | None = None
-        self.gaps: list[dict] = []
+        # Holes already written down, from before a restart of the app.
+        rec = get(job_id)
+        try:
+            self.gaps: list[dict] = json.loads((rec["gaps"] if rec else None) or "[]")
+        except ValueError:
+            self.gaps = []
         self._first = None          # when the first byte came
+        if rec and rec["started_at"]:
+            # After a restart, new holes are still counted from the start.
+            self._first = time.monotonic() - max(0, time.time() - rec["started_at"])
         self._last = None           # when the latest byte came
         self._fresh = False         # a new connection, no byte read from it yet
         self._halt = threading.Event()
@@ -394,7 +402,8 @@ class Capture(threading.Thread):
     def _note(self, n: int):
         now = time.monotonic()
         if self._last is None:
-            self._first = now
+            if self._first is None:
+                self._first = now
         elif self._fresh and now - self._last > GAP_MIN_SECONDS:
             self.gaps.append({"at": int(self._last - self._first),
                               "seconds": max(1, round(now - self._last))})
