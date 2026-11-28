@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.5.44 - 2026-11-28
+
+### Fixed
+
+- Finding HDHomeRun boxes on the network works behind a host firewall (ufw and similar), which drops the answer to a broadcast. When the broadcast finds nothing, CouchElephant also asks each address on its own network directly: at most once an hour while no box is known, and once a day after that.
+- A home network on 172.16 to 172.31 is no longer taken for a Docker bridge, so Settings no longer says boxes cannot be found there.
+
 ## 1.5.43 - 2026-11-28
 
 ### Added
