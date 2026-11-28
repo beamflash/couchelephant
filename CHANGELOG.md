@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.5.43 - 2026-11-28
+
+### Added
+
+- **Several HDHomeRun boxes.** CouchElephant keeps every box it finds (Plex's device list, the HDHomeRun network broadcast) and every address you add, and records from any box that carries the channel. The box with the most free tuners goes first. A recording whose box stops answering moves to another box that carries the channel, in the same file, and the recording says how much is missing ("12 seconds missing at 1:04:10, the tuner stopped answering").
+- Settings, Recording, and the apps' Settings list each box and what each tuner is doing: free, recording, live, or in use by another app (Plex included). Add a box by address, turn one off, or remove one you added. Inside a Docker bridge network, where the broadcast cannot reach the house, Settings says so.
+- HDHomeRun emulators such as Threadfin work as a box. A box with no usable `/status.json` is counted from CouchElephant's own streams.
+
+### Changed
+
+- The single "Tuner address" field is replaced by the box list. An install with one box records exactly as before, with nothing to set. The old address becomes the first box.
+- A recording ends one of CouchElephant's own live views only when that frees a tuner on a box that carries its channel. Overtime is cut short only when a waiting recording's channel has no free tuner.
+
 ## 1.5.42 - 2026-11-26
 
 ### Added
