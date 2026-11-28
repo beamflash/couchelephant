@@ -332,6 +332,13 @@ class Capture(threading.Thread):
             # After a restart, new holes are still counted from the start.
             self._first = time.monotonic() - max(0, time.time() - rec["started_at"])
         self._last = None           # when the latest byte came
+        try:
+            if self._first is not None and os.path.getsize(path) > 0:
+                # A restart: the file's last write is the last byte we got,
+                # so the time since is a hole too.
+                self._last = time.monotonic() - max(0, time.time() - os.path.getmtime(path))
+        except OSError:
+            pass
         self._fresh = False         # a new connection, no byte read from it yet
         self._halt = threading.Event()
         self._resp = None

@@ -234,3 +234,21 @@ def test_merging_a_box_a_recording_streams_on_moves_the_hold(two_boxes):
     assert tuner._holds[rec_id][0] == new_id
     assert recorder.get(rec_id)["tuner_box"] == str(new_id)
     assert job.capture.box_id == new_id
+
+
+def test_the_downtime_of_a_restart_is_written_down_as_a_gap(two_boxes):
+    now = int(time.time())
+    rec_id = recorder.book(_airing("a-r", "g-r", "5.1", now - 60))
+    uid = recorder.get(rec_id)["uid"]
+    path = recorder.broadcast_path(uid)
+    os.makedirs(os.path.dirname(path))
+    with open(path, "wb") as f:
+        f.write(b"x" * 1000)
+    os.utime(path, (now - 20, now - 20))           # the last byte, 20 seconds ago
+    recorder._set(rec_id, state="recording", started_at=now - 60)
+    cap = recorder.Capture(lambda: [], path, rec_id)
+    cap._fresh = True                               # a new connection, as _stream sets it
+    cap._note(10)
+    assert len(cap.gaps) == 1
+    assert 19 <= cap.gaps[0]["seconds"] <= 22
+    assert 39 <= cap.gaps[0]["at"] <= 42
