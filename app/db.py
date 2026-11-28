@@ -463,7 +463,7 @@ CREATE TABLE IF NOT EXISTS report_sent (
 -- Every HDHomeRun (or emulator) CouchElephant may record from. `found_by` is
 -- typed, plex or network. A typed row is only ever changed by the person.
 CREATE TABLE IF NOT EXISTS tuner_boxes (
-    id           INTEGER PRIMARY KEY,
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
     device_id    TEXT,
     address      TEXT NOT NULL,
     name         TEXT,
@@ -727,6 +727,7 @@ def init() -> None:
     _recorder_default_to_auto(conn)
     _reslot_airing_ids(conn)
     _timmyd_to_webhook(conn)
+    _tuner_boxes_autoincrement(conn)
     # After the migration and the backfill, not inside SCHEMA: on an existing
     # install the column does not exist until _migrate has run.
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS passes_uid ON passes(uid)")
@@ -734,6 +735,22 @@ def init() -> None:
     # The old tuner address settings become rows of the box table.
     from . import tunerbox
     tunerbox.migrate_settings()
+
+
+def _tuner_boxes_autoincrement(conn):
+    """A recording names its box by id, so an id must never be handed out
+    twice. Tables made before AUTOINCREMENT are rebuilt, rows kept."""
+    row = conn.execute("SELECT sql FROM sqlite_master WHERE type = 'table' "
+                       "AND name = 'tuner_boxes'").fetchone()
+    if not row or "AUTOINCREMENT" in (row["sql"] or "").upper():
+        return
+    cols = "id, device_id, address, name, model, firmware, tuner_count, found_by, " \
+           "enabled, last_seen, error, added_at"
+    conn.execute("ALTER TABLE tuner_boxes RENAME TO tuner_boxes_old")
+    conn.executescript(SCHEMA)          # makes the new table, with AUTOINCREMENT
+    conn.execute(f"INSERT INTO tuner_boxes ({cols}) SELECT {cols} FROM tuner_boxes_old")
+    conn.execute("DROP TABLE tuner_boxes_old")
+    conn.commit()
 
 
 def _reslot_airing_ids(conn):
