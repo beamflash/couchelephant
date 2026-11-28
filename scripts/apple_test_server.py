@@ -18,6 +18,9 @@ talks to replaced:
     for the Skip ad test;
   - the fake Firestore on FIRESTORE_PORT (default 8792), so a report sent
     from the apps or the server lands there and never at the owner's.
+    GET /test/boxes gives the garage box's and the spare box's addresses;
+    POST /test/boxes/reset takes the spare box out again (the Settings test
+    adds it by address).
     POST /test/tuners?n=1 says the tuner has one tuner (n=0 undoes it), for the
     over-tuners warning of a channels-per-game preview.
     POST /test/plexemail?v=a@b.c sets the email plex.tv gives for the account
@@ -77,7 +80,7 @@ from tests import (  # noqa: E402
 
 isolation.assert_isolated()
 
-from app import db, oneport, recorder, sync, tls, web  # noqa: E402
+from app import db, oneport, recorder, sync, tls, tunerbox, web  # noqa: E402
 
 PORT = int(os.environ.get("PORT", "8790"))
 ALIAS_PORT = int(os.environ.get("ALIAS_PORT", "8791"))
@@ -89,7 +92,15 @@ def main():
     import uvicorn
     plex_url, _ = fake_plex.start()
     fake_tuner.LINEUP[:] = [(vcn, call) for vcn, (call, _) in demo_guide.CHANNELS.items()]
+    fake_tuner.STATE.name = "Living room box"
     tuner_url, _ = fake_tuner.start()
+    # A second box, with one tuner held by something else (Plex), and a
+    # third that is only started: a test adds it by address.
+    _, _, garage = fake_tuner.start_box(device_id="FAKE0002", state=fake_tuner.State(),
+                                        total=2, name="Garage box")
+    garage.plex_holds = ["5.1"]
+    spare_url, _, _ = fake_tuner.start_box(device_id="FAKE0003", state=fake_tuner.State(),
+                                           total=2, name="Spare box")
     # Reports go to the fake, reachable from the simulator on its own port.
     fake_firestore.ANY_PROJECT = True
     fs_url, _ = fake_firestore.start("0.0.0.0", FIRESTORE_PORT)
@@ -101,6 +112,7 @@ def main():
                  "auth_mode": "none", "timezone": "America/Chicago",
                  "tuner_url": tuner_url, "recorder_encoder": "software"}.items():
         db.set_setting(k, v)
+    tunerbox.add_typed(garage.url)
     if AWAY:
         db.set_setting("away_mode", "1")
         pin = tls.ensure_own().fingerprint
@@ -285,6 +297,20 @@ def main():
         return {"ok": True, "id": cur.lastrowid}
 
     from app.routes import passes as _pass_routes
+    @web.app.get("/test/boxes")
+    def _boxes():
+        """Test only: the garage box's address (to add as a typed one) and
+        the spare box's, which a test adds by hand."""
+        return {"garage": garage.url, "spare": spare_url}
+
+    @web.app.post("/test/boxes/reset")
+    def _boxes_reset():
+        """Test only: take the spare box out again."""
+        for b in tunerbox.rows():
+            if b["address"] == spare_url:
+                tunerbox.remove(b["id"])
+        return {"ok": True}
+
     _real_tuner_total = _pass_routes._tuner_total
 
     @web.app.post("/test/tuners")

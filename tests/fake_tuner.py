@@ -31,6 +31,7 @@ class State:
         self.silent = False         # connect, then send nothing
         self.extra = []             # lineup rows a test adds: DRM, ATSC 3.0
         self.device_id = "FAKE0001"
+        self.name = "Fake HDHomeRun"
         self.lineup = None          # (number, name) pairs; None means the module's LINEUP
         self.discover = True        # False: /discover.json answers 404, like some emulators
         self.status = True          # False: /status.json answers 404
@@ -85,7 +86,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(rows + st.extra)
         if self.path == "/discover.json" and self.state.discover:
             st = self.state
-            return self._json({"DeviceID": st.device_id, "FriendlyName": "Fake HDHomeRun",
+            return self._json({"DeviceID": st.device_id, "FriendlyName": st.name,
                                "ModelNumber": "HDFX-4K", "FirmwareVersion": "20240101",
                                "TunerCount": st.total, "BaseURL": st.url,
                                "LineupURL": f"{st.url}/lineup.json"})
@@ -138,11 +139,13 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def start_box(host="127.0.0.1", state=None, device_id="FAKE0001", lineup=None,
-              discover=True, status=True, total=None):
+              discover=True, status=True, total=None, name=None):
     """Run one fake box on a free port. Returns (url, stop, state). Start it
     twice for a house with two boxes; each has its own state."""
     state = state or State()
     state.device_id = device_id
+    if name:
+        state.name = name
     state.discover = discover
     state.status = status
     if lineup is not None:
