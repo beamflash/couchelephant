@@ -6,6 +6,7 @@ cached answers from each box.
 import hashlib
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlsplit
 
 import httpx
@@ -17,16 +18,20 @@ LINEUP_TTL = 600            # a lineup is trusted this long
 LINEUP_KEEP = 3600          # and a failed read keeps the last good one this long
 STATUS_TTL = 5              # one tick asks each box at most once
 STATUS_FAIL_TTL = 15        # a box that did not answer is left alone a while
+LINEUP_RETRY = 30           # a lineup that failed is asked again this soon
+SEEN_EVERY = 60             # last_seen is written at most this often
 
 _lock = threading.Lock()
 _lineups: dict = {}
 _statuses: dict = {}
+_marked: dict = {}
 
 
 def reset_cache() -> None:
     with _lock:
         _lineups.clear()
         _statuses.clear()
+        _marked.clear()
 
 
 def normalise(address: str) -> str:
@@ -191,3 +196,102 @@ def migrate_settings() -> None:
             with db.tx() as c:
                 c.execute("INSERT INTO tuner_boxes (address, found_by, enabled, added_at, error) "
                           "VALUES (?, 'plex', 1, ?, ?)", (addr, int(time.time()), err))
+
+
+def _mark(box, error: str | None = None) -> None:
+    """Note that a box answered, or why it did not. Written when it changes,
+    and at most once a minute otherwise."""
+    now = time.time()
+    key = box["id"]
+    with _lock:
+        last = _marked.get(key)
+        if last and last[1] == error and (error or now - last[0] < SEEN_EVERY):
+            return
+        _marked[key] = (now, error)
+    with db.tx() as c:
+        if error:
+            c.execute("UPDATE tuner_boxes SET error = ? WHERE id = ?", (error, key))
+        else:
+            c.execute("UPDATE tuner_boxes SET last_seen = ?, error = NULL WHERE id = ?",
+                      (int(now), key))
+
+
+def _words(box, e) -> str:
+    return f"The tuner at {box['address']} did not answer: {e}"
+
+
+def _read_lineup(box) -> list:
+    r = httpx.get(box["address"] + "/lineup.json", timeout=5)
+    r.raise_for_status()
+    rows = r.json()
+    if not isinstance(rows, list):
+        raise ValueError("not a lineup")
+    return rows
+
+
+def lineup(box) -> tuple[list[dict], bool]:
+    """(channels, stale). Kept ten minutes. When a box stops answering its last
+    good lineup is kept for an hour and marked stale. Never raises."""
+    now = time.time()
+    key = box["id"]
+    with _lock:
+        c = _lineups.get(key)
+        if c and c["addr"] != box["address"]:
+            c = None
+        if c and now - c["tried_at"] < (LINEUP_RETRY if c["stale"] else LINEUP_TTL):
+            return c["rows"], c["stale"]
+    try:
+        rows = _read_lineup(box)
+    except (httpx.HTTPError, ValueError, OSError) as e:
+        _mark(box, _words(box, e))
+        with _lock:
+            old = _lineups.get(key)
+            keep = old["rows"] if old and old["addr"] == box["address"] \
+                and now - old["good_at"] < LINEUP_KEEP else []
+            _lineups[key] = {"addr": box["address"], "rows": keep, "stale": True,
+                             "tried_at": now, "good_at": old["good_at"] if old else 0}
+            return keep, True
+    _mark(box)
+    with _lock:
+        _lineups[key] = {"addr": box["address"], "rows": rows, "stale": False,
+                         "tried_at": now, "good_at": now}
+    return rows, False
+
+
+def _fetch_status(box):
+    try:
+        r = httpx.get(box["address"] + "/status.json", timeout=2)
+        r.raise_for_status()
+        rows = r.json()
+        return rows if isinstance(rows, list) else None
+    except (httpx.HTTPError, ValueError, OSError):
+        return None
+
+
+def statuses(boxes) -> dict:
+    """{box id: tuner rows, or None when /status.json does not answer}. Boxes
+    are asked together, so one that hangs costs two seconds, not two each."""
+    now = time.time()
+    out, need = {}, []
+    with _lock:
+        for b in boxes:
+            c = _statuses.get(b["id"])
+            if c and c["addr"] == b["address"] and \
+                    now - c["at"] < (STATUS_TTL if c["rows"] is not None else STATUS_FAIL_TTL):
+                out[b["id"]] = c["rows"]
+            else:
+                need.append(b)
+    if need:
+        with ThreadPoolExecutor(max_workers=len(need)) as pool:
+            got = list(pool.map(_fetch_status, need))
+        with _lock:
+            for b, rows in zip(need, got):
+                _statuses[b["id"]] = {"addr": b["address"], "rows": rows, "at": now}
+                out[b["id"]] = rows
+    return out
+
+
+def status(box) -> list[dict] | None:
+    """One row per tuner, a busy one carrying `VctNumber`. None when the box
+    has no /status.json (some emulators). Asked at most every few seconds."""
+    return statuses([box])[box["id"]]

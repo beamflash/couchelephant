@@ -382,7 +382,7 @@ async def recorder_loop():
     looked = 0.0
     while True:
         try:
-            if (recorder.available() and not tuner.base()
+            if (recorder.available() and not tuner.allowed_boxes()
                     and time.time() - looked > 600):
                 looked = time.time()
                 await asyncio.to_thread(_find_tuner)

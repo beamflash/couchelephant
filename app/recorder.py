@@ -730,7 +730,7 @@ def _start_due(now):
         if paused and rec["kind"] == "recording":
             continue                     # paused from the tray; a live view still starts
         try:
-            url = tuner.stream_url(rec["channel_vcn"])
+            url = tuner.pick(rec["channel_vcn"])[0][1]
             if rec["kind"] == "recording":
                 _make_room(now)
         except tuner.TunerError as e:

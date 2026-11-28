@@ -903,9 +903,9 @@ def _per_game(value: str, kind: str) -> tuple[str | None, str]:
 
 
 def _tuner_total() -> int | None:
-    """How many tuners the HDHomeRun has, or None when it cannot be asked."""
+    """How many tuners the boxes have between them, or None when none is set."""
     try:
-        return tuner.total() if tuner.base() else None
+        return tuner.total() or None
     except Exception:  # noqa: BLE001
         return None
 

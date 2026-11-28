@@ -239,6 +239,9 @@ def test_the_preview_says_how_many_recordings_and_how_many_at_once(client, synce
 
 def test_the_preview_says_plainly_when_the_tuners_are_not_enough(client, synced, tuner):
     tuner.total = 1
+    # The box's count was read when it was added; it now says one.
+    with db.tx() as c:
+        c.execute("UPDATE tuner_boxes SET tuner_count = 1")
     _bills_game()
     r = client.post("/api/channels-preview", data={
         "kind": "team", "team": "Kansas City Chiefs", "channels_per_game": "any"}).json()

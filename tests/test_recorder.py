@@ -73,14 +73,14 @@ def test_an_encrypted_or_atsc3_channel_is_refused_in_words(tuner):
     tuner.extra = [{"GuideNumber": "105.1", "DRM": 1, "URL": "x"},
                    {"GuideNumber": "109.1", "AudioCodec": "AC4", "URL": "x"}]
     with pytest.raises(tuner_mod.TunerError, match="encrypted"):
-        tuner_mod.stream_url("105.1")
+        tuner_mod.check("105.1")
     with pytest.raises(tuner_mod.TunerError, match="ATSC 3.0"):
-        tuner_mod.stream_url("109.1")
+        tuner_mod.check("109.1")
 
 
 def test_no_tuner_address_is_said_plainly(clean_db):
     with pytest.raises(tuner_mod.TunerError, match="No tuner address"):
-        tuner_mod.lineup()
+        tuner_mod.pick("5.1")
 
 
 # ---------- a recording, start to end ----------

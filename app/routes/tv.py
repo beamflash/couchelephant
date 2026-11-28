@@ -571,8 +571,7 @@ def _unwatchable() -> set:
     now = time.time()
     if now - _refused["at"] > 600:
         try:
-            _refused["vcns"] = {str(c.get("GuideNumber")) for c in tuner.lineup()
-                                if tuner.refusal(c)}
+            _refused["vcns"] = tuner.refused_channels()
         except tuner.TunerError:
             pass
         _refused["at"] = now
@@ -1596,7 +1595,7 @@ def live_start(request: Request, vcn: str):
            WHERE a.channel_vcn = ? AND a.begins_at <= ? AND a.ends_at > ?""",
         (vcn, now, now))
     try:
-        tuner.stream_url(vcn)          # refuses an encrypted or ATSC 3.0 channel
+        tuner.check(vcn)               # refuses an encrypted or ATSC 3.0 channel
     except tuner.TunerError as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
     title = (_names(on["grandparent_title"], on["title"], on["section"] == "sports")[0]

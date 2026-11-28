@@ -372,7 +372,7 @@ def _record_ourselves(row, prefs):
     try:
         # Asked now, so an ATSC 3.0 or encrypted channel is refused at the
         # booking and not at kickoff.
-        tuner.stream_url(row["channel_vcn"])
+        tuner.check(row["channel_vcn"])
     except tuner.TunerError as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
     held = passes.already_handled(row["program_guid"])

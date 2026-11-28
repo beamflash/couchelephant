@@ -220,11 +220,12 @@ def settings_recorder_pause(on: str = Form("1")):
 def recorder_status():
     """Everything the Recorder settings show: whether it can run and why not,
     what the tuner says, and the choices for the handover."""
+    boxes = tuner.allowed_boxes()
     out = {"ok": True, "available": recorder.available(),
            "why": recorder.why_unavailable(),
            "paused": db.get_setting("recorder_paused") == "1",
-           "tuner": {"url": tuner.base() or "",
-                     "typed": bool((db.get_setting("tuner_url") or "").strip())},
+           "tuner": {"url": (boxes[0]["address"] if boxes else ""),
+                     "typed": any(b["found_by"] == "typed" for b in boxes)},
            "library": {"mounted": bool(handover.LIB_DIR) and os.path.isdir(handover.LIB_DIR),
                        "path": handover.LIB_DIR, "folders": [], "sections": []},
            "handover_why": handover.why_unavailable() if recorder.available() else None}
@@ -236,8 +237,7 @@ def recorder_status():
             out["tuner"]["error"] = f"Could not ask Plex for its tuner: {e}"
     if out["tuner"]["url"]:
         try:
-            rows = tuner.tuners()
-            out["tuner"]["total"] = len(rows)
+            out["tuner"]["total"] = tuner.total()
             out["tuner"]["free"] = tuner.free()
         except tuner.TunerError as e:
             out["tuner"]["error"] = str(e)
