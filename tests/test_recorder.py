@@ -700,3 +700,93 @@ def test_the_library_copy_is_readable_by_plex_under_a_private_umask(tmp_path):
     assert dest.stat().st_mode & 0o777 == 0o644
     assert (tmp_path / "lib").stat().st_mode & 0o777 == 0o755
     assert (tmp_path / "lib" / "Series" / "Season 01").stat().st_mode & 0o777 == 0o755
+
+
+def test_surround_takes_the_sound_twice_copied_first_and_stereo_second():
+    for enc, laced in (("vaapi", True), ("vaapi", False), ("software", False)):
+        args = recorder.convert_args(enc, "/x", laced, surround=True)
+        assert args.count("0:a:0?") == 2, (enc, laced)
+        i = args.index("-c:a:0")
+        assert args[i:i + 8] == ["-c:a:0", "copy", "-c:a:1", "aac", "-ac:a:1", "2",
+                                 "-b:a:1", "160k"]
+        assert "-ac" not in args
+        plain = recorder.convert_args(enc, "/x", laced)
+        assert plain.count("0:a:0?") == 1 and "copy" not in plain
+        assert plain[plain.index("-c:a") + 1] == "aac"
+
+
+def test_the_converter_asks_the_broadcast_which_sound_it_has(tmp_path, monkeypatch):
+    """The answer reaches ffmpeg, and a broadcast ffprobe cannot read is
+    converted to stereo alone, as before."""
+    seen = []
+    real = recorder.convert_args
+
+    def spy(*a, **kw):
+        seen.append(kw.get("surround"))
+        return real(*a, **kw)
+
+    monkeypatch.setattr(recorder, "convert_args", spy)
+    monkeypatch.setattr(recorder, "encoder", lambda: "software")
+    src = tmp_path / "broadcast.ts"
+    src.write_bytes(b"x" * 1000)
+    for codec, want in (("ac3", True), ("eac3", False), ("aac", False), ("", False)):
+        monkeypatch.setattr(recorder, "audio_codec", lambda p, c=codec: c)
+        out = tmp_path / f"v-{codec or 'none'}"
+        c = recorder.Converter(str(src), str(out), lambda: False)
+        c.start()
+        c._thread.join(30)
+        assert seen[-1] is want, codec
+
+
+def test_a_probe_that_misses_the_track_list_asks_again_while_it_grows(tmp_path, monkeypatch):
+    """The list of tracks comes round every 0.4 s at most: a first look that
+    missed it must not make the whole live view stereo."""
+    answers = iter(["", "", "ac3"])
+    seen = []
+    real = recorder.convert_args
+
+    def spy(*a, **kw):
+        seen.append(kw.get("surround"))
+        return real(*a, **kw)
+
+    monkeypatch.setattr(recorder, "convert_args", spy)
+    monkeypatch.setattr(recorder, "encoder", lambda: "software")
+    monkeypatch.setattr(recorder, "audio_codec", lambda p: next(answers, "ac3"))
+    src = tmp_path / "broadcast.ts"
+    src.write_bytes(b"x" * 1000)
+    growing = [True]
+    c = recorder.Converter(str(src), str(tmp_path / "v"), lambda: growing[0])
+    c.start()
+    end = time.time() + 10
+    while not seen and time.time() < end:
+        time.sleep(0.05)
+    growing[0] = False
+    c._thread.join(30)
+    assert seen == [True]
+
+
+def test_a_copy_made_again_gets_new_segment_addresses(tuner):
+    """A player keeps a segment for a day; a copy made again from the first
+    byte reuses the names, so its addresses must change."""
+    from fastapi.testclient import TestClient
+
+    from app.web import app
+    uid = "ab" * 16
+    out = recorder.view_dir(uid)
+    first = recorder.Converter("/nonexistent", out, lambda: False)
+    first.start()
+    first._thread.join(10)
+    with open(recorder.playlist_path(uid), "w") as f:
+        f.write("#EXTM3U\n#EXTINF:6.0,\nseg00000.ts\n")
+    c = TestClient(app)
+    a = c.get(f"/hls/{uid}/index.m3u8").text
+    tok = recorder.copy_token(uid)
+    assert tok and f"seg00000.ts?c={tok}" in a
+    assert f"seg00000.ts?c={tok}" in c.get(f"/hls/{uid}/index.m3u8?start=0").text
+    again = recorder.Converter("/nonexistent", out, lambda: False)
+    again.start()
+    again._thread.join(10)
+    with open(recorder.playlist_path(uid), "w") as f:
+        f.write("#EXTM3U\n#EXTINF:6.0,\nseg00000.ts\n")
+    assert recorder.copy_token(uid) != tok
+    assert f"?c={recorder.copy_token(uid)}" in c.get(f"/hls/{uid}/index.m3u8").text

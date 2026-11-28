@@ -1663,6 +1663,9 @@ def master_playlist(uid: str, start: str = "", at: str = ""):
                     headers={"Cache-Control": "no-store"})
 
 
+_SEGMENT_LINE = re.compile(r"^(seg[0-9]{5}\.ts)$", re.M)
+
+
 @router.get("/hls/{uid}/index.m3u8")
 def playlist(uid: str, start: str = "", at: str = ""):
     if not _UID.match(uid):
@@ -1679,19 +1682,25 @@ def playlist(uid: str, start: str = "", at: str = ""):
     path = recorder.playlist_path(uid)
     if not os.path.exists(path):
         return Response(status_code=404)
+    try:
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        return Response(status_code=404)
     if start == "0":
         # A player opens a playlist that is still growing at its live end,
         # and Apple's ignores a seek made before it has loaded. This tag is
         # the playlist itself saying "start at the first second", which every
         # player obeys. Asked for by the address, so "Join live" still can.
-        with open(path, encoding="utf-8") as f:
-            text = f.read()
         text = text.replace("#EXTM3U\n", "#EXTM3U\n#EXT-X-START:TIME-OFFSET=0,PRECISE=YES\n", 1)
-        return Response(text, media_type="application/vnd.apple.mpegurl",
-                        headers={"Cache-Control": "no-store"})
+    token = recorder.copy_token(uid)
+    if token:
+        # A copy made again has segments with the old names; a player keeps
+        # a segment for a day, so each start gets its own addresses.
+        text = _SEGMENT_LINE.sub(rf"\1?c={token}", text)
     # Never cached: it is the one file that changes while a recording runs.
-    return FileResponse(path, media_type="application/vnd.apple.mpegurl",
-                        headers={"Cache-Control": "no-store"})
+    return Response(text, media_type="application/vnd.apple.mpegurl",
+                    headers={"Cache-Control": "no-store"})
 
 
 @router.get("/hlsk/{token}/{uid}/master.m3u8")

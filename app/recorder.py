@@ -220,12 +220,44 @@ def field_order_interlaced(said: str) -> bool:
     return first in ("tt", "bb", "tb", "bt")
 
 
+# The broadcast's own sound is kept, untouched, as the first track when it is
+# one of these, with the stereo AAC every player can play as the second.
+# Apple's player and Safari take the first (5.1 on a receiver); browsers that
+# cannot play AC-3 (Chrome, Firefox) skip to the stereo one. Not E-AC-3: the
+# web player's hls.js stops looking at the tracks when it meets one, and never
+# finds the stereo track after it, so the picture plays with no sound.
+SURROUND = ("ac3",)
+# The first look at the sound: small, so a low-rate subchannel does not hold
+# up a channel change. The list of tracks comes round at most every 0.4 s, so
+# when that much is not enough it is asked again while the broadcast grows,
+# for AUDIO_PROBE_SECONDS at most.
+AUDIO_PROBE_BYTES = 64 * 1024
+AUDIO_PROBE_SECONDS = 1.0
+
+
+def audio_codec(path: str) -> str:
+    """The codec of the first sound track, or "" when ffprobe cannot say."""
+    try:
+        r = subprocess.run(
+            [FFPROBE, "-v", "error", "-select_streams", "a:0",
+             "-show_entries", "stream=codec_name", "-of", "default=nw=1:nk=1", path],
+            capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    words = r.stdout.split()
+    return words[0].strip() if words else ""
+
+
+def keeps_surround(path: str) -> bool:
+    return audio_codec(path) in SURROUND
+
+
 TS_ROOM = 1.0
 
 
 def convert_args(enc: str, out_dir: str, interlaced: bool = False, *,
                  src: str | None = None, start_seg: int = 0, v0: float = 0.0,
-                 playlist: str = "ff.m3u8") -> list[str]:
+                 playlist: str = "ff.m3u8", surround: bool = False) -> list[str]:
     """The ffmpeg command that turns a broadcast on stdin into the viewing copy.
 
     A keyframe is forced every segment length, by time and not by frame count,
@@ -254,7 +286,19 @@ def convert_args(enc: str, out_dir: str, interlaced: bool = False, *,
     # below it fell back to 25 a second and dropped pictures.
     timing = ["-fps_mode:v", "passthrough"]
     # Optional, because a data or slideshow subchannel can have no sound.
-    audio = ["-map", "0:a:0?"]
+    # With surround the same track is taken twice: once copied, once made
+    # into stereo (see SURROUND).
+    audio = ["-map", "0:a:0?"] * (2 if surround else 1)
+    if surround:
+        sound = ["-c:a:0", "copy", "-c:a:1", "aac", "-ac:a:1", "2", "-b:a:1", "160k"]
+        if src and start_seg:
+            # A copy keeps the frames between the place ffmpeg seeked to and
+            # the asked-for time, which repeat the end of the segment before
+            # (made by another run): sound that goes back in time where the
+            # two meet. Dropped, so the join is at most a frame of silence.
+            sound += ["-copypriorss:a:0", "0"]
+    else:
+        sound = ["-c:a", "aac", "-ac", "2", "-b:a", "160k"]
     if enc == "vaapi" and interlaced:
         # Decoded on the CPU, which MPEG-2 barely notices, and encoded on the
         # GPU. Field rate, so 1080i sport keeps all 60 pictures a second.
@@ -274,8 +318,7 @@ def convert_args(enc: str, out_dir: str, interlaced: bool = False, *,
         # encoder's clock is the frame rate's, and a 29.97 picture rounds
         # differently depending on where the run began.
         args += ["-enc_time_base:v", "1/90000"]
-    args += ["-force_key_frames", keyframes,
-             "-c:a", "aac", "-ac", "2", "-b:a", "160k"]
+    args += ["-force_key_frames", keyframes, *sound]
     if src:
         # Segment numbers and timestamps line up with the playlist that lists
         # every segment. A segment shows up only once it is whole.
@@ -432,6 +475,23 @@ class Capture(threading.Thread):
         tuner.release(self.job_id)
 
 
+def copy_token(uid: str) -> str:
+    """The name of the viewing copy's current start, "" for an older copy."""
+    try:
+        with open(os.path.join(view_dir(uid), "run")) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def _size(path: str) -> int:
+    """0 for a file that is gone: a cancelled recording removes it under us."""
+    try:
+        return os.path.getsize(path)
+    except OSError:
+        return 0
+
+
 class Converter:
     """ffmpeg, fed the broadcast file as it grows, writing the viewing copy."""
 
@@ -449,22 +509,37 @@ class Converter:
         # or the player stalls, and starting over cannot be wrong.
         shutil.rmtree(self.out_dir, ignore_errors=True)
         os.makedirs(self.out_dir, exist_ok=True)
+        # A name for this start, put on the segment addresses (copy_token):
+        # the new segments have the old names, and a player keeps a segment
+        # for a day.
+        with open(os.path.join(self.out_dir, "run"), "w") as f:
+            f.write(uuid.uuid4().hex[:12])
         self._thread.start()
 
     def _launch(self) -> bool:
         """Start ffmpeg once there is enough broadcast to know its shape."""
-        laced = False
-        if self.enc == "vaapi":
-            # Only the hardware path cares, and it waits a moment at most.
-            until = time.time() + PROBE_WAIT_SECONDS
-            while (os.path.getsize(self.src) < PROBE_BYTES and self.growing()
-                   and time.time() < until and not self._stop):
-                time.sleep(0.2)
-            laced = interlaced(self.src)
+        # The sound's codec needs AUDIO_PROBE_BYTES of broadcast to start
+        # with (asked again below if that missed the track list); only the
+        # hardware path asks whether it is interlaced, which needs more. Both
+        # wait a moment at most.
+        need = PROBE_BYTES if self.enc == "vaapi" else AUDIO_PROBE_BYTES
+        until = time.time() + PROBE_WAIT_SECONDS
+        while (_size(self.src) < need and self.growing()
+               and time.time() < until and not self._stop):
+            time.sleep(0.05)
+        laced = interlaced(self.src) if self.enc == "vaapi" else False
+        codec = audio_codec(self.src)
+        until = time.time() + AUDIO_PROBE_SECONDS
+        while (not codec and self.growing() and _size(self.src) < PROBE_BYTES
+               and time.time() < until and not self._stop):
+            time.sleep(0.1)
+            codec = audio_codec(self.src)
+        surround = codec in SURROUND
         if self._stop:
             return False
         log = open(os.path.join(self.out_dir, "ffmpeg.log"), "wb")
-        self.proc = subprocess.Popen(convert_args(self.enc, self.out_dir, laced),
+        self.proc = subprocess.Popen(convert_args(self.enc, self.out_dir, laced,
+                                                  surround=surround),
                                      stdin=subprocess.PIPE, stdout=log, stderr=log)
         log.close()
         return True

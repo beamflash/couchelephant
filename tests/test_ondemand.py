@@ -466,3 +466,173 @@ def test_a_start_time_the_file_does_not_give_is_settled_as_zero(tmp_path, monkey
     assert ondemand.start_offset(rec, "/x") == 0.0
     with open(os.path.join(ondemand.od_dir(rec["uid"]), "v0")) as f:
         assert float(f.read()) == 0.0
+
+
+def _streams(fp, path):
+    import json
+    import subprocess
+    out = subprocess.run([fp, "-v", "error", "-show_entries", "stream=codec_name,channels",
+                          "-of", "json", path], capture_output=True, text=True).stdout
+    return [",".join(str(x) for x in (s["codec_name"], s.get("channels")) if x)
+            for s in json.loads(out)["streams"]]
+
+
+def _audio_pts(fp, path, track):
+    import subprocess
+    out = subprocess.run([fp, "-v", "error", "-select_streams", f"a:{track}", "-show_entries",
+                          "packet=pts_time", "-of", "csv=p=0", path],
+                         capture_output=True, text=True).stdout.split()
+    return [float(x.rstrip(",")) for x in out]
+
+
+def _surround_source(ff, path, codec="ac3", seconds=30):
+    import subprocess
+    subprocess.run([ff, "-v", "error", "-y", "-f", "lavfi", "-i",
+                    "testsrc=size=320x180:rate=30000/1001", "-f", "lavfi", "-i",
+                    "sine=frequency=440:sample_rate=48000",
+                    "-filter_complex", "[1:a]pan=5.1|FL=c0|FR=c0|FC=c0|LFE=c0|BL=c0|BR=c0[a]",
+                    "-map", "0:v", "-map", "[a]", "-t", str(seconds),
+                    "-c:v", "mpeg2video", "-c:a", codec, "-f", "mpegts", str(path)], check=True)
+
+
+def _segment(ff, src, out, start=0, surround=True, v0=0.0, n=None):
+    import subprocess
+    out.mkdir()
+    proc = subprocess.Popen(recorder.convert_args("software", str(out), False, src=str(src),
+                                                  start_seg=start, v0=v0, surround=surround),
+                            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL)
+    seg = out / f"seg{(start if n is None else n):05d}.ts"
+    end = time.time() + 120
+    while not seg.exists() and time.time() < end:
+        time.sleep(0.1)
+    proc.kill()
+    proc.wait()
+    assert seg.exists(), f"no {seg.name}"
+    return str(seg)
+
+
+def test_a_5_1_broadcast_keeps_its_own_sound_first_and_stereo_second(tmp_path, monkeypatch):
+    """Apple's player and Safari play the first track they can (5.1 on a
+    receiver); a browser without AC-3 skips to the stereo one."""
+    ff, fp = _real_tools()
+    monkeypatch.setattr(recorder, "FFMPEG", ff)
+    monkeypatch.setattr(recorder, "FFPROBE", fp)
+    src = tmp_path / "game.ts"
+    _surround_source(ff, src)
+    assert recorder.audio_codec(str(src)) == "ac3"
+    assert recorder.keeps_surround(str(src))
+    seg = _segment(ff, src, tmp_path / "out")
+    assert _streams(fp, seg) == ["h264", "ac3,6", "aac,2"]
+
+
+def test_sound_that_is_not_ac3_gets_the_stereo_track_alone(tmp_path, monkeypatch):
+    import subprocess
+    ff, fp = _real_tools()
+    monkeypatch.setattr(recorder, "FFMPEG", ff)
+    monkeypatch.setattr(recorder, "FFPROBE", fp)
+    src = tmp_path / "iptv.ts"
+    subprocess.run([ff, "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=320x180:rate=30",
+                    "-f", "lavfi", "-i", "sine=frequency=440", "-t", "10", "-c:v", "mpeg2video",
+                    "-c:a", "mp2", "-f", "mpegts", str(src)], check=True)
+    assert recorder.audio_codec(str(src)) == "mp2"
+    assert not recorder.keeps_surround(str(src))
+    rec = {"uid": "cd" * 16}
+    os.makedirs(ondemand.od_dir(rec["uid"]), exist_ok=True)
+    assert ondemand.surround(rec, str(src)) is False
+    seg = _segment(ff, src, tmp_path / "out", surround=False)
+    assert _streams(fp, seg) == ["h264", "aac,2"]
+
+
+def test_on_demand_runs_put_the_copied_sound_at_the_same_times(tmp_path, monkeypatch):
+    """Segments from runs started at different places join without a jump."""
+    ff, fp = _real_tools()
+    monkeypatch.setattr(recorder, "FFMPEG", ff)
+    monkeypatch.setattr(recorder, "FFPROBE", fp)
+    src = tmp_path / "game.ts"
+    _surround_source(ff, src, seconds=60)
+    rec = {"uid": "ef" * 16}
+    os.makedirs(ondemand.od_dir(rec["uid"]), exist_ok=True)
+    assert ondemand.surround(rec, str(src)) is True
+    # Cached: the answer holds without ffprobe.
+    monkeypatch.setattr(recorder, "FFPROBE", "/nonexistent/ffprobe")
+    assert ondemand.surround(rec, str(src)) is True
+    monkeypatch.setattr(recorder, "FFPROBE", fp)
+    a = _segment(ff, src, tmp_path / "r3", start=3, n=8)
+    b = _segment(ff, src, tmp_path / "r6", start=6, n=8)
+    # The copied track is the broadcast's own frames: the same times exactly.
+    pa, pb = _audio_pts(fp, a, 0), _audio_pts(fp, b, 0)
+    assert pa and pa == pb
+    # The stereo track is encoded per run and was always within one AAC
+    # frame (1024 samples) of another run's, as before this track existed.
+    pa, pb = _audio_pts(fp, a, 1), _audio_pts(fp, b, 1)
+    assert pa and pb and abs(pa[0] - pb[0]) < 1024 / 48000
+
+
+def test_a_recording_ffprobe_cannot_read_stays_stereo(tmp_path, monkeypatch):
+    """Cached as it is: a later answer of "ac3" would put two-track segments
+    beside the stereo ones already made."""
+    monkeypatch.setattr(recorder, "FFPROBE", "/nonexistent/ffprobe")
+    rec = {"uid": "fa" * 16}
+    os.makedirs(ondemand.od_dir(rec["uid"]), exist_ok=True)
+    (tmp_path / "b.ts").write_bytes(b"x" * 10)
+    assert ondemand.surround(rec, str(tmp_path / "b.ts")) is False
+    monkeypatch.setattr(recorder, "audio_codec", lambda p: "ac3")
+    assert ondemand.surround(rec, str(tmp_path / "b.ts")) is False
+    assert not [n for n in os.listdir(ondemand.od_dir(rec["uid"])) if n.endswith(".part")]
+
+
+def test_e_ac3_is_made_stereo_alone():
+    """The web player's hls.js stops at an E-AC-3 track and never reaches the
+    stereo one after it: picture, no sound."""
+    assert "eac3" not in recorder.SURROUND and "ac3" in recorder.SURROUND
+
+
+def test_a_segment_made_the_old_way_is_never_served(od):
+    """After an upgrade a half-watched recording must not play old stereo
+    segments next to new two-track ones."""
+    rec, _ = od
+    old = os.path.join(ondemand.od_dir(rec["uid"]), "seg00000.ts")
+    with open(old, "wb") as f:
+        f.write(b"old")
+    with open(os.path.join(ondemand.od_dir(rec["uid"]), "encoder"), "w") as f:
+        f.write(f"software/{ondemand.ENC_VERSION - 1}")
+    got = TestClient(app).get(f"/hls/{rec['uid']}/seg00000.ts")
+    assert got.status_code == 200 and got.content != b"old"
+
+
+def test_a_run_after_a_seek_never_repeats_the_sound_before_it(tmp_path, monkeypatch):
+    """Where a run started at a seek meets the segment before it (made by
+    another run), the copied sound must not go back in time; a frame or two
+    of silence is the most it may leave."""
+    import subprocess
+    ff, fp = _real_tools()
+    monkeypatch.setattr(recorder, "FFMPEG", ff)
+    monkeypatch.setattr(recorder, "FFPROBE", fp)
+    frame = 1536 / 48000
+    for lead in ("0", "0.5"):
+        src = tmp_path / f"lead{lead}.ts"
+        subprocess.run([ff, "-v", "error", "-y", "-itsoffset", lead, "-f", "lavfi", "-i",
+                        "testsrc=size=320x180:rate=30000/1001", "-f", "lavfi", "-i",
+                        "sine=frequency=440:sample_rate=48000", "-filter_complex",
+                        "[1:a]pan=5.1|FL=c0|FR=c0|FC=c0|LFE=c0|BL=c0|BR=c0[a]",
+                        "-map", "0:v", "-map", "[a]", "-t", "40", "-c:v", "mpeg2video",
+                        "-c:a", "ac3", "-f", "mpegts", str(src)], check=True)
+        rec = {"uid": ("1" if lead == "0" else "2") * 32}
+        os.makedirs(ondemand.od_dir(rec["uid"]), exist_ok=True)
+        v0 = ondemand.start_offset(rec, str(src))
+        before = _segment(ff, src, tmp_path / f"a{lead}", start=3, n=4, v0=v0)
+        after = _segment(ff, src, tmp_path / f"b{lead}", start=5, n=5, v0=v0)
+        end = _audio_pts(fp, before, 0)[-1] + frame
+        first = _audio_pts(fp, after, 0)[0]
+        assert end - 0.001 <= first <= end + 2 * frame + 0.001, (lead, end, first)
+
+
+def test_on_demand_segment_addresses_carry_the_version(od):
+    """A player keeps a segment for a day: a stereo one cached before the
+    upgrade must not be taken for a new one."""
+    rec, _ = od
+    text = ondemand.playlist(rec)
+    assert f"seg00000.ts?v={ondemand.ENC_VERSION}" in text
+    got = TestClient(app).get(f"/hls/{rec['uid']}/seg00000.ts?v={ondemand.ENC_VERSION}")
+    assert got.status_code == 200

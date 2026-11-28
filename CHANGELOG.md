@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.5.45 - 2026-11-28
+
+### Fixed
+
+- **5.1 sound is kept.** A broadcast in AC-3 (every ATSC 1.0 station) now keeps its own sound, 5.1 when the station sends 5.1, beside the stereo track. The Apple TV passes 5.1 to a receiver, and Safari plays it too; Chrome and Firefox play the stereo track as before. Live TV, new recordings and recordings played from Plex's file all get it. Recordings converted before this version stay stereo.
+
 ## 1.5.44 - 2026-11-28
 
 ### Fixed

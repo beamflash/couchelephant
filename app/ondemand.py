@@ -60,13 +60,24 @@ _SEGMENT = re.compile(r"seg[0-9]{5}\.ts")
 _CHIP = re.compile(r"vaapi|/dev/dri|hwupload|libva|device creation", re.I)
 # What is written in od/encoder with the encoder's name. Raised when the way
 # segments are made changes, so folders made the old way are cleared.
-ENC_VERSION = 2
+ENC_VERSION = 3
 # A source whose first picture starts this long after the file does.
 TS_ROOM = recorder.TS_ROOM
 
 
 def od_dir(uid: str) -> str:
     return os.path.join(recorder.rec_dir(uid), "od")
+
+
+def _write(uid: str, name: str, text: str):
+    """A small answer cached in od/, whole or not at all: another request
+    reading it at the wrong moment must never find it empty."""
+    os.makedirs(od_dir(uid), exist_ok=True)
+    path = os.path.join(od_dir(uid), name)
+    part = f"{path}.{os.getpid()}.{threading.get_ident()}.part"
+    with open(part, "w") as f:
+        f.write(text)
+    os.replace(part, path)
 
 
 def _source(rec) -> str | None:
@@ -108,9 +119,7 @@ def duration(rec) -> float | None:
         d = float(r.stdout.strip().splitlines()[0])
     except (OSError, ValueError, IndexError, subprocess.SubprocessError):
         return None
-    os.makedirs(od_dir(rec["uid"]), exist_ok=True)
-    with open(os.path.join(od_dir(rec["uid"]), "duration"), "w") as f:
-        f.write(str(d))
+    _write(rec["uid"], "duration", str(d))
     return d
 
 
@@ -139,10 +148,25 @@ def start_offset(rec, src: str) -> float:
         v0 = 0.0
     except (OSError, subprocess.SubprocessError):
         return 0.0
-    os.makedirs(od_dir(rec["uid"]), exist_ok=True)
-    with open(mark, "w") as f:
-        f.write(f"{v0:.6f}")
+    _write(rec["uid"], "v0", f"{v0:.6f}")
     return v0
+
+
+def surround(rec, src: str) -> bool:
+    """Whether segments carry the broadcast's own sound beside the stereo
+    (recorder.SURROUND). Asked once and cached beside v0, so every run of one
+    recording makes the same tracks."""
+    mark = os.path.join(od_dir(rec["uid"]), "audio")
+    try:
+        with open(mark) as f:
+            return f.read().strip() in recorder.SURROUND
+    except OSError:
+        pass
+    # Cached whatever it says, "none" included: a later, different answer
+    # would make segments with other tracks beside the ones already made.
+    codec = recorder.audio_codec(src) or "none"
+    _write(rec["uid"], "audio", codec)
+    return codec in recorder.SURROUND
 
 
 def playlist(rec, start0: bool = False, at: float | None = None) -> str | None:
@@ -160,7 +184,9 @@ def playlist(rec, start0: bool = False, at: float | None = None) -> str | None:
         out.append(f"#EXT-X-START:TIME-OFFSET={at:.3f},PRECISE=YES")
     for i in range(count):
         length = min(SEG, d - i * SEG)
-        out += [f"#EXTINF:{length:.6f},", f"seg{i:05d}.ts"]
+        # The version on the address: a player keeps a segment for a day,
+        # and one made the old way must not join new ones.
+        out += [f"#EXTINF:{length:.6f},", f"seg{i:05d}.ts?v={ENC_VERSION}"]
     out.append("#EXT-X-ENDLIST")
     return "\n".join(out) + "\n"
 
@@ -344,7 +370,8 @@ def _open_log(uid: str, slot: int):
     return path
 
 
-def _spawn(rec, n: int, enc: str, laced: bool, src: str, v0: float) -> _Run:
+def _spawn(rec, n: int, enc: str, laced: bool, src: str, v0: float,
+           surround: bool = False) -> _Run:
     """Called with the recording's lock held. A new ffmpeg at segment n."""
     uid = rec["uid"]
     os.makedirs(od_dir(uid), exist_ok=True)
@@ -357,7 +384,7 @@ def _spawn(rec, n: int, enc: str, laced: bool, src: str, v0: float) -> _Run:
         logf.flush()
         log_from = logf.tell()
         proc = _popen(recorder.convert_args(enc, od_dir(uid), laced, src=src, start_seg=n, v0=v0,
-                                            playlist=f"ff-{seq}.m3u8"),
+                                            playlist=f"ff-{seq}.m3u8", surround=surround),
                       stdin=subprocess.DEVNULL, stdout=logf, stderr=logf)
     run = _Run(uid, proc, n, enc, slot, path, log_from, seq, src)
     _runs.setdefault(uid, []).append(run)
@@ -371,6 +398,13 @@ def _marker(uid: str) -> str:
             return f.read().strip()
     except OSError:
         return ""
+
+
+def _current(uid: str) -> bool:
+    """Segments in od/ were made the way this version makes them. Older ones
+    are never served: they are cleared when the first new one is made, and
+    one stream must not mix the two."""
+    return _marker(uid).partition("/")[2] == str(ENC_VERSION)
 
 
 def _has_segments(uid: str) -> bool:
@@ -460,6 +494,7 @@ class Ticket:
         self.enc = ""
         self.laced = False
         self.v0 = 0.0
+        self.surround = False
 
 
 def _fail(uid: str, why: str):
@@ -488,7 +523,8 @@ def _assign(t: Ticket) -> bool:
                     victims.append(old)
                 if not victims:
                     try:
-                        run = _spawn(t.rec, t.n, t.enc, t.laced, t.src, t.v0)
+                        run = _spawn(t.rec, t.n, t.enc, t.laced, t.src, t.v0,
+                                     t.surround)
                     except OSError as e:
                         _fail(t.uid, f"ffmpeg did not start: {e}")
                         return False
@@ -504,7 +540,7 @@ def _assign(t: Ticket) -> bool:
 def begin(rec, name: str, wait: float | None = None) -> Ticket | None:
     """Starts getting a segment. May run probes, so not on the event loop."""
     t = Ticket(rec, name, wait)
-    if os.path.exists(t.path):
+    if os.path.exists(t.path) and _current(t.uid):
         with _lock(t.uid):
             run = _cover(t.uid, t.n)
             if run:
@@ -524,6 +560,7 @@ def begin(rec, name: str, wait: float | None = None) -> Ticket | None:
         return None
     t.src = src
     t.v0 = start_offset(rec, src)
+    t.surround = surround(rec, src)
     _prepare(t)
     return t if _assign(t) else None
 
