@@ -163,7 +163,11 @@ def start_box(host="127.0.0.1", state=None, device_id="FAKE0001", lineup=None,
     srv.daemon_threads = True
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     state.url = f"http://{host}:{srv.server_address[1]}"
-    return state.url, srv.shutdown, state
+
+    def stop():
+        srv.shutdown()
+        srv.server_close()          # the port refuses at once, like a box that died
+    return state.url, stop, state
 
 
 def start(host="127.0.0.1"):

@@ -83,13 +83,14 @@ def _carry(boxes, vcn: str):
         # Nobody could say. Every box is tried at the usual address, so a box
         # with no lineup records as it always did.
         return [(b, False, _hand_built(b, vcn)) for b in boxes], []
-    carry, refusals, unknown = [], [], []
+    carry, refusals, maybe = [], [], []
     for b in boxes:
         rows, stale = lineups[b["id"]]
         if stale and not rows:
             # Never read, or not in the last hour: it may carry the channel,
-            # so it stays on the list, last, at the usual address.
-            unknown.append((b, True, _hand_built(b, vcn)))
+            # so it stays on the list, last, at the usual address. Only a
+            # box that is there: a dead one carries nothing.
+            maybe.append(b)
             continue
         row = next((r for r in rows if str(r.get("GuideNumber")) == str(vcn)), None)
         if not row:
@@ -99,21 +100,26 @@ def _carry(boxes, vcn: str):
             refusals.append(why)
             continue
         carry.append((b, stale, row.get("URL") or _hand_built(b, vcn)))
+    # One status read for them all, shared with the pick that follows.
+    tunerbox.statuses(maybe)
+    unknown = [(b, True, _hand_built(b, vcn)) for b in maybe if _answered(b, True)]
     return carry + unknown, refusals
 
 
-def _answered(box) -> bool:
-    """The box spoke within the hour and its lineup is not stale. The same
-    rule total() uses."""
+def _answered(box, stale_ok: bool = False) -> bool:
+    """The box spoke within the hour, its lineup is not stale (unless
+    `stale_ok`) and its last status read got an answer."""
     return bool(box["last_seen"] and box["last_seen"] >= time.time() - 3600
-                and not tunerbox.lineup_is_stale(box))
+                and (stale_ok or not tunerbox.lineup_is_stale(box))
+                and not tunerbox.unreachable(box))
 
 
 def _free_on(box, st) -> int:
     if st is not None:
         return sum(1 for t in st if not t.get("VctNumber") and not t.get("Frequency"))
-    # No /status.json. Guess from the count only for a box that is there.
-    if not _answered(box):
+    # No /status.json. Guess from the count only for a box that is there; one
+    # that did not answer at all has nothing free.
+    if tunerbox.unreachable(box) or not _answered(box):
         return 0
     return max(0, _count(box, st) - len(_held_on(box["id"])))
 

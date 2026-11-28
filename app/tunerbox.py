@@ -324,13 +324,20 @@ def lineup_is_stale(box) -> bool:
 
 
 def _fetch_status(box):
+    """(rows, dead). `rows` is None when the box has no /status.json (a 404, or
+    an answer that is not JSON, like Threadfin's); `dead` is True when it did
+    not answer at all."""
     try:
         r = httpx.get(box["address"] + "/status.json", timeout=2)
         r.raise_for_status()
         rows = r.json()
-        return rows if isinstance(rows, list) else None
-    except (httpx.HTTPError, ValueError, OSError):
-        return None
+        return (rows if isinstance(rows, list) else None), False
+    except httpx.TransportError:
+        return None, True               # refused, unreachable or timed out
+    except (httpx.HTTPError, ValueError):
+        return None, False
+    except OSError:
+        return None, True
 
 
 def statuses(boxes) -> dict:
@@ -350,10 +357,19 @@ def statuses(boxes) -> dict:
         with ThreadPoolExecutor(max_workers=len(need)) as pool:
             got = list(pool.map(_fetch_status, need))
         with _lock:
-            for b, rows in zip(need, got):
-                _statuses[b["id"]] = {"addr": b["address"], "rows": rows, "at": now}
+            for b, (rows, dead) in zip(need, got):
+                _statuses[b["id"]] = {"addr": b["address"], "rows": rows, "at": now,
+                                      "dead": dead}
                 out[b["id"]] = rows
     return out
+
+
+def unreachable(box) -> bool:
+    """True when the last status read got no answer at all. Looks only at
+    what is cached, never asks the box."""
+    with _lock:
+        c = _statuses.get(box["id"])
+        return bool(c and c["addr"] == box["address"] and c.get("dead"))
 
 
 def status(box) -> list[dict] | None:

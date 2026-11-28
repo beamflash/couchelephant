@@ -5,6 +5,7 @@ import pytest
 
 from app import db, tuner, tunerbox
 from app import tuner as tuner_mod
+from tests import fake_tuner
 
 
 def _addr(boxes):
@@ -231,3 +232,53 @@ def test_a_box_that_never_gave_a_lineup_is_listed_last(two_boxes, monkeypatch):
     got = tuner.pick("5.1")
     assert _addr(got) == [a.url, b.url]
     assert got[1][1] == f"{b.url}/auto/v5.1"
+
+
+def _two_live_boxes():
+    url_a, stop_a, a = fake_tuner.start_box(
+        device_id="LIVE000A", total=4, lineup=[("5.1", "KCTV"), ("9.1", "KMBC")])
+    url_b, stop_b, b = fake_tuner.start_box(
+        device_id="LIVE000B", total=2, lineup=[("5.1", "KCTV"), ("62.1", "KXXX")])
+    tunerbox.add_typed(url_a)
+    tunerbox.add_typed(url_b)
+    return (a, stop_a), (b, stop_b)
+
+
+def test_a_box_that_just_died_stops_counting_at_once(clean_db, monkeypatch):
+    (a, stop_a), (b, stop_b) = _two_live_boxes()
+    try:
+        assert tuner.free() == 6
+        assert tuner.free("62.1") == 2
+        stop_b()
+        monkeypatch.setattr(tunerbox, "STATUS_TTL", 0)   # the next read is a new one
+        assert tuner.free() == 4
+        assert tuner.free("5.1") == 4
+    finally:
+        stop_a()
+        stop_b()
+
+
+def test_a_box_with_no_status_json_still_counts_its_tuners(two_boxes):
+    a, b = two_boxes
+    b.status = False                       # answers 404, but is there
+    assert tuner.free() == 6
+
+
+def test_a_channel_no_live_box_carries_raises_though_a_dead_box_has_no_lineup(
+        clean_db, monkeypatch):
+    (a, stop_a), (b, stop_b) = _two_live_boxes()
+    real = tunerbox._read_lineup
+    monkeypatch.setattr(tunerbox, "_read_lineup", lambda box: (
+        (_ for _ in ()).throw(OSError("down")) if box["address"] == b.url else real(box)))
+    try:
+        stop_b()
+        with pytest.raises(tuner.TunerError, match="No tuner carries channel 99.9"):
+            tuner.free("99.9")
+        # And a refusal on the live box is not hidden by the dead one.
+        a.extra = [{"GuideNumber": "105.1", "DRM": 1, "URL": "x"}]
+        tunerbox.reset_cache()
+        with pytest.raises(tuner.TunerError, match="encrypted"):
+            tuner.check("105.1")
+    finally:
+        stop_a()
+        stop_b()
