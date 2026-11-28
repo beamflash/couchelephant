@@ -989,11 +989,15 @@ window.wireSettings = function (root) {
       });
       root.querySelector('#tuneradd').addEventListener('click', function () {
         var inp = root.querySelector('#tuneraddr');
-        if (!inp.value.trim()) return;
+        var btn = this;
+        if (!inp.value.trim() || btn.disabled) return;
+        // One request at a time: a second click would add the box twice.
+        btn.disabled = true;
         tunerCall('/api/tv/tuners', {method: 'POST',
           headers: {'Content-Type': 'application/x-www-form-urlencoded'},
           body: 'address=' + encodeURIComponent(inp.value.trim())})
-          .then(function (d) { if (d.ok) inp.value = ''; });
+          .then(function (d) { btn.disabled = false; if (d.ok) inp.value = ''; },
+                function () { btn.disabled = false; });
       });
     }
     fetch('/api/recorder/status').then(CE.readJson).then(function (d) {

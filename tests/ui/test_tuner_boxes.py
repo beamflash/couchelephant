@@ -53,3 +53,21 @@ def test_add_by_address_then_turn_off_then_remove(boxes):
         page.wait_for_function("document.querySelectorAll('#tunerlist .tbox').length === 2")
     finally:
         stop()
+
+
+def test_add_by_address_is_off_while_its_request_is_out(boxes):
+    page = boxes
+    posts = []
+
+    def slow(route):
+        if route.request.method == "POST":
+            posts.append(1)
+            page.wait_for_timeout(800)
+        route.continue_()
+    page.route("**/api/tv/tuners", slow)
+    page.fill("#tuneraddr", "192.0.2.40")
+    page.click("#tuneradd")
+    assert page.locator("#tuneradd").is_disabled()
+    page.locator("#tuneradd").dispatch_event("click")
+    page.wait_for_function("!document.querySelector('#tuneradd').disabled")
+    assert len(posts) == 1

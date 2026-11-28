@@ -135,3 +135,20 @@ def test_a_box_with_a_different_tuner_count_is_not_merged():
     tunerbox._refresh(one, INFO)
     tunerbox._refresh(two, dict(INFO, TunerCount=2))
     assert len(tunerbox._rows()) == 2
+
+
+def test_two_quick_adds_of_one_address_make_one_row(monkeypatch):
+    import threading
+    import time
+
+    def slow_probe(address):
+        time.sleep(0.3)
+        return None, "no answer"
+    monkeypatch.setattr(tunerbox, "_probe", slow_probe)
+    ids = []
+    ts = [threading.Thread(target=lambda: ids.append(tunerbox.add_typed("192.0.2.30")))
+          for _ in range(2)]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    assert len(tunerbox._rows()) == 1
+    assert ids[0] == ids[1]

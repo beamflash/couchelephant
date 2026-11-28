@@ -29,6 +29,7 @@ LINEUP_RETRY = 30           # a lineup that failed is asked again this soon
 SEEN_EVERY = 60             # last_seen is written at most this often
 
 _lock = threading.Lock()
+_add_lock = threading.Lock()    # the check-then-insert of a typed row
 _lineups: dict = {}
 _statuses: dict = {}
 _marked: dict = {}
@@ -140,20 +141,27 @@ def add_typed(address: str) -> int:
         return have["id"]
     info, err = _probe(addr)
     f = _fields(info) if info else {}
-    same = _same_box(f.get("device_id"), f.get("tuner_count")) if info else None
-    if same:
-        # Found already (by Plex or the network): the typed address replaces
-        # the found one, and the row keeps its place.
-        with db.tx() as c:
-            c.execute("UPDATE tuner_boxes SET address = ?, found_by = 'typed' WHERE id = ?",
-                      (addr, same["id"]))
-        _refresh(same["id"], info)
-        return same["id"]
-    now = int(time.time())
-    with db.tx() as c:
-        cur = c.execute("INSERT INTO tuner_boxes (address, found_by, enabled, added_at, error) "
-                        "VALUES (?, 'typed', 1, ?, ?)", (addr, now, err))
-        box_id = cur.lastrowid
+    # The probe is slow, so a second add of the same address may have landed
+    # meanwhile. Looked at again, and written, with nobody else in between.
+    with _add_lock:
+        have = db.one("SELECT id FROM tuner_boxes WHERE address = ? AND found_by = 'typed'",
+                      (addr,))
+        if have:
+            return have["id"]
+        same = _same_box(f.get("device_id"), f.get("tuner_count")) if info else None
+        if same:
+            # Found already (by Plex or the network): the typed address
+            # replaces the found one, and the row keeps its place.
+            with db.tx() as c:
+                c.execute("UPDATE tuner_boxes SET address = ?, found_by = 'typed' WHERE id = ?",
+                          (addr, same["id"]))
+            box_id = same["id"]
+        else:
+            with db.tx() as c:
+                cur = c.execute("INSERT INTO tuner_boxes (address, found_by, enabled, added_at, "
+                                "error) VALUES (?, 'typed', 1, ?, ?)",
+                                (addr, int(time.time()), err))
+                box_id = cur.lastrowid
     if info:
         _refresh(box_id, info)
     return box_id
