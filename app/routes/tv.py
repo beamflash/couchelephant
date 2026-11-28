@@ -516,7 +516,24 @@ def recording_json(request: Request, rec) -> dict:
         "airing_id": rec["airing_id"],
         # How long a player may stay paused on live TV before it carries on.
         "pause_limit": recorder.pause_limit() if rec["kind"] == "live" else None,
+        # Holes in the recording from a tuner that stopped answering.
+        "gaps": _gaps(rec),
+        "gap_note": [f"{g['seconds']} seconds missing at {_clock(g['at'])}, "
+                     "the tuner stopped answering" for g in _gaps(rec)],
     }
+
+
+def _gaps(rec) -> list[dict]:
+    try:
+        return json.loads(rec["gaps"] or "[]")
+    except ValueError:
+        return []
+
+
+def _clock(seconds: int) -> str:
+    """h:mm:ss, the way a player shows a position."""
+    h, rest = divmod(int(seconds), 3600)
+    return f"{h}:{rest // 60:02d}:{rest % 60:02d}"
 
 
 def _category(rec) -> str:

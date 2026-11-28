@@ -313,12 +313,17 @@ def _tuner_wanted(rec, now) -> bool:
     # just taken the last tuner; it is not waiting. One whose tuner request
     # failed says so in its error, and is.
     waiting = [r for r in db.query(
-        "SELECT id, error FROM recordings WHERE kind = 'recording' AND state = 'scheduled' "
+        "SELECT id, error, channel_vcn FROM recordings WHERE kind = 'recording' AND state = 'scheduled' "
         "AND starts_at <= ? AND stops_at > ? AND id != ?", (now, now, rec["id"]))
         if r["error"] or not recorder.busy(r["id"])]
-    if not waiting and not _plex_starting(now):
+    plex = not waiting and _plex_starting(now)
+    if not waiting and not plex:
         return False
     try:
+        # Each waiting recording needs a tuner on a box that carries its own
+        # channel, so each channel is asked about.
+        if waiting:
+            return any(tuner.free(r["channel_vcn"]) == 0 for r in waiting)
         return tuner.free() == 0
     except tuner.TunerError:
         return False

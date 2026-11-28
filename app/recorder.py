@@ -12,6 +12,7 @@ lets a player start at the beginning of a recording that is still being made.
 It is disposable: if ffmpeg dies, the broadcast file is whole and the copy is
 made again from the first byte.
 """
+import json
 import logging
 import os
 import shutil
@@ -299,48 +300,105 @@ def convert_args(enc: str, out_dir: str, interlaced: bool = False, *,
 
 # ---------- the two workers ----------
 
-class Capture(threading.Thread):
-    """The tuner's stream, appended to a file, untouched."""
+# How long a stream may send nothing before the box is given up on, and the
+# shortest hole in a recording that is worth writing down.
+NO_DATA_SECONDS = 15
+GAP_MIN_SECONDS = 2
 
-    def __init__(self, url: str, path: str):
+
+class Capture(threading.Thread):
+    """The tuner's stream, appended to a file, untouched.
+
+    It is given a picker, not an address: the boxes that carry the channel,
+    best first. When a box refuses, drops or goes quiet it moves to the next
+    box and keeps appending to the same file.
+    """
+
+    def __init__(self, picker, path: str, job_id: int):
         super().__init__(daemon=True)
-        self.url, self.path = url, path
+        self.picker, self.path, self.job_id = picker, path, job_id
         self.bytes = 0
         self.error: str | None = None
         self.connected_at: int | None = None
+        self.box_id: int | None = None
+        self.gaps: list[dict] = []
+        self._first = None          # when the first byte came
+        self._last = None           # when the latest byte came
+        self._fresh = False         # a new connection, no byte read from it yet
         self._halt = threading.Event()
         self._resp = None
 
     def run(self):
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        failed: set[int] = set()    # boxes that failed in this round
         while not self._halt.is_set():
             try:
-                with httpx.stream("GET", self.url,
-                                  timeout=httpx.Timeout(10, read=15)) as r:
-                    self._resp = r
-                    if r.status_code == 503:
-                        self.error = "Every tuner is in use."
-                    else:
-                        r.raise_for_status()
-                        # Unbuffered, so the converter reading this file sees
-                        # each chunk as soon as it is written.
-                        with open(self.path, "ab", buffering=0) as f:
-                            for chunk in r.iter_bytes(64 * 1024):
-                                if self._halt.is_set():
-                                    break
-                                f.write(chunk)
-                                self.bytes += len(chunk)
-                                if not self.connected_at:
-                                    self.connected_at = int(time.time())
-                                    self.error = None
+                options = [(b, u) for b, u in self.picker() if b["id"] not in failed]
             except Exception as e:
-                if not self._halt.is_set():
-                    self.error = f"The tuner stream stopped: {e}"
-            finally:
-                self._resp = None
-            # A dropped stream is tried again for as long as the recording is
-            # wanted. A gap in a game is better than half a game.
+                # A box turned off or removed leaves nothing to pick for a
+                # moment; say so and ask again.
+                options = []
+                self.error = str(e)
+            if options:
+                box, url = options[0]
+                if self._stream(box, url):
+                    failed.clear()
+                failed.add(box["id"])
+                continue
+            # The whole list failed. A dropped stream is tried again for as
+            # long as the recording is wanted: a gap in a game is better than
+            # half a game.
+            failed.clear()
             self._halt.wait(3)
+
+    def _stream(self, box, url) -> bool:
+        """Read one box until it stops. True if it sent anything."""
+        got = False
+        held = False
+        try:
+            with httpx.stream("GET", url,
+                              timeout=httpx.Timeout(10, read=NO_DATA_SECONDS)) as r:
+                self._resp = r
+                if r.status_code == 503:
+                    self.error = "Every tuner is in use."
+                    return False
+                r.raise_for_status()
+                self.box_id = box["id"]
+                rec = get(self.job_id)
+                tuner.hold(self.job_id, box["id"], rec["channel_vcn"] if rec else "")
+                self._fresh = True
+                held = True
+                # Unbuffered, so the converter reading this file sees each
+                # chunk as soon as it is written.
+                with open(self.path, "ab", buffering=0) as f:
+                    for chunk in r.iter_bytes(64 * 1024):
+                        if self._halt.is_set():
+                            break
+                        f.write(chunk)
+                        self._note(len(chunk))
+                        got = True
+        except Exception as e:
+            if not self._halt.is_set():
+                self.error = f"The tuner stream stopped: {e}"
+        finally:
+            self._resp = None
+            if held:
+                tuner.release(self.job_id)
+        return got
+
+    def _note(self, n: int):
+        now = time.monotonic()
+        if self._last is None:
+            self._first = now
+        elif self._fresh and now - self._last > GAP_MIN_SECONDS:
+            self.gaps.append({"at": int(self._last - self._first),
+                              "seconds": max(1, round(now - self._last))})
+        self._fresh = False
+        self._last = now
+        self.bytes += n
+        if not self.connected_at:
+            self.connected_at = int(time.time())
+        self.error = None
 
     def stop(self):
         self._halt.set()
@@ -350,6 +408,7 @@ class Capture(threading.Thread):
                 r.close()
             except Exception:
                 pass
+        tuner.release(self.job_id)
 
 
 class Converter:
@@ -456,8 +515,8 @@ class Job:
         self.convert_starts = 0
         self.capturing = False
 
-    def start_capture(self, url: str):
-        self.capture = Capture(url, broadcast_path(self.uid))
+    def start_capture(self, picker):
+        self.capture = Capture(picker, broadcast_path(self.uid), self.id)
         self.capturing = True
         self.capture.start()
 
@@ -492,6 +551,19 @@ class Job:
 
 _jobs: dict[int, Job] = {}
 _lock = threading.RLock()
+
+
+def _describe_hold(job_id: int) -> str | None:
+    """The words for one of our tuners in Settings."""
+    rec = get(job_id)
+    if not rec:
+        return None
+    if rec["kind"] == "live":
+        return f"Live: {rec['channel_vcn']}"
+    return f"Recording: {rec['title'] or rec['channel_vcn']}"
+
+
+tuner.describe_hold = _describe_hold
 
 
 # ---------- rows ----------
@@ -730,15 +802,17 @@ def _start_due(now):
         if paused and rec["kind"] == "recording":
             continue                     # paused from the tray; a live view still starts
         try:
-            url = tuner.pick(rec["channel_vcn"])[0][1]
+            # Asked once here for the refusal and its words; the capture asks
+            # again each time it has to choose a box.
+            tuner.pick(rec["channel_vcn"])
             if rec["kind"] == "recording":
-                _make_room(now)
+                _make_room(now, rec["channel_vcn"])
         except tuner.TunerError as e:
             _set(rec["id"], error=str(e))
             continue
         job = Job(rec)
         _jobs[rec["id"]] = job
-        job.start_capture(url)
+        job.start_capture(lambda v=rec["channel_vcn"]: tuner.pick(v))
         job.start_converter()
         if rec["kind"] == "recording":
             # On its own thread: a dead network disk must not hold the loop
@@ -748,17 +822,20 @@ def _start_due(now):
                              name="ce-folder-check").start()
 
 
-def _make_room(now):
-    """A recording is due. If every tuner is busy, close one of our own live
-    sessions. A tuner Plex holds is never taken."""
+def _make_room(now, vcn):
+    """A recording of this channel is due. If no tuner that carries it is free,
+    close one of our own live sessions that sits on such a box. A tuner Plex
+    holds is never taken, and a live session on a box that cannot carry the
+    channel is left alone."""
     try:
-        if tuner.free() > 0:
+        if tuner.free(vcn) > 0:
             return
+        boxes = {b["id"] for b, _ in tuner.pick(vcn)}
     except tuner.TunerError:
         return
-    for job_id in list(_jobs):
+    for job_id, job in list(_jobs.items()):
         rec = get(job_id)
-        if rec and rec["kind"] == "live":
+        if rec and rec["kind"] == "live" and job.capture and job.capture.box_id in boxes:
             _end_live(rec)
             return
 
@@ -772,7 +849,10 @@ def _watch_running(now):
             continue
         cap = job.capture
         if cap and job.capturing:
-            cols = {"bytes": cap.bytes, "error": cap.error}
+            cols = {"bytes": cap.bytes, "error": cap.error,
+                    "gaps": json.dumps(cap.gaps)}
+            if cap.box_id is not None:
+                cols["tuner_box"] = str(cap.box_id)
             if cap.connected_at and rec["state"] == "scheduled":
                 cols.update(state="recording", started_at=cap.connected_at)
             _set(rec_id, **cols)
