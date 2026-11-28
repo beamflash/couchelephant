@@ -43,7 +43,7 @@ def test_server_part_has_expected_keys(client):
                       "schedule_failures", "notices", "disk"}
     assert isinstance(p["container"], bool)
     assert set(p["recorder"]) == {"available", "why_unavailable", "encoder"}
-    assert set(p["tuner"]) == {"url", "detected"}
+    assert set(p["tuner"]) == {"count", "detected", "boxes"}
 
 
 def test_server_part_never_contains_known_secrets(client):

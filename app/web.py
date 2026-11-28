@@ -90,7 +90,7 @@ _OPEN_PREFIX = ("/static/",)
 # keep the guide, the schedule and the passes, which is what the app is for.
 _ADMIN_PREFIX = ("/settings", "/api/backups", "/api/backingstore", "/api/import",
                  "/api/export", "/api/tv/devices", "/api/update/apply",
-                 "/api/connect.svg", "/api/away")
+                 "/api/connect.svg", "/api/away", "/api/tv/tuners")
 
 
 # The issue-report reads that carry this server's own state. Sending a

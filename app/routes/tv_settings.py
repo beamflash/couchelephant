@@ -11,7 +11,7 @@ import os
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from .. import auth, db, demo, handover, language, notify, passes, recorder, sync
+from .. import auth, db, demo, handover, language, notify, passes, recorder, sync, tunerbox
 from . import settings as web
 from ._shared import ZONES, current_user
 from .tv import device_for
@@ -102,6 +102,12 @@ async def save(request: Request):
     sent = {k: form.get(k) for k in web.KEYS
             if k in form and k not in ("plex_token", "announce")}
     refused = web.apply(sent)
+    # An older app still sends the one tuner address: it becomes a typed box.
+    if (form.get("tuner_url") or "").strip():
+        try:
+            tunerbox.add_typed(str(form.get("tuner_url")))
+        except ValueError:
+            pass
     if refused:
         return JSONResponse({"ok": False, "error": "Not saved: " + ", ".join(refused)},
                             status_code=400)

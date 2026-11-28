@@ -936,6 +936,66 @@ window.wireSettings = function (root) {
           .then(CE.readJson).then(function (d) { if (d.ok) drawPause(d.paused); });
       });
     }
+    // The box list: one card per HDHomeRun, one line per tuner.
+    function drawTuners() {
+      var list = root.querySelector('#tunerlist');
+      if (!list) return;
+      fetch('/api/tv/tuners').then(CE.readJson).then(function (d) {
+        if (!d.ok || !root.querySelector('#tunerlist')) return;
+        var say = root.querySelector('#tunersay');
+        say.textContent = !d.boxes.length
+          ? 'No tuner found yet. Add one by address.'
+          : d.free + ' of ' + d.total + ' tuners free.';
+        root.querySelector('#tunerbridge').hidden = d.can_find_on_network;
+        var h = '';
+        d.boxes.forEach(function (b) {
+          h += '<div class="tbox' + (b.enabled ? '' : ' off') + '" data-id="' + b.id + '">' +
+            '<div class="tbhead"><b>' + CE.esc(b.name) + '</b> <span class="dim">' +
+            CE.esc(b.model) + '</span><span class="tbact">' +
+            '<button type="button" class="tiny" data-act="toggle" data-on="' +
+            (b.enabled ? 0 : 1) + '">' + (b.enabled ? 'Turn off' : 'Turn on') + '</button>' +
+            (b.found_by === 'typed'
+              ? '<button type="button" class="tiny danger" data-act="remove">Remove</button>' : '') +
+            '</span></div><div class="dim tbmeta">' + CE.esc(b.address) + ' / ' +
+            (b.found_by === 'typed' ? 'added by you' : b.found_by === 'plex'
+              ? 'found from Plex' : 'found on your network') +
+            (b.enabled ? '' : ' / turned off') + '</div>' +
+            (b.error ? '<div class="help bad">' + CE.esc(b.error) + '</div>' : '') +
+            b.tuners.map(function (t, i) {
+              return '<div class="tline ' + t.state + '">Tuner ' + (i + 1) + ': ' +
+                CE.esc(t.label) + '</div>';
+            }).join('') + '</div>';
+        });
+        list.innerHTML = h;
+      });
+    }
+    function tunerCall(url, opts) {
+      return fetch(url, opts).then(CE.readJson).then(function (d) {
+        root.querySelector('#tunererr').textContent = d.ok ? '' : (d.error || 'Did not work.');
+        drawTuners();
+        return d;
+      });
+    }
+    var tl = root.querySelector('#tunerlist');
+    if (tl) {
+      tl.addEventListener('click', function (e) {
+        var btn = e.target.closest('button[data-act]');
+        if (!btn) return;
+        var id = btn.closest('.tbox').dataset.id;
+        if (btn.dataset.act === 'remove') tunerCall('/api/tv/tuners/' + id, {method: 'DELETE'});
+        else tunerCall('/api/tv/tuners/' + id, {method: 'POST',
+          headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+          body: 'enabled=' + btn.dataset.on});
+      });
+      root.querySelector('#tuneradd').addEventListener('click', function () {
+        var inp = root.querySelector('#tuneraddr');
+        if (!inp.value.trim()) return;
+        tunerCall('/api/tv/tuners', {method: 'POST',
+          headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+          body: 'address=' + encodeURIComponent(inp.value.trim())})
+          .then(function (d) { if (d.ok) inp.value = ''; });
+      });
+    }
     fetch('/api/recorder/status').then(CE.readJson).then(function (d) {
       // The window can be closed again before this answers, and then there is
       // nothing left to fill in.
@@ -944,13 +1004,7 @@ window.wireSettings = function (root) {
       verdict(root.querySelector('#recverdict'), d.available,
         d.available ? 'CouchElephant DVR can run on this install.'
                     : d.why + ' Until then every recording is made by Plex.');
-      var t = d.tuner || {}, say = root.querySelector('#rectunersay');
-      if (say) {
-        say.textContent = t.error ? t.error
-          : !t.url ? 'Plex did not name a tuner. Type its address.'
-          : (t.typed ? 'Using ' : 'Found ') + t.url +
-            (t.total != null ? ': ' + t.free + ' of ' + t.total + ' tuners free.' : '.');
-      }
+      drawTuners();
       var enc = root.querySelector('#recencsay');
       if (enc && d.encoder) {
         enc.textContent = 'In use now: ' +

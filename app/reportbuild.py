@@ -12,7 +12,7 @@ import secrets
 import shutil
 import time
 
-from . import db, demo, health, logring, paths, recorder, sealing
+from . import db, demo, health, logring, paths, recorder, sealing, tunerbox
 from .reportscrub import HOST_SETTINGS, SECRET_SETTINGS_ALL, Scrubber
 from .version import VERSION
 
@@ -83,7 +83,7 @@ def _disk() -> dict:
 def server_part(scrub: Scrubber) -> dict:
     s = db.all_settings()
     why = recorder.why_unavailable()
-    tuner = (s.get("tuner_url") or "").strip()
+    boxes = tunerbox.rows()
     passes = []
     for r in db.query("SELECT kind, team_name, series_title, label, enabled "
                       "FROM passes ORDER BY id"):
@@ -104,8 +104,12 @@ def server_part(scrub: Scrubber) -> dict:
         "python": platform.python_version(),
         "log": [scrub.text(x) for x in logring.recent()],
         "settings": scrub.settings(s),
-        "tuner": {"url": scrub.address(tuner) if tuner else "",
-                  "detected": bool((s.get("tuner_detected") or "").strip())},
+        # How many boxes and what kind, never where they are.
+        "tuner": {"count": len(boxes),
+                  "detected": any(b["found_by"] != "typed" for b in boxes),
+                  "boxes": [{"model": scrub.text(b["model"] or ""), "found_by": b["found_by"],
+                             "enabled": bool(b["enabled"]), "tuners": b["tuner_count"]}
+                            for b in boxes]},
         "recorder": {"available": why is None,
                      "why_unavailable": scrub.text(why) if why else None,
                      "encoder": scrub.text(_encoder())},

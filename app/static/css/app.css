@@ -839,6 +839,15 @@ body.signin .pt-nav{display:none}
 .chk{display:flex;align-items:center;gap:8px;margin:8px 0;font-size:13px}
 .chk input[type=checkbox]{flex:0 0 auto;width:auto}
 .bkjob{margin-bottom:14px}
+.tunerlist{display:flex;flex-direction:column;gap:10px}
+.tbox{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+.tbox.off{opacity:.6}
+.tbhead{display:flex;align-items:center;gap:8px}
+.tbact{margin-left:auto;display:flex;gap:6px}
+.tbmeta{font-size:12px;margin:2px 0 6px}
+.tline{font-size:13px;padding:2px 0;color:var(--dim)}
+.tline.ours{color:var(--ok-fg)}
+.tline.free{color:var(--text)}
 .verdict[hidden]{display:none}
 .verdict{display:flex;align-items:flex-start;gap:10px;margin-top:12px;
   padding:11px 13px;border-radius:8px;font-size:13px;line-height:1.45;

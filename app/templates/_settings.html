@@ -393,13 +393,20 @@
               still choose the other, and nothing already booked changes. Right now a
               new one is made by <b>{{ 'CouchElephant DVR' if recorder_info.default == 'couchelephant' else 'Plex DVR' }}</b>.</span>
           </div>
-          <div class="field" data-find="tuner hdhomerun address">
-            <label for="rectuner">Tuner address</label>
-            <input id="rectuner" name="tuner_url" value="{{ settings.tuner_url or '' }}"
-                   placeholder="{{ settings.tuner_detected or 'found from Plex' }}"
-                   autocomplete="off">
-            <span class="help">An HDHomeRun. Leave it empty to use the one Plex records
-              from. <span id="rectunersay"></span></span>
+          <div class="field" id="tunerbox" data-find="tuner tuners hdhomerun address box boxes">
+            <label>Tuners</label>
+            <span class="help" id="tunersay">Looking for your tuners.</span>
+            <div id="tunerlist" class="tunerlist"></div>
+            <span class="help" id="tunerbridge" hidden>Boxes on your network cannot be found
+              from inside this container. Add them by address.</span>
+            <div class="row">
+              <input id="tuneraddr" placeholder="192.0.2.10" autocomplete="off"
+                     aria-label="Tuner address" style="max-width:220px">
+              <button type="button" id="tuneradd">Add by address</button>
+              <span class="help bad" id="tunererr"></span>
+            </div>
+            <span class="help">HDHomeRun boxes. Plex's boxes and the ones on your network
+              are found by themselves.</span>
           </div>
           <div class="field" data-find="padding early late lead trail minutes">
             <label>Padding</label>

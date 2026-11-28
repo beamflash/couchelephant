@@ -16,6 +16,7 @@ from .. import (
     auth,
     cf_access,
     db,
+    demo,
     exposure,
     folders,
     handover,
@@ -27,9 +28,11 @@ from .. import (
     recorder,
     sync,
     tuner,
+    tunerbox,
 )
 from ..plex import Plex, PlexError
 from ._shared import ZONES, current_user, page
+from .tv import device_for
 
 router = APIRouter()
 
@@ -99,7 +102,7 @@ NUMBERS = {
 }
 # What `apply` takes. Sign-in, accounts and secrets are not here on purpose,
 # except the Plex token, which only the web form sends.
-KEYS = ("plex_url", "plex_token", "timezone", "preferred_language", "dry_run", "tuner_url",
+KEYS = ("plex_url", "plex_token", "timezone", "preferred_language", "dry_run",
         "recorder_shows_folder", "recorder_movies_folder",
         "recorder_shows_section", "recorder_movies_section",
         "sportsdb_key", "adskip_live", "adskip_final", "sports_overtime", "recorder_paused", "announce", *CHOICES, *NUMBERS)
@@ -134,7 +137,7 @@ def apply(values: dict) -> list[str]:
         elif key in ("dry_run", "adskip_live", "adskip_final", "sports_overtime",
                      "recorder_paused", "announce"):
             value = "1" if value in ("1", "true", "on") else "0"
-        elif key in ("plex_url", "tuner_url"):
+        elif key == "plex_url":
             value = value.rstrip("/")
         elif key == "plex_token":
             # A masked token is a form echoing back what it was shown.
@@ -190,7 +193,13 @@ def settings_recorder(tuner_url: str = Form(""), recorder_default: str = Form("a
                       sports_overtime: str = Form("0"),
                       overtime_cap_minutes: str = Form("180")):
     """CouchElephant's own recorder: the tuner, the default, the handover."""
-    apply(dict(tuner_url=tuner_url, recorder_default=recorder_default,
+    # An old app may still send the single address: it becomes a typed box.
+    if tuner_url.strip():
+        try:
+            tunerbox.add_typed(tuner_url)
+        except ValueError:
+            pass
+    apply(dict(recorder_default=recorder_default,
                recorder_encoder=recorder_encoder,
                recorder_lead_minutes=recorder_lead_minutes,
                recorder_trail_minutes=recorder_trail_minutes,
@@ -216,20 +225,109 @@ def settings_recorder_pause(on: str = Form("1")):
     return {"ok": True, "paused": db.get_setting("recorder_paused") == "1"}
 
 
+def _one_box(b) -> dict:
+    """A box as the apps and the page read it."""
+    on = bool(b["enabled"])
+    tuners, stale = [], False
+    if on:
+        try:
+            tuners = tuner.box_tuners(b)
+            stale = tunerbox.lineup(b)[1]
+        except Exception:
+            pass
+    addr = "" if demo.enabled() else b["address"]
+    return {"id": b["id"], "name": b["name"] or "HDHomeRun", "model": b["model"] or "",
+            "address": addr, "found_by": b["found_by"], "enabled": on,
+            "error": b["error"] or "", "stale": stale, "tuners": tuners}
+
+
+def _box_list() -> list[dict]:
+    boxes = tunerbox.rows()
+    if not boxes:
+        return []
+    with cf.ThreadPoolExecutor(max_workers=len(boxes)) as pool:
+        return list(pool.map(_one_box, boxes))
+
+
+def _tuners_out(**extra) -> dict:
+    try:
+        free = tuner.free()
+    except tuner.TunerError:
+        free = 0
+    return {"ok": True, "boxes": _box_list(), "free": free, "total": tuner.total(),
+            "can_find_on_network": db.get_setting("tuner_broadcast_ok") != "0", **extra}
+
+
+def _may_change(request: Request) -> bool:
+    """Sign-in off, anyone; a paired television with the administrator's OK;
+    otherwise an administrator."""
+    if auth.mode() == "none":
+        return True
+    dev = device_for(request)
+    if dev:
+        return bool(dev["allow_settings"])
+    user = current_user(request)
+    return bool(user and user.get("role") == "admin")
+
+
+def _no(error: str, code: int = 400):
+    return JSONResponse({"ok": False, "error": error}, status_code=code)
+
+
+@router.get("/api/tv/tuners")
+def tuners_list():
+    """Every HDHomeRun box and what each tuner is doing."""
+    return JSONResponse(_tuners_out())
+
+
+@router.post("/api/tv/tuners")
+def tuners_add(request: Request, address: str = Form("")):
+    if not _may_change(request):
+        return _no("Only an administrator may change the tuners.", 403)
+    try:
+        box_id = tunerbox.add_typed(address)
+    except ValueError as e:
+        return _no(str(e))
+    box = next((b for b in _box_list() if b["id"] == box_id), None)
+    return JSONResponse({"ok": True, "box": box})
+
+
+@router.post("/api/tv/tuners/{box_id}")
+def tuners_enable(request: Request, box_id: int, enabled: str = Form("1")):
+    if not _may_change(request):
+        return _no("Only an administrator may change the tuners.", 403)
+    if not tunerbox.get(box_id):
+        return _no("No such tuner.", 404)
+    tunerbox.set_enabled(box_id, enabled in ("1", "true", "on"))
+    return JSONResponse({"ok": True})
+
+
+@router.delete("/api/tv/tuners/{box_id}")
+def tuners_remove(request: Request, box_id: int):
+    if not _may_change(request):
+        return _no("Only an administrator may change the tuners.", 403)
+    if not tunerbox.remove(box_id):
+        return _no("Only a box you added by address can be removed. "
+                   "Turn the others off instead.")
+    return JSONResponse({"ok": True})
+
+
 @router.get("/api/recorder/status")
 def recorder_status():
     """Everything the Recorder settings show: whether it can run and why not,
     what the tuner says, and the choices for the handover."""
     boxes = tuner.allowed_boxes()
+    listed = _box_list()
     out = {"ok": True, "available": recorder.available(),
            "why": recorder.why_unavailable(),
            "paused": db.get_setting("recorder_paused") == "1",
            "tuner": {"url": (boxes[0]["address"] if boxes else ""),
-                     "typed": any(b["found_by"] == "typed" for b in boxes)},
+                     "typed": any(b["found_by"] == "typed" for b in boxes),
+                     "boxes": listed},
            "library": {"mounted": bool(handover.LIB_DIR) and os.path.isdir(handover.LIB_DIR),
                        "path": handover.LIB_DIR, "folders": [], "sections": []},
            "handover_why": handover.why_unavailable() if recorder.available() else None}
-    if out["tuner"]["url"]:
+    if boxes:
         try:
             out["tuner"]["total"] = tuner.total()
             out["tuner"]["free"] = tuner.free()
