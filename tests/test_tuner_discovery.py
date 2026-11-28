@@ -146,7 +146,7 @@ def test_a_box_behind_a_firewall_that_drops_broadcast_replies_is_asked_directly(
     monkeypatch.setattr(tunerbox, "DISCOVER_PORT", port)
     monkeypatch.setattr(tunerbox, "_neighbours", lambda: ["127.0.0.1"])
     try:
-        assert tunerbox.broadcast(timeout=1) == ["127.0.0.1"]
+        assert tunerbox.broadcast(timeout=1, sweep=True) == ["127.0.0.1"]
     finally:
         t.join(2)
         srv.close()
@@ -170,8 +170,39 @@ def test_a_home_network_in_172_is_not_taken_for_a_docker_bridge(monkeypatch):
     monkeypatch.setattr(socket, "if_nameindex",
                         lambda: [(1, "lo"), (2, "enp47s0"), (3, "docker0")])
     assert tunerbox._on_docker_bridge() is False
-    # A bridge: only its own end of the bridge.
+    # A bridge: only its own end of the bridge, on Docker's own addresses.
     monkeypatch.setattr(socket, "if_nameindex", lambda: [(1, "lo"), (2, "eth0")])
+    monkeypatch.setattr(tunerbox, "_local_address", lambda: "172.17.0.2")
     assert tunerbox._on_docker_bridge() is True
+    # macvlan: also only eth0, but straight on the home network.
+    monkeypatch.setattr(tunerbox, "_local_address", lambda: "192.168.50.20")
+    assert tunerbox._on_docker_bridge() is False
     monkeypatch.setattr(paths, "_in_container", lambda: False)
     assert tunerbox._on_docker_bridge() is False
+
+
+def test_the_neighbours_are_asked_only_when_nothing_is_known_or_once_a_day(monkeypatch):
+    calls = []
+
+    def fake(timeout=1.5, sweep=False):
+        calls.append(sweep)
+        return []
+    monkeypatch.setattr(tunerbox, "broadcast", fake)
+    monkeypatch.setattr(tunerbox, "_swept", {"at": 0.0})
+    # Nothing known: the broadcast, then the sweep.
+    tunerbox.discover()
+    assert calls == [False, True]
+    # A box that answers, swept a moment ago: the broadcast only.
+    url, stop, _ = _box(device_id="FAKE000B", total=2)
+    try:
+        tunerbox.add_typed(url)
+        calls.clear()
+        tunerbox.discover()
+        assert calls == [False]
+        # A day later the neighbours are asked again, for a box added since.
+        tunerbox._swept["at"] -= tunerbox.SWEEP_EVERY
+        calls.clear()
+        tunerbox.discover()
+        assert calls == [False, True]
+    finally:
+        stop()

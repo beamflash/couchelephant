@@ -429,17 +429,17 @@ def _neighbours() -> list[str]:
     return [str(h) for h in net.hosts() if h != me]
 
 
-def broadcast(timeout: float = 1.5) -> list[str]:
-    """Shout on the LAN, ask every neighbour directly too, and return the
-    address of every box that answers. Raises OSError when the socket cannot
-    broadcast."""
+def broadcast(timeout: float = 1.5, sweep: bool = False) -> list[str]:
+    """Shout on the LAN and return the address of every box that answers.
+    With `sweep`, every neighbour is asked directly too. Raises OSError when
+    the socket cannot broadcast."""
     found: list[str] = []
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         pkt = discover_packet()
         s.sendto(pkt, (DISCOVER_ADDR, DISCOVER_PORT))
-        for ip in _neighbours():
+        for ip in (_neighbours() if sweep else ()):
             try:
                 s.sendto(pkt, (ip, DISCOVER_PORT))
             except OSError:
@@ -472,7 +472,12 @@ def _on_docker_bridge() -> bool:
         names = {n for _, n in socket.if_nameindex()}
     except OSError:
         return False
-    return names <= {"lo", "eth0"}
+    if not names <= {"lo", "eth0"}:
+        return False
+    try:
+        return ipaddress.ip_address(_local_address() or "") in ipaddress.ip_network("172.16.0.0/12")
+    except ValueError:
+        return False
 
 
 def _plex_address(uri: str) -> str:
@@ -495,6 +500,19 @@ def _touch(box) -> int | None:
     return None
 
 
+_swept = {"at": 0.0}
+SWEEP_EVERY = 24 * 3600
+
+
+def _sweep_due() -> bool:
+    """Ask the neighbours one by one when no box is known to answer, or once
+    a day so a box added later is still found."""
+    if time.time() - _swept["at"] >= SWEEP_EVERY:
+        return True
+    return not any(b["last_seen"] and time.time() - b["last_seen"] < 3600
+                   for b in rows(enabled_only=True))
+
+
 def discover(plex=None) -> dict:
     """Find every box Plex names and every box that answers on the network,
     then refresh what every row says about itself."""
@@ -515,6 +533,12 @@ def discover(plex=None) -> dict:
     ips, ok = [], True
     try:
         ips = broadcast()
+        if not ips and _sweep_due():
+            # A host firewall may have dropped the answers. Asking every
+            # neighbour directly gets past it, but looks like a scan to home
+            # security gear, so only when nothing is known or once a day.
+            _swept["at"] = time.time()
+            ips = broadcast(sweep=True)
     except OSError as e:
         log.info("tuner discovery: cannot broadcast: %s", e)
         ok = False
