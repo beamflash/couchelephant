@@ -229,12 +229,6 @@ def recorder_status():
            "library": {"mounted": bool(handover.LIB_DIR) and os.path.isdir(handover.LIB_DIR),
                        "path": handover.LIB_DIR, "folders": [], "sections": []},
            "handover_why": handover.why_unavailable() if recorder.available() else None}
-    if not out["tuner"]["url"] and db.get_setting("plex_url") and db.get_setting("plex_token"):
-        try:
-            with Plex(db.get_setting("plex_url"), db.get_setting("plex_token")) as plex:
-                out["tuner"]["url"] = tuner.detect(plex) or ""
-        except Exception as e:
-            out["tuner"]["error"] = f"Could not ask Plex for its tuner: {e}"
     if out["tuner"]["url"]:
         try:
             out["tuner"]["total"] = tuner.total()

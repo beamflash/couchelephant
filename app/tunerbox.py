@@ -4,14 +4,21 @@
 cached answers from each box.
 """
 import hashlib
+import ipaddress
+import logging
+import socket
+import struct
 import threading
 import time
+import zlib
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlsplit
 
 import httpx
 
 from . import db
+
+log = logging.getLogger(__name__)
 
 PROBE_TIMEOUT = 2
 LINEUP_TTL = 600            # a lineup is trusted this long
@@ -295,3 +302,114 @@ def status(box) -> list[dict] | None:
     """One row per tuner, a busy one carrying `VctNumber`. None when the box
     has no /status.json (some emulators). Asked at most every few seconds."""
     return statuses([box])[box["id"]]
+
+
+# --- finding boxes ---------------------------------------------------------
+
+DISCOVER_ADDR = "255.255.255.255"
+DISCOVER_PORT = 65001       # where every HDHomeRun listens for "who is there"
+
+
+def discover_packet() -> bytes:
+    """The HDHomeRun discover request: type 0x0002, any device type, any
+    device id, then a CRC32 of all of it, low byte first."""
+    payload = (b"\x01\x04" + b"\xff\xff\xff\xff"
+               + b"\x02\x04" + b"\xff\xff\xff\xff")
+    head = struct.pack(">HH", 0x0002, len(payload))
+    return head + payload + struct.pack("<I", zlib.crc32(head + payload))
+
+
+def broadcast(timeout: float = 1.5) -> list[str]:
+    """Shout on the LAN and return the address of every box that answers.
+    Raises OSError when the socket cannot broadcast."""
+    found: list[str] = []
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        s.sendto(discover_packet(), (DISCOVER_ADDR, DISCOVER_PORT))
+        end = time.time() + timeout
+        while (left := end - time.time()) > 0:
+            s.settimeout(left)
+            try:
+                _, (ip, _port) = s.recvfrom(2048)
+            except TimeoutError:
+                break
+            if ip not in found:
+                found.append(ip)
+    finally:
+        s.close()
+    return found
+
+
+def _on_docker_bridge() -> bool:
+    """True when the only way out is a Docker bridge, where a broadcast never
+    reaches the real network."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("192.0.2.1", 9))     # sends nothing, only picks the route
+        ip = ipaddress.ip_address(s.getsockname()[0])
+    except (OSError, ValueError):
+        return False
+    finally:
+        s.close()
+    return ip in ipaddress.ip_network("172.16.0.0/12")
+
+
+def _plex_address(uri: str) -> str:
+    """The address Plex reaches a box on, as we would: http, no port 80."""
+    uri = (uri or "").strip()
+    if not uri.startswith("http"):
+        return ""
+    a = normalise(uri)
+    return a[:-3] if a.endswith(":80") else a
+
+
+def _touch(box) -> int | None:
+    """Ask a row's box who it is now, and note it. Returns the id if it answered."""
+    info, err = _probe(box["address"])
+    if info:
+        _refresh(box["id"], info)
+        return box["id"]
+    with db.tx() as c:
+        c.execute("UPDATE tuner_boxes SET error = ? WHERE id = ?", (err, box["id"]))
+    return None
+
+
+def discover(plex=None) -> dict:
+    """Find every box Plex names and every box that answers on the network,
+    then refresh what every row says about itself."""
+    reached: set[int] = set()
+    if plex is not None:
+        try:
+            devices = plex.grabber_devices()
+        except Exception as e:
+            log.warning("tuner discovery: Plex would not list its devices: %s", e)
+            devices = []
+        for d in devices:
+            addr = _plex_address(d.get("uri"))
+            info, _ = _probe(addr) if addr else (None, None)
+            if info and info.get("LineupURL"):
+                box_id = add_found(addr, "plex", info)
+                if box_id:
+                    reached.add(box_id)
+    ips, ok = [], True
+    try:
+        ips = broadcast()
+    except OSError as e:
+        log.info("tuner discovery: cannot broadcast: %s", e)
+        ok = False
+    if ok and not ips and _on_docker_bridge():
+        ok = False
+    for ip in ips:
+        addr = f"http://{ip}"
+        info, _ = _probe(addr)
+        if info and info.get("LineupURL"):
+            box_id = add_found(addr, "network", info)
+            if box_id:
+                reached.add(box_id)
+    db.set_setting("tuner_broadcast_ok", "1" if ok else "0")
+    rest = [b for b in rows() if b["id"] not in reached]
+    if rest:
+        with ThreadPoolExecutor(max_workers=len(rest)) as pool:
+            reached.update(i for i in pool.map(_touch, rest) if i)
+    return {"found": len(reached), "can_find_on_network": ok}

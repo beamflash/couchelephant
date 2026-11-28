@@ -9,8 +9,6 @@ one place that can limit how many may be used.
 import threading
 import time
 
-import httpx
-
 from . import tunerbox
 
 NO_ADDRESS = "No tuner address is set. Add one in Settings, Recording, CouchElephant DVR."
@@ -52,29 +50,6 @@ def release(job_id: int) -> None:
 def _held_on(box_id: int) -> list[tuple[int, str]]:
     with _hold_lock:
         return [(j, v) for j, (b, v) in _holds.items() if b == box_id]
-
-
-def detect(plex) -> str | None:
-    """The box Plex records from, so there is nothing to type.
-
-    Plex lists its DVR devices with the address it reaches them on. The first
-    one that answers like an HDHomeRun is kept as a row. Nothing is kept on a
-    guess.
-    """
-    for d in plex.grabber_devices():
-        uri = (d.get("uri") or "").strip().rstrip("/")
-        if not uri.startswith("http"):
-            continue
-        host = uri.split("://", 1)[1].split("/")[0].split(":")[0]
-        try:
-            r = httpx.get(f"http://{host}/discover.json", timeout=4)
-            if r.status_code == 200 and r.json().get("LineupURL"):
-                found = f"http://{host}"
-                tunerbox.add_found(found, "plex", r.json())
-                return found
-        except (httpx.HTTPError, ValueError):
-            continue
-    return None
 
 
 def refusal(c: dict) -> str | None:

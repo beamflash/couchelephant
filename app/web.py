@@ -3,6 +3,7 @@ import asyncio
 import logging
 import os
 import re
+import threading
 import time
 import urllib.parse
 
@@ -31,7 +32,7 @@ from . import (
     recorder,
     reportsend,
     sync,
-    tuner,
+    tunerbox,
     updates,
 )
 from .plex import Plex
@@ -369,10 +370,13 @@ async def shutdown():
     adskip.shutdown()
 
 
-def _find_tuner():
+def _find_tuners():
+    """Ask Plex and the network which HDHomeRun boxes there are."""
     if db.get_setting("plex_url") and db.get_setting("plex_token"):
         with Plex(db.get_setting("plex_url"), db.get_setting("plex_token")) as plex:
-            tuner.detect(plex)
+            tunerbox.discover(plex)
+    else:
+        tunerbox.discover()
 
 
 async def recorder_loop():
@@ -382,10 +386,12 @@ async def recorder_loop():
     looked = 0.0
     while True:
         try:
-            if (recorder.available() and not tuner.allowed_boxes()
-                    and time.time() - looked > 600):
+            if (recorder.available() and time.time() - looked > 600
+                    and not any(t.name == "tuner-discovery" for t in threading.enumerate())):
                 looked = time.time()
-                await asyncio.to_thread(_find_tuner)
+                # Its own thread: a slow box must not delay a recording.
+                threading.Thread(target=_find_tuners, daemon=True,
+                                 name="tuner-discovery").start()
             await asyncio.to_thread(recorder.tick)
             if recorder.available():
                 await asyncio.to_thread(handover.tick)
