@@ -192,6 +192,14 @@ def test_the_neighbours_are_asked_only_when_nothing_is_known_or_once_a_day(monke
     # Nothing known: the broadcast, then the sweep.
     tunerbox.discover()
     assert calls == [False, True]
+    # Still nothing, straight after: not again within the hour.
+    calls.clear()
+    tunerbox.discover()
+    assert calls == [False]
+    tunerbox._swept["at"] -= 3600
+    calls.clear()
+    tunerbox.discover()
+    assert calls == [False, True]
     # A box that answers, swept a moment ago: the broadcast only.
     url, stop, _ = _box(device_id="FAKE000B", total=2)
     try:

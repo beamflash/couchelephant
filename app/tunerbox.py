@@ -505,12 +505,15 @@ SWEEP_EVERY = 24 * 3600
 
 
 def _sweep_due() -> bool:
-    """Ask the neighbours one by one when no box is known to answer, or once
-    a day so a box added later is still found."""
-    if time.time() - _swept["at"] >= SWEEP_EVERY:
+    """Ask the neighbours one by one at most once an hour while no box is
+    known to answer, and once a day otherwise, so a box added later is still
+    found. An install with no box at all never sweeps more than hourly."""
+    since = time.time() - _swept["at"]
+    if since >= SWEEP_EVERY:
         return True
-    return not any(b["last_seen"] and time.time() - b["last_seen"] < 3600
-                   for b in rows(enabled_only=True))
+    return since >= 3600 and not any(
+        b["last_seen"] and time.time() - b["last_seen"] < 3600
+        for b in rows(enabled_only=True))
 
 
 def discover(plex=None) -> dict:
