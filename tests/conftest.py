@@ -42,6 +42,7 @@ from app import (  # noqa: E402
     recorder,
     reportconfig,  # noqa: E402
     sync,
+    tunerbox,
 )
 
 # The shipped report settings, kept for the test that checks them.
@@ -86,6 +87,10 @@ def clean_db(plex_url):
     # may be left for this one to find.
     recorder.shutdown()
     adskip.shutdown()
+    tunerbox.reset_cache()
+    # Nothing is remembered between asks, so a test that changes what a box
+    # says sees it at once.
+    tunerbox.STATUS_TTL = tunerbox.STATUS_FAIL_TTL = 0
     for name in ("COUCHELEPHANT_RECORDINGS", "COUCHELEPHANT_LIBRARY"):
         shutil.rmtree(os.environ[name], ignore_errors=True)
         os.makedirs(os.environ[name])
@@ -142,9 +147,28 @@ def tuner(tuner_url):
     """The fake HDHomeRun, set as the tuner, with every tuner free."""
     fake_tuner.STATE.reset()
     db.set_setting("tuner_url", tuner_url)
+    tunerbox.migrate_settings()
     db.set_setting("recorder_encoder", "software")
     yield fake_tuner.STATE
     recorder.shutdown()
+
+
+@pytest.fixture
+def two_boxes():
+    """Two fake boxes, both typed rows. A: 4 tuners, 5.1 9.1 41.1. B: 2
+    tuners, 5.1 62.1. Yields (stateA, stateB); each has `.url`."""
+    url_a, stop_a, a = fake_tuner.start_box(
+        device_id="FAKE000A", total=4,
+        lineup=[("5.1", "KCTV"), ("9.1", "KMBC"), ("41.1", "KSHB")])
+    url_b, stop_b, b = fake_tuner.start_box(
+        device_id="FAKE000B", total=2, lineup=[("5.1", "KCTV"), ("62.1", "KXXX")])
+    db.set_setting("recorder_encoder", "software")
+    tunerbox.add_typed(url_a)
+    tunerbox.add_typed(url_b)
+    yield a, b
+    recorder.shutdown()
+    stop_a()
+    stop_b()
 
 
 @pytest.fixture

@@ -1,0 +1,103 @@
+"""The table of HDHomeRun boxes: the old settings moved in, typed rows kept."""
+from app import db, tunerbox
+from tests import fake_tuner
+
+
+def test_old_typed_address_becomes_one_typed_row(tuner_url):
+    db.set_setting("tuner_url", tuner_url)
+    tunerbox.migrate_settings()
+    tunerbox.migrate_settings()
+    rows = tunerbox.rows()
+    assert len(rows) == 1
+    assert rows[0]["found_by"] == "typed"
+    assert rows[0]["device_id"] == "FAKE0001"
+    assert rows[0]["tuner_count"] == 4
+
+
+def test_old_found_address_becomes_a_plex_row(tuner_url):
+    db.set_setting("tuner_detected", tuner_url)
+    tunerbox.migrate_settings()
+    rows = tunerbox.rows()
+    assert [r["found_by"] for r in rows] == ["plex"]
+
+
+def test_an_offline_typed_address_keeps_a_row_without_a_device_id():
+    db.set_setting("tuner_url", "http://192.0.2.1")
+    tunerbox.migrate_settings()
+    rows = tunerbox.rows()
+    assert len(rows) == 1
+    assert rows[0]["device_id"] is None
+    assert rows[0]["error"]
+
+
+def test_typed_addresses_are_normalised_once():
+    first = tunerbox.add_typed("192.0.2.5:8080/")
+    second = tunerbox.add_typed("http://192.0.2.5:8080")
+    assert first == second
+    rows = tunerbox.rows()
+    assert len(rows) == 1
+    assert rows[0]["address"] == "http://192.0.2.5:8080"
+
+
+def test_normalise_gives_scheme_host_and_port_only():
+    assert tunerbox.normalise(" 192.0.2.5 ") == "http://192.0.2.5"
+    assert tunerbox.normalise("HTTP://192.0.2.5:80/lineup.json") == "http://192.0.2.5:80"
+
+
+def test_discovery_never_changes_a_typed_row(tuner_url):
+    typed = tunerbox.add_typed(tuner_url)
+    body = {"DeviceID": "FAKE0001", "TunerCount": 4, "FriendlyName": "Renamed"}
+    got = tunerbox.add_found("http://192.0.2.77", "network", body)
+    assert got == typed
+    rows = tunerbox.rows()
+    assert len(rows) == 1
+    assert rows[0]["address"] == tuner_url
+    assert rows[0]["found_by"] == "typed"
+
+
+def test_an_emulator_reusing_a_device_id_with_another_count_stays_separate():
+    a = tunerbox.add_found("http://192.0.2.10", "plex",
+                           {"DeviceID": "SAME", "TunerCount": 4})
+    b = tunerbox.add_found("http://192.0.2.11", "network",
+                           {"DeviceID": "SAME", "TunerCount": 2})
+    assert a != b
+    assert len(tunerbox.rows()) == 2
+
+
+def test_the_same_box_found_twice_is_one_row():
+    a = tunerbox.add_found("http://192.0.2.10", "plex",
+                           {"DeviceID": "ABC", "TunerCount": 4})
+    b = tunerbox.add_found("http://box.example", "network",
+                           {"DeviceID": "ABC", "TunerCount": 4})
+    assert a == b
+    assert tunerbox.rows()[0]["address"] == "http://192.0.2.10"
+
+
+def test_only_typed_rows_can_be_removed():
+    found = tunerbox.add_found("http://192.0.2.10", "plex",
+                               {"DeviceID": "ABC", "TunerCount": 4})
+    typed = tunerbox.add_typed("http://192.0.2.20")
+    assert tunerbox.remove(found) is False
+    assert tunerbox.remove(typed) is True
+    assert [r["id"] for r in tunerbox.rows()] == [found]
+
+
+def test_a_box_can_be_turned_off_and_on():
+    box = tunerbox.add_typed("http://192.0.2.20")
+    tunerbox.set_enabled(box, False)
+    assert tunerbox.rows(enabled_only=True) == []
+    tunerbox.set_enabled(box, True)
+    assert len(tunerbox.rows(enabled_only=True)) == 1
+
+
+def test_typed_rows_come_first():
+    a = tunerbox.add_found("http://192.0.2.10", "plex", {"DeviceID": "A", "TunerCount": 2})
+    b = tunerbox.add_typed("http://192.0.2.20")
+    assert [r["id"] for r in tunerbox.rows()] == [b, a]
+
+
+def test_the_fake_box_answers_discover_json(tuner_url):
+    import httpx
+    d = httpx.get(tuner_url + "/discover.json").json()
+    assert d["DeviceID"] == "FAKE0001" and d["TunerCount"] == 4
+    assert fake_tuner.STATE.url == tuner_url

@@ -20,6 +20,7 @@ CHUNK = b"\x47" + b"\x00" * 187          # one MPEG-TS packet, more or less
 
 class State:
     def __init__(self):
+        self.url = ""
         self.reset()
 
     def reset(self):
@@ -29,10 +30,14 @@ class State:
         self.live = []              # channel numbers streaming right now
         self.silent = False         # connect, then send nothing
         self.extra = []             # lineup rows a test adds: DRM, ATSC 3.0
+        self.device_id = "FAKE0001"
+        self.lineup = None          # (number, name) pairs; None means the module's LINEUP
+        self.discover = True        # False: /discover.json answers 404, like some emulators
+        self.status = True          # False: /status.json answers 404
+        self.status_delay = 0       # seconds /status.json sleeps before it answers
 
 
 STATE = State()
-_URL = ""
 
 LINEUP = [("5.1", "KCTV"), ("9.1", "KMBC"), ("41.1", "KSHB")]
 
@@ -73,25 +78,36 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/lineup.json":
+            st = self.state
             rows = [{"GuideNumber": n, "GuideName": name, "VideoCodec": "MPEG2",
-                     "AudioCodec": "AC3", "URL": f"{_URL}/auto/v{n}"}
-                    for n, name in LINEUP]
-            return self._json(rows + STATE.extra)
-        if self.path == "/status.json":
-            busy = list(STATE.plex_holds) + list(STATE.live)
+                     "AudioCodec": "AC3", "URL": f"{st.url}/auto/v{n}"}
+                    for n, name in (LINEUP if st.lineup is None else st.lineup)]
+            return self._json(rows + st.extra)
+        if self.path == "/discover.json" and self.state.discover:
+            st = self.state
+            return self._json({"DeviceID": st.device_id, "FriendlyName": "Fake HDHomeRun",
+                               "ModelNumber": "HDFX-4K", "FirmwareVersion": "20240101",
+                               "TunerCount": st.total, "BaseURL": st.url,
+                               "LineupURL": f"{st.url}/lineup.json"})
+        if self.path == "/status.json" and self.state.status:
+            st = self.state
+            if st.status_delay:
+                time.sleep(st.status_delay)
+            busy = list(st.plex_holds) + list(st.live)
             rows = [{"Resource": f"tuner{i}", "VctNumber": v}
                     for i, v in enumerate(busy)]
-            rows += [{"Resource": f"tuner{i}"} for i in range(len(busy), STATE.total)]
-            return self._json(rows[:max(STATE.total, len(busy))])
+            rows += [{"Resource": f"tuner{i}"} for i in range(len(busy), st.total)]
+            return self._json(rows[:max(st.total, len(busy))])
         if self.path.startswith("/auto/v"):
-            if len(STATE.plex_holds) + len(STATE.live) >= STATE.total:
+            st = self.state
+            if len(st.plex_holds) + len(st.live) >= st.total:
                 self.send_response(503)
                 self.send_header("Content-Length", "0")
                 self.end_headers()
                 return
             vcn = self.path[len("/auto/v"):]
-            STATE.streams.append(vcn)
-            STATE.live.append(vcn)
+            st.streams.append(vcn)
+            st.live.append(vcn)
             maker = _pattern(vcn) if VIDEO else None
             try:
                 self.send_response(200)
@@ -104,7 +120,7 @@ class Handler(BaseHTTPRequestHandler):
                             break
                         self.wfile.write(chunk)
                         continue
-                    if not STATE.silent:
+                    if not st.silent:
                         self.wfile.write(CHUNK * 40)
                         self.wfile.flush()
                     time.sleep(0.02)
@@ -114,18 +130,34 @@ class Handler(BaseHTTPRequestHandler):
                 if maker:
                     maker.kill()
                     maker.wait()
-                STATE.live.remove(vcn)
+                st.live.remove(vcn)
             return
         self.send_response(404)
         self.send_header("Content-Length", "0")
         self.end_headers()
 
 
-def start(host="127.0.0.1"):
-    """Run the fake tuner on a free port. Returns (url, stop)."""
-    global _URL
-    srv = ThreadingHTTPServer((host, 0), Handler)
+def start_box(host="127.0.0.1", state=None, device_id="FAKE0001", lineup=None,
+              discover=True, status=True, total=None):
+    """Run one fake box on a free port. Returns (url, stop, state). Start it
+    twice for a house with two boxes; each has its own state."""
+    state = state or State()
+    state.device_id = device_id
+    state.discover = discover
+    state.status = status
+    if lineup is not None:
+        state.lineup = lineup
+    if total is not None:
+        state.total = total
+    handler = type("BoxHandler", (Handler,), {"state": state})
+    srv = ThreadingHTTPServer((host, 0), handler)
     srv.daemon_threads = True
     threading.Thread(target=srv.serve_forever, daemon=True).start()
-    _URL = f"http://{host}:{srv.server_address[1]}"
-    return _URL, srv.shutdown
+    state.url = f"http://{host}:{srv.server_address[1]}"
+    return state.url, srv.shutdown, state
+
+
+def start(host="127.0.0.1"):
+    """The default box, on the module's STATE. Returns (url, stop)."""
+    url, stop, _ = start_box(host, state=STATE)
+    return url, stop

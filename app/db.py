@@ -459,6 +459,23 @@ CREATE TABLE IF NOT EXISTS report_queue (
 CREATE TABLE IF NOT EXISTS report_sent (
     ts INTEGER
 );
+
+-- Every HDHomeRun (or emulator) CouchElephant may record from. `found_by` is
+-- typed, plex or network. A typed row is only ever changed by the person.
+CREATE TABLE IF NOT EXISTS tuner_boxes (
+    id           INTEGER PRIMARY KEY,
+    device_id    TEXT,
+    address      TEXT NOT NULL,
+    name         TEXT,
+    model        TEXT,
+    firmware     TEXT,
+    tuner_count  INTEGER,
+    found_by     TEXT NOT NULL,
+    enabled      INTEGER DEFAULT 1,
+    last_seen    INTEGER,
+    error        TEXT,
+    added_at     INTEGER
+);
 """
 
 DEFAULTS = {
@@ -683,6 +700,10 @@ MIGRATIONS = [
     # How many airings of one game a pass books: 'one' (the default), 'preferred'
     # (every channel in the preferred language) or 'any' (every channel).
     ("passes", "channels_per_game", "TEXT NOT NULL DEFAULT 'one'"),
+    # Which tuner box a recording is on, and the seconds it lost moving between
+    # boxes (a JSON list).
+    ("recordings", "tuner_box", "TEXT"),
+    ("recordings", "gaps", "TEXT"),
 ]
 
 
@@ -710,6 +731,9 @@ def init() -> None:
     # install the column does not exist until _migrate has run.
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS passes_uid ON passes(uid)")
     conn.commit()
+    # The old tuner address settings become rows of the box table.
+    from . import tunerbox
+    tunerbox.migrate_settings()
 
 
 def _reslot_airing_ids(conn):
