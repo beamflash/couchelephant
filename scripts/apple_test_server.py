@@ -192,19 +192,21 @@ def main():
         return demo_world.seed_pass(title, n, lost, section)
 
     @web.app.post("/test/seed-recording")
-    def _seed_recording(title: str):
+    def _seed_recording(title: str, gaps: int = 0):
         """Test only: a finished recording with this title, so a search for a
         recording has one whatever earlier tests deleted. It is two days old, so it is not in
-        today's calendar, where the first item is the recording under way."""
+        today's calendar, where the first item is the recording under way.
+        With gaps=1 it carries one 12 second hole at 1:04:10, so the card shows its note."""
         now = int(time.time())
         with db.tx() as c:
             # One seeded recording at a time, so tests do not pile them up.
             c.execute("DELETE FROM recordings WHERE uid = ?", ("5eed" * 8,))
             c.execute("""INSERT INTO recordings (uid, kind, state, title, show_title, section,
-                             channel_vcn, channel_title, begins_at, ends_at)
-                         VALUES (?, 'recording', 'finished', ?, ?, 'shows', '9.1', ?, ?, ?)""",
+                             channel_vcn, channel_title, begins_at, ends_at, gaps)
+                         VALUES (?, 'recording', 'finished', ?, ?, 'shows', '9.1', ?, ?, ?, ?)""",
                       ("5eed" * 8, title, title, demo_guide.CHANNELS["9.1"][1],
-                       now - 172800, now - 169200))
+                       now - 172800, now - 169200,
+                       '[{"at": 3850, "seconds": 12}]' if gaps else None))
         return {"ok": True}
 
     _long_seed = [0]
