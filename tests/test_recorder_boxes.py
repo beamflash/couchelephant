@@ -156,3 +156,23 @@ def test_a_gap_is_said_in_words_on_the_recording(tuner, client):
     out = tv.recording_json(req, recorder.get(rec_id))
     assert out["gaps"] == [{"at": 3850, "seconds": 12}]
     assert out["gap_note"] == ["12 seconds missing at 1:04:10, the tuner stopped answering"]
+
+
+def test_a_dead_box_with_a_stale_lineup_is_not_counted_as_free(two_boxes, monkeypatch):
+    a, b = two_boxes
+    live = recorder.start_live("9.1")
+    _until(lambda: (recorder.tick() or a.live == ["9.1"]))
+    a.plex_holds = ["41.1"] * 3                         # A is full: Plex 3, ours 1
+    b.status = False                                    # B stops answering
+    for box in tunerbox.rows():
+        tunerbox._lineups[box["id"]]["tried_at"] = 0
+    real = tunerbox._read_lineup
+
+    def b_is_down(box):
+        if box["address"] == b.url:
+            raise OSError("down")
+        return real(box)
+    monkeypatch.setattr(tunerbox, "_read_lineup", b_is_down)
+    _book("5.1")
+    recorder.tick()
+    assert recorder.get(live) is None

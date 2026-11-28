@@ -265,6 +265,14 @@ def lineup(box) -> tuple[list[dict], bool]:
     return rows, False
 
 
+def lineup_is_stale(box) -> bool:
+    """True when the last read of this box's lineup failed. Looks only at what
+    is cached, never asks the box."""
+    with _lock:
+        c = _lineups.get(box["id"])
+        return bool(c and c["addr"] == box["address"] and c["stale"])
+
+
 def _fetch_status(box):
     try:
         r = httpx.get(box["address"] + "/status.json", timeout=2)

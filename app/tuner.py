@@ -92,9 +92,19 @@ def _carry(boxes, vcn: str):
     return carry, refusals
 
 
+def _answered(box) -> bool:
+    """The box spoke within the hour and its lineup is not stale. The same
+    rule total() uses."""
+    return bool(box["last_seen"] and box["last_seen"] >= time.time() - 3600
+                and not tunerbox.lineup_is_stale(box))
+
+
 def _free_on(box, st) -> int:
     if st is not None:
         return sum(1 for t in st if not t.get("VctNumber") and not t.get("Frequency"))
+    # No /status.json. Guess from the count only for a box that is there.
+    if not _answered(box):
+        return 0
     return max(0, _count(box, st) - len(_held_on(box["id"])))
 
 
