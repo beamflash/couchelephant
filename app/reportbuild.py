@@ -56,6 +56,7 @@ def make_scrubber() -> Scrubber:
     for r in db.query("SELECT webhook, token FROM destinations"):
         secrets_ += [r["webhook"] or "", r["token"] or ""]
     hosts = [s.get(k) or "" for k in HOST_SETTINGS]
+    hosts += [b["address"] for b in db.query("SELECT address FROM tuner_boxes")]
     return Scrubber(known_secrets=[x for x in secrets_ if len(x) >= 4],
                     known_hosts=[h for h in hosts if h])
 

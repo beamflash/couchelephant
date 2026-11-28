@@ -221,3 +221,13 @@ def test_cf_team_domain_is_masked(client):
     log.info("verifying a token for myteam.cloudflareaccess.com")
     out = json.dumps(server_part(make_scrubber()))
     assert "myteam.cloudflareaccess.com" not in out
+
+
+def test_the_scrubber_masks_the_address_of_every_tuner_box(client):
+    from app import tunerbox
+    with db.tx() as c:
+        c.execute("INSERT INTO tuner_boxes (address, found_by, enabled, added_at) "
+                  "VALUES ('http://hdhr-den:8080', 'typed', 1, 0)")
+    out = make_scrubber().text("the tuner hdhr-den did not answer, tried hdhr-den:8080")
+    assert "hdhr-den" not in out
+    assert tunerbox.rows()
