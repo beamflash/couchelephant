@@ -213,3 +213,26 @@ function reads boxes through it. It returns every enabled box today.
 - How long a stale lineup is trusted, within the limits above.
 - Whether discovery uses `hdhomerun_config` or a small UDP sender (no new
   dependency is preferred).
+
+## Real test results (2026-11-28)
+
+Run on the owner's network against the FLEX 4K and a Threadfin container
+whose playlist pointed at LAN test-pattern streams (never a real channel):
+
+- Three live channels at once: one only Threadfin carried, one only the FLEX
+  carried, one both carried. Each went to a box that carries it, the shared
+  one to the FLEX (more free tuners, known status).
+- The shared channel forced onto Threadfin, then Threadfin stopped: the
+  stream moved to the FLEX with a 2 second gap, recorded on the row.
+- What an emulator changes, and how this build handles it:
+  - Threadfin's `/status.json` answers 200 with XML, not JSON. It counts as
+    "unknown"; its tuner lines come from CouchElephant's own streams.
+  - Threadfin's `/auto/v<n>` answers 200 with an empty body. The hand-built
+    URL therefore gets no data; the 15 second no-data limit moves to the next
+    box. The lineup's own `/stream/<hash>` URLs work.
+  - Threadfin numbers channels from the playlist's `tvg-name`, not
+    `tvg-chno`. A playlist must carry the channel number there for the
+    channel to line up with the guide. Part 3 (IPTV) must decide how
+    CouchElephant numbers IPTV channels itself.
+  - Threadfin streams nothing until its playlist's buffer is set (ffmpeg);
+    the setup wizard leaves it empty. Part 3 setup help must say so.
